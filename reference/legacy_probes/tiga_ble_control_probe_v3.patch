@@ -1,0 +1,165 @@
+diff --git a/src/main.rs b/src/main.rs
+index 279524d..49fd6f0 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,4 +1,4 @@
+-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
++use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
+ use btleplug::platform::Manager;
+ use futures::StreamExt;
+ use std::{error::Error, time::Duration};
+@@ -17,6 +17,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
+     let args: Vec<String> = std::env::args().skip(1).collect();
+     let inspect = args.iter().any(|a| a == "--inspect");
+     let listen = args.iter().any(|a| a == "--listen");
++    let control_probe = args.iter().any(|a| a == "--control-probe");
++    let confirm_control_probe = args.iter().any(|a| a == "--confirm-control-probe");
+     let scan_secs: u64 = args
+         .windows(2)
+         .find(|w| w[0] == "--seconds")
+@@ -68,9 +70,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
+         return Ok(());
+     };
+ 
+-    if !inspect && !listen {
++    if !inspect && !listen && !control_probe {
+         println!("\nSCAN SUCCESS. Re-run with --inspect to connect and enumerate GATT services.");
+         println!("Use --listen to subscribe to the two notification characteristics for a short receive-only test.");
++        println!("Use --control-probe for a guarded replay of ONLY the two captured PocketWuque setup writes (no bulk media).");
+         println!("This scan mode performed no GATT writes.");
+         return Ok(());
+     }
+@@ -110,6 +113,133 @@ async fn main() -> Result<(), Box<dyn Error>> {
+     println!("  notify  0004   : {}", if expected[3] { "FOUND" } else { "MISSING" });
+     println!("\nNO media/control characteristic writes were sent.");
+ 
++    if control_probe {
++        if !expected[0] || !expected[1] || !expected[3] {
++            peripheral.disconnect().await?;
++            return Err("Cannot run control probe: expected control/notify characteristics are missing".into());
++        }
++
++        let characteristics = peripheral.characteristics();
++        let control = characteristics
++            .iter()
++            .find(|ch| ch.uuid == CHAR_CONTROL)
++            .cloned()
++            .ok_or("Control characteristic 0001 disappeared after discovery")?;
++        let notify1 = characteristics
++            .iter()
++            .find(|ch| ch.uuid == CHAR_NOTIFY)
++            .cloned()
++            .ok_or("Notify characteristic 0002 disappeared after discovery")?;
++        let notify2 = characteristics
++            .iter()
++            .find(|ch| ch.uuid == CHAR_NOTIFY2)
++            .cloned()
++            .ok_or("Notify characteristic 0004 disappeared after discovery")?;
++
++        const CONTROL1: [u8; 24] = [
++            0x88,0x00,0x00,0x00,0x00,0x00,0x10,0x00,
++            0x09,0x03,0x04,0x00,0x08,0x00,0x00,0xff,
++            0xfc,0x00,0x03,0x5d,0xd0,0x05,0x00,0x00,
++        ];
++        const CONTROL2: [u8; 18] = [
++            0x88,0x00,0x00,0x00,0x00,0x00,0x0a,0x00,
++            0x08,0x03,0x00,0xff,0xff,0xff,0x00,0xff,0xff,0xff,
++        ];
++        const C1_ACK_A: &[u8] = &[0x88,0,0,0,0,0,0x05,0x0e,0x07,0x02,0x01,0x09,0x03];
++        const C1_ACK_B: &[u8] = &[0x88,0,0,0,0,0,0x03,0x0f,0x09,0x04,0x02];
++        const C2_ACK_A: &[u8] = &[0x88,0,0,0,0,0,0x05,0x0f,0x07,0x02,0x01,0x08,0x03];
++        const C2_ACK_B: &[u8] = &[0x88,0,0,0,0,0,0x03,0x0e,0x08,0x04,0x02];
++
++        println!("\nCONTROL PROBE MODE — NO BULK MEDIA WILL BE SENT");
++        println!("Captured Control #1: {}", CONTROL1.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
++        println!("Captured Control #2: {}", CONTROL2.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
++        println!("The probe will subscribe to 0002/0004, send Control #1, require both captured ACKs,");
++        println!("then send Control #2, require both captured ACKs, and STOP before any 0003 bulk write.");
++
++        if !confirm_control_probe {
++            println!("\nDRY RUN ONLY — no application-level control values were written.");
++            println!("Live mode requires BOTH flags:");
++            println!("  --control-probe --confirm-control-probe");
++            peripheral.disconnect().await?;
++            println!("Disconnected cleanly.");
++            return Ok(());
++        }
++
++        let mut notifications = peripheral.notifications().await?;
++        peripheral.subscribe(&notify1).await?;
++        peripheral.subscribe(&notify2).await?;
++        println!("Subscriptions active.");
++
++        // Drain a short slice of the normal periodic status stream so the captured setup
++        // responses are easier to distinguish in the terminal. No requirement is placed
++        // on the keyboard being otherwise silent.
++        let drain = sleep(Duration::from_millis(250));
++        tokio::pin!(drain);
++        loop {
++            tokio::select! {
++                _ = &mut drain => break,
++                maybe = notifications.next() => {
++                    if maybe.is_none() { return Err("Notification stream ended before control probe".into()); }
++                }
++            }
++        }
++
++        println!("\nTX Control #1 -> 0001 (WRITE WITHOUT RESPONSE)");
++        peripheral.write(&control, &CONTROL1, WriteType::WithoutResponse).await?;
++        let deadline1 = sleep(Duration::from_millis(1500));
++        tokio::pin!(deadline1);
++        let mut c1a = false;
++        let mut c1b = false;
++        loop {
++            tokio::select! {
++                _ = &mut deadline1 => break,
++                maybe = notifications.next() => {
++                    let Some(n) = maybe else { break; };
++                    let hex = n.value.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
++                    let role = if n.uuid == CHAR_NOTIFY { "0002/status" } else if n.uuid == CHAR_NOTIFY2 { "0004/second" } else { "other" };
++                    if n.value.as_slice() == C1_ACK_A { c1a = true; println!("RX {role}: {hex}  <-- captured Control #1 ACK A"); }
++                    else if n.value.as_slice() == C1_ACK_B { c1b = true; println!("RX {role}: {hex}  <-- captured Control #1 ACK B"); }
++                    if c1a && c1b { break; }
++                }
++            }
++        }
++        println!("Control #1 verification: ACK_A={} ACK_B={}", if c1a {"FOUND"} else {"MISSING"}, if c1b {"FOUND"} else {"MISSING"});
++        if !(c1a && c1b) {
++            println!("STOPPING — Control #2 and all bulk media were NOT sent.");
++            peripheral.disconnect().await?;
++            println!("Disconnected cleanly.");
++            return Ok(());
++        }
++
++        sleep(Duration::from_millis(80)).await;
++        println!("\nTX Control #2 -> 0001 (WRITE WITHOUT RESPONSE)");
++        peripheral.write(&control, &CONTROL2, WriteType::WithoutResponse).await?;
++        let deadline2 = sleep(Duration::from_millis(1500));
++        tokio::pin!(deadline2);
++        let mut c2a = false;
++        let mut c2b = false;
++        loop {
++            tokio::select! {
++                _ = &mut deadline2 => break,
++                maybe = notifications.next() => {
++                    let Some(n) = maybe else { break; };
++                    let hex = n.value.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
++                    let role = if n.uuid == CHAR_NOTIFY { "0002/status" } else if n.uuid == CHAR_NOTIFY2 { "0004/second" } else { "other" };
++                    if n.value.as_slice() == C2_ACK_A { c2a = true; println!("RX {role}: {hex}  <-- captured Control #2 ACK A"); }
++                    else if n.value.as_slice() == C2_ACK_B { c2b = true; println!("RX {role}: {hex}  <-- captured Control #2 ACK B"); }
++                    if c2a && c2b { break; }
++                }
++            }
++        }
++        println!("Control #2 verification: ACK_A={} ACK_B={}", if c2a {"FOUND"} else {"MISSING"}, if c2b {"FOUND"} else {"MISSING"});
++        println!("\nCONTROL PROBE COMPLETE — ZERO writes were sent to bulk characteristic 0003.");
++        println!("Because these are real PocketWuque upload-setup commands, power-cycle the keyboard before any later upload experiment.");
++
++        peripheral.disconnect().await?;
++        println!("Disconnected cleanly.");
++        return Ok(());
++    }
++
+     if listen {
+         if !expected[1] || !expected[3] {
+             peripheral.disconnect().await?;

@@ -1,0 +1,11 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -319,7 +319,7 @@
+                 println!("BULK WRITE ERROR at {}/{}: {e}", idx + 1, chunks.len());
+                 println!("ABORT — no retry was sent, to avoid duplicating bytes in the application stream.");
+                 let _ = peripheral.disconnect().await;
+-                return Err(Box::new(e));
++                return Err(Box::new(e) as Box<dyn Error>);
+             }
+ 
+             // Match the conservative throughput of the successful capture (~16.1 ms average/write)

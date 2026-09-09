@@ -1,0 +1,126 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -5,5 +5,6 @@
+ 
+ [dependencies]
+ btleplug = "0.12"
++futures = "0.3"
+ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+ uuid = "1"
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,6 @@
+ use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
+ use btleplug::platform::Manager;
++use futures::StreamExt;
+ use std::{error::Error, time::Duration};
+ use tokio::time::sleep;
+ use uuid::Uuid;
+@@ -15,13 +16,19 @@
+ async fn main() -> Result<(), Box<dyn Error>> {
+     let args: Vec<String> = std::env::args().skip(1).collect();
+     let inspect = args.iter().any(|a| a == "--inspect");
++    let listen = args.iter().any(|a| a == "--listen");
+     let scan_secs: u64 = args
+         .windows(2)
+         .find(|w| w[0] == "--seconds")
+         .and_then(|w| w[1].parse().ok())
+         .unwrap_or(10);
++    let listen_secs: u64 = args
++        .windows(2)
++        .find(|w| w[0] == "--listen-seconds")
++        .and_then(|w| w[1].parse().ok())
++        .unwrap_or(15);
+ 
+-    println!("TIGA BLE probe — NO characteristic writes are implemented in this build.");
++    println!("TIGA BLE probe — no application-level control/media writes are implemented in this build.");
+     println!("Target name : {TARGET_NAME}");
+     println!("Service UUID: {SERVICE_UUID}");
+     println!("Scan time   : {scan_secs}s");
+@@ -61,8 +68,9 @@
+         return Ok(());
+     };
+ 
+-    if !inspect {
++    if !inspect && !listen {
+         println!("\nSCAN SUCCESS. Re-run with --inspect to connect and enumerate GATT services.");
++        println!("Use --listen to subscribe to the two notification characteristics for a short receive-only test.");
+         println!("This scan mode performed no GATT writes.");
+         return Ok(());
+     }
+@@ -102,6 +110,75 @@
+     println!("  notify  0004   : {}", if expected[3] { "FOUND" } else { "MISSING" });
+     println!("\nNO media/control characteristic writes were sent.");
+ 
++    if listen {
++        if !expected[1] || !expected[3] {
++            peripheral.disconnect().await?;
++            return Err("Cannot listen: one or both expected notify characteristics are missing".into());
++        }
++
++        let characteristics = peripheral.characteristics();
++        let notify1 = characteristics
++            .iter()
++            .find(|ch| ch.uuid == CHAR_NOTIFY)
++            .cloned()
++            .ok_or("Notify characteristic 0002 disappeared after discovery")?;
++        let notify2 = characteristics
++            .iter()
++            .find(|ch| ch.uuid == CHAR_NOTIFY2)
++            .cloned()
++            .ok_or("Notify characteristic 0004 disappeared after discovery")?;
++
++        println!("\nLISTEN MODE");
++        println!("Subscribing to 0002 and 0004 for {listen_secs}s...");
++        println!("NOTE: subscribing writes each characteristic's CCCD, as required by BLE GATT.");
++        println!("No TIGA application-level control or media characteristic values are written.");
++
++        let mut notifications = peripheral.notifications().await?;
++        peripheral.subscribe(&notify1).await?;
++        peripheral.subscribe(&notify2).await?;
++        println!("Subscriptions active. You may leave the keyboard idle or use its normal controls.");
++
++        let deadline = sleep(Duration::from_secs(listen_secs));
++        tokio::pin!(deadline);
++        let mut count = 0usize;
++        loop {
++            tokio::select! {
++                _ = &mut deadline => break,
++                maybe = notifications.next() => {
++                    match maybe {
++                        Some(n) => {
++                            count += 1;
++                            let role = if n.uuid == CHAR_NOTIFY {
++                                "0002/status"
++                            } else if n.uuid == CHAR_NOTIFY2 {
++                                "0004/second"
++                            } else {
++                                "other"
++                            };
++                            let hex = n.value.iter()
++                                .map(|b| format!("{b:02x}"))
++                                .collect::<Vec<_>>()
++                                .join(" ");
++                            println!("RX #{count:03} {role} {} bytes: {hex}", n.value.len());
++                        }
++                        None => {
++                            println!("Notification stream ended before timeout.");
++                            break;
++                        }
++                    }
++                }
++            }
++        }
++
++        println!("Listen window complete: {count} notification(s) received.");
++        if let Err(e) = peripheral.unsubscribe(&notify1).await {
++            println!("Warning: unsubscribe 0002 failed: {e}");
++        }
++        if let Err(e) = peripheral.unsubscribe(&notify2).await {
++            println!("Warning: unsubscribe 0004 failed: {e}");
++        }
++    }
++
+     peripheral.disconnect().await?;
+     println!("Disconnected cleanly.");
+     Ok(())

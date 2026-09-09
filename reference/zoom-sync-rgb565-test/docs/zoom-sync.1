@@ -1,0 +1,388 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH zoom-sync 1 - - ""
+.PP
+.SH SYNOPSIS
+.nf
+\fBzoom\-sync\fP\fR \fP\fR[\fP\fB\-\-auto\fP\fR | \fP\fB\-\-zoom65v3\fP\fR | \fP\fB\-\-zoom\-tkl\-dyna\fP\fR] [\fP\fICOMMAND ...\fP\fR]\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBtray\fP\fR \fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fICOMMAND ...\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBtime\fP\fR \fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBweather\fP\fR \fP\fR[\fP\fB\-f\fP\fR] (\fP\fB\-\-no\-weather\fP\fR | [\fP\fB\-\-coords\fP\fR \fP\fILAT\fP\fR \fP\fILON\fP\fR] | \fP\fB\-w\fP\fR \fP\fIWMO\fP\fR \fP\fICUR\fP\fR \fP\fIMIN\fP\fR \fP\fIMAX\fP\fR)\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBsystem\fP\fR \fP\fR[\fP\fB\-f\fP\fR] ([\fP\fB\-\-cpu\fP\fR=\fP\fILABEL\fP\fR] | \fP\fB\-c\fP\fR=\fP\fITEMP\fP\fR) ([\fP\fB\-\-gpu\fP\fR=\fP\fIID\fP\fR] | \fP\fB\-g\fP\fR=\fP\fITEMP\fP\fR) [\fP\fB\-d\fP\fR=\fP\fISPEED\fP\fR]\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBscreen\fP\fR \fP\fR(\fP\fB\-s\fP\fR=\fP\fIPOSITION\fP\fR | \fP\fB\-\-up\fP\fR | \fP\fB\-\-down\fP\fR | \fP\fB\-\-switch\fP\fR)\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBtheme\fP\fR \fP\fR[\fP\fB\-b\fP\fR=\fP\fICOLOR\fP\fR] [\fP\fB\-c\fP\fR=\fP\fICOLOR\fP\fR] [\fP\fB\-i\fP\fR=\fP\fIID\fP\fR]\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBimage\fP\fR \fP\fR([\fP\fB\-n\fP\fR] [\fP\fB\-b\fP\fR=\fP\fIARG\fP\fR] \fP\fIPATH\fP\fR | \fP\fICOMMAND ...\fP\fR)\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBimage\fP\fR \fP\fBclear\fP\fR \fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBgif\fP\fR \fP\fR([\fP\fB\-n\fP\fR] [\fP\fB\-b\fP\fR=\fP\fIARG\fP\fR] \fP\fIPATH\fP\fR | \fP\fICOMMAND ...\fP\fR)\fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBgif\fP\fR \fP\fBclear\fP\fR \fP\fR
+\fP\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBclear\fP\fR \fP\fR
+\fP
+.fi
+.SH ZOOM-SYNC\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRCross\-platform utility for syncing Zoom keyboard screen modules\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fR[\fP\fB\-\-auto\fP\fR | \fP\fB\-\-zoom65v3\fP\fR | \fP\fB\-\-zoom\-tkl\-dyna\fP\fR] [\fP\fICOMMAND ...\fP\fR]\fP
+.PP
+.SS BOARD\ SELECTION:
+.TP
+\fB    \-\-auto\fP
+\fRAuto\-detect connected board (default)\fP
+.PP
+.TP
+\fB    \-\-zoom65v3\fP
+\fRZoom65 V3\fP
+.PP
+.TP
+\fB    \-\-zoom\-tkl\-dyna\fP
+\fRZoom TKL Dyna\fP
+.PP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.TP
+\fB\-V\fP\fR, \fP\fB\-\-version\fP
+\fRPrints version information\fP
+.PP
+.PP
+.SS AVAILABLE\ COMMANDS:
+.TP
+\fBtray\fP
+\fRRun with a system tray menu for GUI control (default)\fP
+.PP
+.TP
+\fBset\fP
+\fRSet specific options on the keyboard\fP
+.PP
+.SH ZOOM-SYNC\ TRAY\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRRun with a system tray menu for GUI control\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBtray\fP\fR \fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRSet specific options on the keyboard\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fICOMMAND ...\fP
+.PP
+\fR\fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.PP
+.SS AVAILABLE\ COMMANDS:
+.TP
+\fBtime\fP
+\fRSync time to system clock\fP
+.PP
+.TP
+\fBweather\fP
+\fRSet weather data\fP
+.PP
+.TP
+\fBsystem\fP
+\fRSet system info\fP
+.PP
+.TP
+\fBscreen\fP
+\fRChange current screen\fP
+.PP
+.TP
+\fBtheme\fP
+\fRSet screen theme colors\fP
+.PP
+.TP
+\fBimage\fP
+\fRUpload static image\fP
+.PP
+.TP
+\fBgif\fP
+\fRUpload animated image (gif/webp/apng)\fP
+.PP
+.TP
+\fBclear\fP
+\fRClear all media files\fP
+.PP
+.SH ZOOM-SYNC\ SET\ TIME\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRSync time to system clock\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBtime\fP\fR \fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ WEATHER\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRSet weather data\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBweather\fP\fR \fP\fR[\fP\fB\-f\fP\fR] (\fP\fB\-\-no\-weather\fP\fR | [\fP\fB\-\-coords\fP\fR \fP\fILAT\fP\fR \fP\fILON\fP\fR] | \fP\fB\-w\fP\fR \fP\fIWMO\fP\fR \fP\fICUR\fP\fR \fP\fIMIN\fP\fR \fP\fIMAX\fP\fR)\fP
+.PP
+.SS WEATHER\ FORECAST\ OPTIONS:
+.TP
+\fB    \-\-no\-weather\fP
+\fRDisable updating weather info completely\fP
+.PP
+.SS --COORDS\ LAT\ LON
+.TP
+\fB    \-\-coords\fP
+\fROptional coordinates to use for fetching weather data, skipping ipinfo geolocation api.\fP
+.PP
+.TP
+\fILAT\fP
+\fRLatitude\fP
+.PP
+.TP
+\fILON\fP
+\fRLongitude\fP
+.PP
+.PP
+.SS -W\ WMO\ CUR\ MIN\ MAX
+.TP
+\fB\-w\fP\fR, \fP\fB\-\-weather\fP
+\fRManually provide weather data, skipping open\-meteo weather api. All values are
+unitless.\fP
+.PP
+.TP
+\fIWMO\fP
+\fRWMO Index\fP
+.PP
+.TP
+\fICUR\fP
+\fRCurrent temperature\fP
+.PP
+.TP
+\fIMIN\fP
+\fRMinumum temperature\fP
+.PP
+.TP
+\fIMAX\fP
+\fRMaximum temperature\fP
+.PP
+.PP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-f\fP\fR, \fP\fB\-\-farenheit\fP
+\fRUse farenheit for all fetched temperatures. May cause clamping for anything greater than 99F. No effect on any manually provided data.\fP
+.PP
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ SYSTEM\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRSet system info\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBsystem\fP\fR \fP\fR[\fP\fB\-f\fP\fR] ([\fP\fB\-\-cpu\fP\fR=\fP\fILABEL\fP\fR] | \fP\fB\-c\fP\fR=\fP\fITEMP\fP\fR) ([\fP\fB\-\-gpu\fP\fR=\fP\fIID\fP\fR] | \fP\fB\-g\fP\fR=\fP\fITEMP\fP\fR) [\fP\fB\-d\fP\fR=\fP\fISPEED\fP\fR]\fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-f\fP\fR, \fP\fB\-\-farenheit\fP
+\fRUse farenheit for all fetched temperatures. May cause clamping for anything greater than 99F. No effect on any manually provided data.\fP
+.PP
+.TP
+\fB    \-\-cpu\fP\fR=\fP\fILABEL\fP
+\fRSensor label to search for\fP
+.PP
+.TP
+\fR[default: Package]\fP
+.PP
+.TP
+\fB\-c\fP\fR, \fP\fB\-\-cpu\-temp\fP\fR=\fP\fITEMP\fP
+\fRManually set CPU temperature\fP
+.PP
+.TP
+\fB    \-\-gpu\fP\fR=\fP\fIID\fP
+\fRGPU device id to fetch temperature data for (nvidia only)\fP
+.PP
+.TP
+\fR[default: 0]\fP
+.PP
+.TP
+\fB\-g\fP\fR, \fP\fB\-\-gpu\-temp\fP\fR=\fP\fITEMP\fP
+\fRManually set GPU temperature\fP
+.PP
+.TP
+\fB\-d\fP\fR, \fP\fB\-\-download\fP\fR=\fP\fISPEED\fP
+\fRManually set download speed\fP
+.PP
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ SCREEN\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRChange current screen\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBscreen\fP\fR \fP\fR(\fP\fB\-s\fP\fR=\fP\fIPOSITION\fP\fR | \fP\fB\-\-up\fP\fR | \fP\fB\-\-down\fP\fR | \fP\fB\-\-switch\fP\fR)\fP
+.PP
+.SS SCREEN\ OPTIONS:
+.TP
+\fB\-s\fP\fR, \fP\fB\-\-screen\fP\fR=\fP\fIPOSITION\fP
+\fRReset and move the screen to a specific position.
+[cpu|gpu|download|time|weather|meletrix|zoom65|image|gif|battery]\fP
+.PP
+.TP
+\fB    \-\-up\fP
+\fRMove the screen up\fP
+.PP
+.TP
+\fB    \-\-down\fP
+\fRMove the screen down\fP
+.PP
+.TP
+\fB    \-\-switch\fP
+\fRSwitch the screen offset\fP
+.PP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ THEME\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRSet screen theme colors\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBtheme\fP\fR \fP\fR[\fP\fB\-b\fP\fR=\fP\fICOLOR\fP\fR] [\fP\fB\-c\fP\fR=\fP\fICOLOR\fP\fR] [\fP\fB\-i\fP\fR=\fP\fIID\fP\fR]\fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-b\fP\fR, \fP\fB\-\-bg\fP\fR=\fP\fICOLOR\fP
+\fRBackground color (hex: #RRGGBB or #RGB)\fP
+.PP
+.TP
+\fR[default: #000000]\fP
+.PP
+.TP
+\fB\-c\fP\fR, \fP\fB\-\-color\fP\fR=\fP\fICOLOR\fP
+\fRFont/foreground color (hex: #RRGGBB or #RGB)\fP
+.PP
+.TP
+\fR[default: #ffffff]\fP
+.PP
+.TP
+\fB\-i\fP\fR, \fP\fB\-\-id\fP\fR=\fP\fIID\fP
+\fRTheme preset ID\fP
+.PP
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ IMAGE\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRUpload static image\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBimage\fP\fR \fP\fR([\fP\fB\-n\fP\fR] [\fP\fB\-b\fP\fR=\fP\fIARG\fP\fR] \fP\fIPATH\fP\fR | \fP\fICOMMAND ...\fP\fR)\fP
+.PP
+.SS AVAILABLE\ POSITIONAL\ ITEMS:
+.TP
+\fIPATH\fP
+\fRPath to image to re\-encode and upload\fP
+.PP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-n\fP\fR, \fP\fB\-\-nearest\fP
+\fRUse nearest neighbor interpolation when resizing, otherwise uses gaussian\fP
+.PP
+.TP
+\fB\-b\fP\fR, \fP\fB\-\-bg\fP\fR=\fP\fIARG\fP
+\fROptional background color for transparent images\fP
+.PP
+.TP
+\fR[default: #000000]\fP
+.PP
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.PP
+.SS AVAILABLE\ COMMANDS:
+.TP
+\fBclear\fP
+\fRDelete the content, resetting back to the default.\fP
+.PP
+.SH ZOOM-SYNC\ SET\ IMAGE\ CLEAR\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRDelete the content, resetting back to the default.\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBimage\fP\fR \fP\fBclear\fP\fR \fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ GIF\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRUpload animated image (gif/webp/apng)\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBgif\fP\fR \fP\fR([\fP\fB\-n\fP\fR] [\fP\fB\-b\fP\fR=\fP\fIARG\fP\fR] \fP\fIPATH\fP\fR | \fP\fICOMMAND ...\fP\fR)\fP
+.PP
+.SS AVAILABLE\ POSITIONAL\ ITEMS:
+.TP
+\fIPATH\fP
+\fRPath to image to re\-encode and upload\fP
+.PP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-n\fP\fR, \fP\fB\-\-nearest\fP
+\fRUse nearest neighbor interpolation when resizing, otherwise uses gaussian\fP
+.PP
+.TP
+\fB\-b\fP\fR, \fP\fB\-\-bg\fP\fR=\fP\fIARG\fP
+\fROptional background color for transparent images\fP
+.PP
+.TP
+\fR[default: #000000]\fP
+.PP
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.PP
+.SS AVAILABLE\ COMMANDS:
+.TP
+\fBclear\fP
+\fRDelete the content, resetting back to the default.\fP
+.PP
+.SH ZOOM-SYNC\ SET\ GIF\ CLEAR\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRDelete the content, resetting back to the default.\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBgif\fP\fR \fP\fBclear\fP\fR \fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP
+.SH ZOOM-SYNC\ SET\ CLEAR\ 
+.SH NAME
+\fRzoom\-sync \- \fP\fRClear all media files\fP
+.SH SYNOPSIS
+\fBzoom\-sync\fP\fR \fP\fBset\fP\fR \fP\fBclear\fP\fR \fP
+.PP
+.SS AVAILABLE\ OPTIONS:
+.TP
+\fB\-h\fP\fR, \fP\fB\-\-help\fP
+\fRPrints help information\fP
+.PP

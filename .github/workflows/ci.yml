@@ -1,0 +1,42 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate Python renderer
+        run: python -m py_compile tiga_windows_nowplaying_v2.py
+
+      - name: Build Windows media snapshot helper
+        shell: cmd
+        run: cl /nologo /std:c++20 /EHsc tiga_windows_media_snapshot.cpp /Fe:tiga_windows_media_snapshot.exe /link windowsapp.lib
+
+      - name: Build display control utility
+        shell: cmd
+        run: cl /nologo /std:c++20 /EHsc /DUNICODE /D_UNICODE tiga_display_control.cpp /Fe:tiga_display_control.exe /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib ole32.lib
+
+      - name: Build BLE uploader
+        working-directory: windows_ble_probe
+        run: cargo build --release --bin tiga_stream_watch_flow

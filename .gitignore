@@ -1,0 +1,37 @@
+# Build output
+windows_ble_probe/target/
+target/
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime-generated files
+logs/*
+!logs/.gitkeep
+windows_media_thumbnail.bin
+windows_nowplaying_preview.png
+tiga_display_command.txt
+*.tmp
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local captures / sensitive diagnostics
+*.pcap
+*.pcapng
+*.pklg
+*.etl
+
+# Internal project transcript
+reference/TRANSCRIPT.md

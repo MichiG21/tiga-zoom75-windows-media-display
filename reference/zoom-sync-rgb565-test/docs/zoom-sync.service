@@ -1,0 +1,12 @@
+[Unit]
+Description=Screen module sync for Zoom keyboards
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/zoom-sync
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,166 @@
+diff --git a/boards/tiga-protocol/tests/full_image_transfer_plan.rs b/boards/tiga-protocol/tests/full_image_transfer_plan.rs
+new file mode 100644
+index 0000000..5f163ea
+--- /dev/null
++++ b/boards/tiga-protocol/tests/full_image_transfer_plan.rs
+@@ -0,0 +1,160 @@
++//! Full Zoom75 TIGA image-transfer plan, OFFLINE ONLY.
++//!
++//! This integration test never imports HIDAPI, never enumerates a device and
++//! never calls a write function. It only exercises the corrected raw-report API
++//! added in the previous refactor.
++//!
++//! The media-specific assumptions below are still inherited from the
++//! experimental zoom-sync TIGA branch and therefore remain hypotheses:
++//! - command 0xFC
++//! - subcommand 0x00
++//! - u16 big-endian page index
++//! - 16 image bytes per chunk
++//! - current shared encoder format: RGB565 big-endian + 0xFF per pixel
++//! - termination payload [0x00, 0xFF, 0xFF]
++
++use zoom_tiga_protocol::{
++    image_chunk_raw, image_end_raw, raw_report_to_hid_write_buffer,
++};
++
++const WIDTH: usize = 320;
++const HEIGHT: usize = 172;
++const BYTES_PER_PIXEL: usize = 3;
++const CHUNK_SIZE: usize = 16;
++
++fn solid_red_current_branch_encoding() -> Vec<u8> {
++    // Pure red in RGB565 big-endian is F8 00.
++    // The current shared zoom-sync encoder appends FF per pixel.
++    let mut out = Vec::with_capacity(WIDTH * HEIGHT * BYTES_PER_PIXEL);
++    for _ in 0..(WIDTH * HEIGHT) {
++        out.extend_from_slice(&[0xF8, 0x00, 0xFF]);
++    }
++    out
++}
++
++fn packet_crc_is_valid(raw: &[u8; 32]) -> bool {
++    fn crc16(data: &[u8]) -> u16 {
++        let mut crc: u16 = 0xFFFF;
++        for &byte in data {
++            crc ^= (byte as u16) << 8;
++            for _ in 0..8 {
++                crc = if crc & 0x8000 != 0 {
++                    (crc << 1) ^ 0x1021
++                } else {
++                    crc << 1
++                };
++            }
++        }
++        crc
++    }
++
++    let expected = u16::from_le_bytes([raw[6], raw[7]]);
++    let mut input = *raw;
++    input[6] = 0;
++    input[7] = 0;
++    crc16(&input) == expected
++}
++
++#[test]
++fn full_red_frame_can_be_planned_without_touching_hardware() {
++    let encoded = solid_red_current_branch_encoding();
++
++    assert_eq!(encoded.len(), 165_120);
++    assert_eq!(encoded.len() % CHUNK_SIZE, 0);
++
++    let chunk_count = encoded.len() / CHUNK_SIZE;
++    assert_eq!(chunk_count, 10_320);
++
++    // Highest page index is 10_319 = 0x284F, safely inside u16.
++    assert_eq!(chunk_count - 1, 0x284F);
++    assert!(chunk_count - 1 <= u16::MAX as usize);
++
++    let mut rolling_fingerprint: u64 = 0xcbf29ce484222325;
++
++    for (page, chunk) in encoded.chunks_exact(CHUNK_SIZE).enumerate() {
++        let raw = image_chunk_raw(page as u16, chunk);
++        let hid = raw_report_to_hid_write_buffer(raw);
++
++        // Generic raw-report invariants.
++        assert_eq!(raw.len(), 32);
++        assert_eq!(hid.len(), 33);
++        assert_eq!(hid[0], 0x00);
++        assert_eq!(&hid[1..], &raw);
++
++        // Image packet shape under the experimental branch's media model.
++        assert_eq!(raw[0], 0x1C);
++        assert_eq!(raw[1], 0x02);
++        assert_eq!(raw[8], 0xA5);
++        assert_eq!(raw[9], 0xFC);
++        assert_eq!(raw[11], 19);
++
++        assert_eq!(raw[12], 0x00);
++        assert_eq!(raw[13], ((page >> 8) & 0xFF) as u8);
++        assert_eq!(raw[14], (page & 0xFF) as u8);
++        assert_eq!(&raw[15..31], chunk);
++
++        // Full 19-byte payload means the generic checksum occupies raw byte31.
++        assert!(raw[31] != 0);
++        assert_eq!(hid[32], raw[31]);
++        assert!(packet_crc_is_valid(&raw));
++
++        // Stable offline fingerprint of the entire planned HID stream.
++        for byte in hid {
++            rolling_fingerprint ^= byte as u64;
++            rolling_fingerprint = rolling_fingerprint.wrapping_mul(0x100000001b3);
++        }
++
++        if page == 0 {
++            println!("FIRST  raw = {:02x?}", raw);
++            println!("FIRST  hid  = {:02x?}", hid);
++        }
++
++        if page == chunk_count - 1 {
++            println!("LAST   raw = {:02x?}", raw);
++            println!("LAST   hid  = {:02x?}", hid);
++        }
++    }
++
++    let end_raw = image_end_raw();
++    let end_hid = raw_report_to_hid_write_buffer(end_raw);
++
++    assert_eq!(end_raw[9], 0xFC);
++    assert_eq!(end_raw[11], 3);
++    assert_eq!(&end_raw[12..15], &[0x00, 0xFF, 0xFF]);
++    assert!(packet_crc_is_valid(&end_raw));
++    assert_eq!(&end_hid[1..], &end_raw);
++
++    println!("END    raw = {:02x?}", end_raw);
++    println!("END    hid  = {:02x?}", end_hid);
++    println!(
++        "PLAN   = {}x{}, {} bytes, {} chunks + 1 end packet",
++        WIDTH,
++        HEIGHT,
++        encoded.len(),
++        chunk_count
++    );
++    println!("FORMAT = candidate RGB565-BE + FF per pixel");
++    println!("FNV64  = 0x{rolling_fingerprint:016x}");
++    println!("NO HID/USB I/O OCCURRED");
++}
++
++#[test]
++fn two_byte_rgb565_alternative_is_structurally_possible_but_unverified() {
++    // This does NOT claim 2-Bpp is correct. It only records that the alternative
++    // format would also fit the same chunk/page model if later evidence points
++    // to plain RGB565.
++    let bytes = WIDTH * HEIGHT * 2;
++    assert_eq!(bytes, 110_080);
++    assert_eq!(bytes % CHUNK_SIZE, 0);
++
++    let chunks = bytes / CHUNK_SIZE;
++    assert_eq!(chunks, 6_880);
++    assert_eq!(chunks - 1, 0x1ADF);
++
++    println!(
++        "ALT    = plain RGB565 would be {} bytes / {} chunks / last page 0x{:04x}",
++        bytes,
++        chunks,
++        chunks - 1
++    );
++}

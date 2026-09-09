@@ -1,0 +1,49 @@
+name: Release Builds
+on: workflow_dispatch
+
+jobs:
+  release-windows:
+    name: Build Windows (10+) release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build Binary
+        shell: powershell
+        run: |
+          & cargo build --locked --release
+      - name: Upload Files
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoom-sync-windows
+          path: target/release/zoom-sync.exe
+
+  release-aur:
+    name: Build AUR release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install libudev
+        run: sudo apt-get install libudev-dev
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build aur release
+        run: |
+          cargo install cargo-aur
+          cargo aur -o aur
+      - name: Upload Files
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoom-sync-aur
+          path: aur

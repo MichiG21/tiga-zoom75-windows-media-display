@@ -1,0 +1,48 @@
+diff --git a/boards/zoom75-tiga/src/lib.rs b/boards/zoom75-tiga/src/lib.rs
+index 0000000..0000000 100644
+--- a/boards/zoom75-tiga/src/lib.rs
++++ b/boards/zoom75-tiga/src/lib.rs
+@@ -78,11 +78,41 @@ impl Zoom75Tiga {
+         Ok(this)
+     }
+
+     /// Internal method to execute a packet and optionally read the response
+     fn execute(&mut self, packet: [u8; 32]) -> Result<()> {
+-        self.device.write(&packet)?;
++        // The protocol builder currently returns:
++        //   [HID report ID 0][raw Tiga bytes 0..30]
++        //
++        // But the Tiga's actual HID report is 32 bytes, so hidapi must receive
++        // 33 bytes total: 1 report-ID byte + all 32 raw report bytes.
++        //
++        // This becomes fatal for IMAGE packets because their 19-byte payload
++        // places the checksum at raw byte 31, which the current builder drops.
++        // Reconstruct that final byte and send a complete 33-byte HIDAPI buffer.
++        let mut full_report = [0u8; 33];
++        full_report[0] = 0x00; // mandatory HID report ID
++        full_report[1..32].copy_from_slice(&packet[1..32]);
++
++        // Raw Tiga byte 11 contains the payload length.
++        let payload_len = full_report[12] as usize;
++        let checksum_pos = 12 + payload_len;
++
++        // For max-size IMAGE packets the checksum belongs at raw byte 31.
++        // Recreate it using the same checksum formula as build_packet().
++        if checksum_pos == 31 {
++            let checksum: u16 = full_report[10..32]
++                .iter()
++                .map(|&byte| byte as u16)
++                .sum();
++            full_report[32] = (checksum ^ 0xFF) as u8;
++        }
++
++        self.device.write(&full_report)?;
++
+         // Read response if available
+         let _ = self.device.read_timeout(&mut self.buf, 100);
+         Ok(())
+     }
++
+     /// Sync the current date and time to the keyboard display.
+     pub fn set_time<Tz: TimeZone>(&mut self, time: DateTime<Tz>) -> Result<()> {
+         let packet = protocol::datetime(

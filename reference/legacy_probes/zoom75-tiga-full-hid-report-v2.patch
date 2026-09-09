@@ -1,0 +1,37 @@
+--- a/boards/zoom75-tiga/src/lib.rs
++++ b/boards/zoom75-tiga/src/lib.rs
+@@ -86,7 +86,33 @@
+ 
+     /// Internal method to execute a packet and optionally read the response
+     fn execute(&mut self, packet: [u8; 32]) -> Result<()> {
+-        self.device.write(&packet)?;
++        // `build_packet()` prepends HID report ID 0 to a 32-byte Tiga report,
++        // but its current return buffer is only 32 bytes long. That drops the
++        // final raw report byte. For full-size image chunks that byte is the
++        // packet checksum, so the keyboard receives a malformed image packet.
++        //
++        // hidapi expects the report ID as an extra leading byte, so send 33
++        // bytes total: report ID + all 32 bytes of the Tiga report.
++        let mut full_report = [0u8; 33];
++        full_report[..32].copy_from_slice(&packet);
++
++        // In `packet`, index 0 is the HID report ID, so raw Tiga byte 11
++        // (payload length) is packet[12]. If the checksum belongs at raw byte
++        // 31, reconstruct the byte that `build_packet()` dropped.
++        let payload_len = packet[12] as usize;
++        let checksum_pos = 12 + payload_len;
++        if checksum_pos == 31 {
++            // Raw bytes 9..30 correspond to packet[10..32]. The original
++            // checksum calculation sums those bytes while raw byte 31 is 0,
++            // then XORs the low byte with 0xFF.
++            let checksum: u16 = packet[10..32]
++                .iter()
++                .map(|&byte| byte as u16)
++                .sum();
++            full_report[32] = (checksum ^ 0xFF) as u8;
++        }
++
++        self.device.write(&full_report)?;
+         // Read response if available
+         let _ = self.device.read_timeout(&mut self.buf, 100);
+         Ok(())

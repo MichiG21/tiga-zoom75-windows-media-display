@@ -1,0 +1,561 @@
+{
+  "project": "TIGA Windows Media Display",
+  "snapshot": "2026-09-09",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 1216,
+      "sha256": "d47c720a4a67f6e9631569150b3e7b53f795d3b4d19e01b3de745e4ed0dfaed8"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 382,
+      "sha256": "08483a0d4c18a0602688df786f17e227355ea369dd0397f60b0ace865bc70966"
+    },
+    {
+      "path": "BUILD_AND_INSTALL.ps1",
+      "bytes": 1937,
+      "sha256": "19df5f5972cdfb66ef473eacb2a45b4fdff71c24a4921ea82853f4c198e39aca"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 546,
+      "sha256": "0664f901b06185b04b6ce7981fefe429d2a1ab908bd78653c5a017589442d841"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "bytes": 1384,
+      "sha256": "5d170fb69e9d758d0f1c79a9c35bea36124dd9d8a9cdf65b38b2decd9592bd28"
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 1096,
+      "sha256": "a80766e889cc1427c5f56473b5f82681e64534aaf4e2d44475ad8cad06937a09"
+    },
+    {
+      "path": "MANIFEST.json",
+      "bytes": 17676,
+      "sha256": "92e956e61367d1b562a9381ccfac7dd9cff68389b88a6a483a69fa909b4718f2"
+    },
+    {
+      "path": "PUBLISH_TO_GITHUB.md",
+      "bytes": 972,
+      "sha256": "81f07f23ea9d3f448ea4f56668f35848fd604a518b9ccd9eed2a3bca29cbaf8c"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5571,
+      "sha256": "a1c4deb5a6021a9f3285cd116fec4a38227b4b4de6ebda37180744f2ce283329"
+    },
+    {
+      "path": "SECURITY.md",
+      "bytes": 559,
+      "sha256": "546aec80ae2e3ade6d06919889fcdc7305b7f70955fd5054a72f7411f7492fae"
+    },
+    {
+      "path": "START_STACK.ps1",
+      "bytes": 342,
+      "sha256": "d3a9ee2451673e551ed419cc78b506153e2777a6c9c0f93749f0a72970de6ae0"
+    },
+    {
+      "path": "STATUS_STACK.ps1",
+      "bytes": 354,
+      "sha256": "b10fec4a39f886a6a85a57c8bff69b22749126bf527a98666eda91b04449c00e"
+    },
+    {
+      "path": "STOP_STACK.ps1",
+      "bytes": 392,
+      "sha256": "885f6a323630848ee00f5f91d593fafc9c4bfa59d125d49a48bd97f23001d243"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 504,
+      "sha256": "cc43c493a9f41f7569bb6c19161e355954bc30f702548c8c5728857b3d668697"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "bytes": 872,
+      "sha256": "fcdb35a1d5edba096db660383b3534fc346c220e288768d4aa482c1393f9b64e"
+    },
+    {
+      "path": "docs/BUILD_AND_RECOVERY.md",
+      "bytes": 1081,
+      "sha256": "3e1f5684486b29b78bc023a2f4fb9334632c52246c6466667e2adb372684efb6"
+    },
+    {
+      "path": "docs/BUNDLE_NOTES_2026-09-09.md",
+      "bytes": 3698,
+      "sha256": "4a71a378fe3b844b981de7f72c5af6e3be8f46b2120927c84370066570a1f96c"
+    },
+    {
+      "path": "docs/PROTOCOL_NOTES.md",
+      "bytes": 1800,
+      "sha256": "edbcd85585c8344f1ba06e196441ae3d5517bb1a0eb73ec064feb9cb8635c2d1"
+    },
+    {
+      "path": "extracted/session_01_bulk_stream.bin",
+      "bytes": 220649,
+      "sha256": "a4be0a5df3e785a7cc4a13969d1b28b72312eda684627e487859ef11bdfae7d0"
+    },
+    {
+      "path": "extracted/session_01_bulk_stream.redgreen-backup.bin",
+      "bytes": 220649,
+      "sha256": "a4be0a5df3e785a7cc4a13969d1b28b72312eda684627e487859ef11bdfae7d0"
+    },
+    {
+      "path": "extracted/session_01_file.bin",
+      "bytes": 220624,
+      "sha256": "3a4b126a8485c348dd42f0cf12740d62e8d59c45abb5bb181e005deb008db4d2"
+    },
+    {
+      "path": "extracted/session_02_bulk_stream.bin",
+      "bytes": 220649,
+      "sha256": "a4be0a5df3e785a7cc4a13969d1b28b72312eda684627e487859ef11bdfae7d0"
+    },
+    {
+      "path": "extracted/session_02_file.bin",
+      "bytes": 220624,
+      "sha256": "3a4b126a8485c348dd42f0cf12740d62e8d59c45abb5bb181e005deb008db4d2"
+    },
+    {
+      "path": "extracted/transcript.json",
+      "bytes": 947931,
+      "sha256": "bd53479fe578d1c0fbe3e09f31e8e1a5bf3a90bbb9ed615910df21260f4e70b6"
+    },
+    {
+      "path": "install_tiga_startup.ps1",
+      "bytes": 1601,
+      "sha256": "b81e26cfa967d6c41fe2e22cb505616136c1416f59b505613107e27fd5987a91"
+    },
+    {
+      "path": "logs/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reference/RAW_CAPTURES_NOT_INCLUDED.md",
+      "bytes": 351,
+      "sha256": "38493a5369c0f2d863eb327ecf3b67d98f64adbfe7892953d0daacb0b51ee8a0"
+    },
+    {
+      "path": "reference/TRANSCRIPT.md",
+      "bytes": 7058,
+      "sha256": "1746879f9462559e9e1bb805995a274fa36c2daf1d45c5818a3738c4f4f875b0"
+    },
+    {
+      "path": "reference/diagnostics/tiga_2frame_test.mp4",
+      "bytes": 5495,
+      "sha256": "1e6a855e7509d98d4d669b58afef3e940355ff16593ec46d03dd121bdd6823f8"
+    },
+    {
+      "path": "reference/diagnostics/tiga_diagnostic_pattern_320x172.png",
+      "bytes": 612,
+      "sha256": "33de6af1c6d781938e105b3178d6bb5c7e34ba2e78eee857bbeb7536560192b4"
+    },
+    {
+      "path": "reference/diagnostics/tiga_known_good_red_green_media.bin",
+      "bytes": 220612,
+      "sha256": "f38a44d6e7791a563e0f96a18fbacd16dda5c6e289c79915f0ea1310952db8f6"
+    },
+    {
+      "path": "reference/diagnostics/tiga_make_diagnostic_stream.ps1",
+      "bytes": 4709,
+      "sha256": "0cd0e3e3bc94807950164625dd157ff31523c86bc734b235d19748d3d0ee32ac"
+    },
+    {
+      "path": "reference/diagnostics/tiga_make_diagnostic_stream.py",
+      "bytes": 5781,
+      "sha256": "2174e1488403a69f0996c6322083028a042b777b835e31b6ef5c81d46c5e9b60"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_ble_control_probe_v3.patch",
+      "bytes": 8404,
+      "sha256": "71028248744899bab633bd0c492d68251b8801d87486fcd147b755bc2d9eba9f"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_ble_known_good_replay_v4.patch",
+      "bytes": 16010,
+      "sha256": "e80af09d76bab6273e34ff9a99b48b33ff51d2581dad5043986dc73cdbb5f7a4"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_ble_known_good_replay_v4_compile_fix.patch",
+      "bytes": 529,
+      "sha256": "b89c85a156e901fb4ba095030baa9e2e65325ccec7d09f6f22afa025a5ab5121"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_ble_notify_probe_v2.patch",
+      "bytes": 5036,
+      "sha256": "5893bf03c08516453b314ba001294ca7dda3aaf6e9fb651c9236f8da38b2fdec"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_fc_interactive_nav_probe.rs",
+      "bytes": 9070,
+      "sha256": "549172f88126cd891aed595e7b4f30577a67f12f3df4cdf088533202151ecb9b"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_spotify_sysinfo_bridge.rs",
+      "bytes": 5398,
+      "sha256": "cbe57877c8e8825c9fa7ecd9f5ccc56a39c26a5da88ecbbc78ea6dfd4931e99c"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_stream_watch.rs",
+      "bytes": 11354,
+      "sha256": "e99c29171d68c01f0f26c486b6400b9f364ac398e07d3405d2a32696844a11ff"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_sysinfo_field_map_probe.rs",
+      "bytes": 4857,
+      "sha256": "d60411fc9cf638de1af30df5b3a9c0adf7efd3b5385c8e2aa54062f01ec0c0e4"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_sysinfo_mbps_probe.rs",
+      "bytes": 4117,
+      "sha256": "e820bd6c96ec0fdbd32b39a9439a9d2906376812b8af62492c6382865d065bf1"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_sysinfo_mbps_probe_corrected.rs",
+      "bytes": 5143,
+      "sha256": "27cc421a182578e89aed95a9c001f0df4cb15be6cd009583bc19097247f1a53a"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_sysinfo_runtime_replay_probe.rs",
+      "bytes": 4774,
+      "sha256": "dcc00d49172aab72b4d66741dccb186a3de24d0ec405314edeee8206d2f359ab"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_telemetry_theme_explorer.rs",
+      "bytes": 3913,
+      "sha256": "8e4da22ec628ff910a5fbf2af1e9291c05e2337a302b837790c6047383ee7aee"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_usb_live_page_probe.rs",
+      "bytes": 8931,
+      "sha256": "c8a0f337219a2ab43f498ae40ff0907f81a56d6a318867343fab820c7817e989"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_usb_partial_commit_probe.rs",
+      "bytes": 9037,
+      "sha256": "0f242ab221eac12870e8a2fa29426ba78b8ae9b26c2945753bf487eb0e26abe9"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_usb_session_prime_probe_v2.rs",
+      "bytes": 8330,
+      "sha256": "e3bfdb8dc3ad3c99d856c4263a0f4d913e523d793edb39374dda4caa389b3dea"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_usb_session_prime_probe_v3.rs",
+      "bytes": 8409,
+      "sha256": "bcbef2f38298b8373812b48af96dc5a1239b412e296abd5875d7ea731f48bf8f"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_windows_media_probe.ps1",
+      "bytes": 4660,
+      "sha256": "888bb253ad2b1c19820967f475eeab853ab1beee552f09826ab64223ffc0c41a"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_windows_media_probe_v2.cpp",
+      "bytes": 5387,
+      "sha256": "4cd3c8704eb290eeb63be0567a1fa1712340582bb7aa6f3785623817fe8478d2"
+    },
+    {
+      "path": "reference/legacy_probes/tiga_windows_media_probe_v3.cpp",
+      "bytes": 5425,
+      "sha256": "521c28004d619b5f2dc126df2f632cb7e500d6618ed42665d14e371c6d2c796d"
+    },
+    {
+      "path": "reference/legacy_probes/zoom75-tiga-full-hid-report-v2.patch",
+      "bytes": 1770,
+      "sha256": "a6efa436759f349fb9cf969f7c435817f59c97a6fbe1af8deebd392af918db9a"
+    },
+    {
+      "path": "reference/legacy_probes/zoom75-tiga-full-hid-report.patch",
+      "bytes": 2027,
+      "sha256": "e79dcc58f1939afbd2e32835b9d388638779001f9b1cce0b1fda584c5feeb937"
+    },
+    {
+      "path": "reference/legacy_probes/zoom75-tiga-full-image-transfer-dryrun.patch",
+      "bytes": 5567,
+      "sha256": "8247709914a238a55c04cfbd9dee8d710bb7e04e5912a0f9c84a3673dfd6ace7"
+    },
+    {
+      "path": "reference/legacy_probes/zoom75-tiga-known-good-red-green-usb-fast-safe-v2.patch",
+      "bytes": 1751,
+      "sha256": "7be75a29e2d726bfe9017ed9892368647b9de6b13786cb1366cf90a599a42821"
+    },
+    {
+      "path": "reference/legacy_probes/zoom75-tiga-known-good-red-green-usb-fast-safe-v3.patch",
+      "bytes": 1783,
+      "sha256": "ebd17b7e1df0048d40ce2cd08d354db692af45565b39c6db6644cc91bc9066d9"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/.github/workflows/release.yml",
+      "bytes": 1313,
+      "sha256": "ae50c3d8b015dfaae09d55df081b580cb631425270e5de996d49210c4b0a2d16"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/.gitignore",
+      "bytes": 9,
+      "sha256": "f61c42065f048ea8fa74560cdb2ce376ca780b0904950df8b77d7a1156185c7f"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/Cargo.lock",
+      "bytes": 119572,
+      "sha256": "009de5d0c21f1d792e227950d2cb89292c4ba9f512573fadf8152d3eb13ffb01"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/Cargo.toml",
+      "bytes": 2163,
+      "sha256": "bb33cd8a28009740aefe2900851fbfe124ac1e47047a9d475492aadf63019f04"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/LICENSE",
+      "bytes": 1093,
+      "sha256": "75abef1378a3b0f22926b1ceecae92e11b6e1299354b5c7b1b84880f93597e20"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/README.md",
+      "bytes": 6392,
+      "sha256": "49668c999fdfd76845a0259bcddeac270f954015469a28d0956ff1c852fcf5cf"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/TIGA_RGB565_PATCH.md",
+      "bytes": 1021,
+      "sha256": "4775565645ccc76d91fcd49a7b2b46d386421422fa5342939a2dd217317f0dff"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/assets/zoom_icon.png",
+      "bytes": 31008,
+      "sha256": "7da738165662d1b9e1960b2370d2f9fb0b93b4b3505ab8023106daa232f8df49"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/core/Cargo.toml",
+      "bytes": 172,
+      "sha256": "7b724a49dafe0413766e61853783f89d4e23e636cf4dfd1c7b6b9a04aede3b15"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/core/src/board.rs",
+      "bytes": 2927,
+      "sha256": "e786956acd46d012207bd367b9f8cd7caefaf0a58da7d0104715cb19e5fb27fa"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/core/src/features.rs",
+      "bytes": 3294,
+      "sha256": "f149d1ff78affbabda7417e080d768afaca0e757ea174a57d63458030a5df432"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/core/src/lib.rs",
+      "bytes": 552,
+      "sha256": "b026b999c211517f0ab535998a24b8a9e7e019ee4bc3d8b1355658ab79c93e98"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/Cargo.toml",
+      "bytes": 348,
+      "sha256": "da4c308baf2fa318f9442440c1860ac89c6cd2e76d67c56ec70aa9aec92d0577"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/src/abi.rs",
+      "bytes": 7296,
+      "sha256": "a68d27b7ec346134aa99d560c66db45934dcfc9fe9c7cd9723bd9ef3fc856ffd"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/src/crc.rs",
+      "bytes": 822,
+      "sha256": "7a959a9c961bf9acfc07890b109ae18a0f6454399c00d28036b80fb519ec2eef"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/src/lib.rs",
+      "bytes": 666,
+      "sha256": "c0be1432820c84133a96c7a80a61fb15fa438e585b42c75b7d4cd01d17281732"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/src/types.rs",
+      "bytes": 4799,
+      "sha256": "e09d64403bb82535485c854d24beafeb8dec0cc3fb173d6afda3d4b5dd4243f3"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/tiga-protocol/src/utils.rs",
+      "bytes": 3181,
+      "sha256": "31ad5f4087a6cdea574eb7840f90ab3ee1e07cb9d29e960bfcd5ac7c8cdca51f"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom-tkl-dyna/Cargo.toml",
+      "bytes": 478,
+      "sha256": "2f066db38a5b96df2b9249cb20587e59428f9eb57ffe39b7804a68f8baef0d1b"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom-tkl-dyna/src/lib.rs",
+      "bytes": 10396,
+      "sha256": "f622be7a88b0c15c34ff06fef6d5768568c86f8ee33c07f1da2f69d3fc690671"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/Cargo.toml",
+      "bytes": 399,
+      "sha256": "c7b892c31cae4fbfd69fbefdc715276e8aef63e1f85c46683d19402d8e2d8eb2"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/README.md",
+      "bytes": 354,
+      "sha256": "01e49323ab40a0efdcad75474f6fc20d3ced2f6953b174e5df4006dc94daca15"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/src/abi.rs",
+      "bytes": 3127,
+      "sha256": "e1dade2ee7dc4ed0b7de36ffcdc5d76a1d2836b610c76798e4354c41fe6e5af7"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/src/checksum.rs",
+      "bytes": 887,
+      "sha256": "b151e6fb0bc02584e6ca5536783940fe7e4fe7a7f3cf421ce817427be7453770"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/src/float.rs",
+      "bytes": 2725,
+      "sha256": "ab2e905b05ac8591279c59acff0e57f555f6b04690ed3ea3f98973e11cf6fe90"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/src/lib.rs",
+      "bytes": 14384,
+      "sha256": "a8081e0140cdfd70e5c6ee48f5ee70bb1836b3bee28fa5ae9798d81bb6ed9316"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom65v3/src/types.rs",
+      "bytes": 5223,
+      "sha256": "e83f95d902ecd03cf6211f28649e65df51dd97fb6e6c3c5497c15d7e352f6000"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom75-tiga/Cargo.toml",
+      "bytes": 474,
+      "sha256": "d18f424f1d2f9c7f3959fae3ed1525953e455398163e9b3d2820df7b99181f1a"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/boards/zoom75-tiga/src/lib.rs",
+      "bytes": 9339,
+      "sha256": "68f90c753154c196f4355b14e2f37dcce4e3a022e6fe0942641a82eebb9ab983"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/docs/README.md",
+      "bytes": 7853,
+      "sha256": "20b877cd4d76b850c1fa4bc803888c37b1417869a53a9290b4b0b81342d9f17c"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/docs/zoom-sync.1",
+      "bytes": 10728,
+      "sha256": "b65a5210a8b439922c718c5a5ccbf21fa3925f5b3edcc4f236a3964b637627ed"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/docs/zoom-sync.service",
+      "bytes": 254,
+      "sha256": "61bbb750ecbed06b1844ddedf9afddb3727a5daf8df250b6cfe1717faac5badd"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/flake.lock",
+      "bytes": 594,
+      "sha256": "2c32d37bb1710d93ca6bfb1dc1a6f7b71f54f7ad2fd63326d967e02c5beed133"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/flake.nix",
+      "bytes": 3346,
+      "sha256": "353ffaa4d48885e5af2336c4a2c4df15c388f7a5134d8c881f71cca35917cc3e"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/rustfmt.toml",
+      "bytes": 298,
+      "sha256": "6a36ea028a1b532e90beae91e13421a60351b2e29e94429e3400219dc59fb82a"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/config.rs",
+      "bytes": 5438,
+      "sha256": "b00b8291478f35b3fc2f7cee943c42f8bf8b970ea2770a76833d3645d6632db4"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/detection.rs",
+      "bytes": 3828,
+      "sha256": "e0cc1673830d8faf428625e4740a7777b31ef9cbfb443df359a1cda4715535c9"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/info.rs",
+      "bytes": 7548,
+      "sha256": "75407a285cf0c0e2496e3448bc8e9f0c510a4ea82e9144e2617c69198d184b2f"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/lock.rs",
+      "bytes": 1879,
+      "sha256": "f3c0b72fcbeb449d4be9940740c431597693405f7cafa230f065fe0db7a1484a"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/main.rs",
+      "bytes": 19523,
+      "sha256": "af8519fa03f8666cdfbbfb26b4b3d6f78a3d4a1a6a07489b90cf33c6487b1d3b"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/media.rs",
+      "bytes": 6743,
+      "sha256": "d904d3553bc156f1f51503bf39b21e0e2a6d21c5961b1f5de678646b5d779249"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/screen.rs",
+      "bytes": 2696,
+      "sha256": "10112b406dc58d5f9d29e2f451eb1da225206113d1aeec89a04c8554cde2398f"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/tray/commands.rs",
+      "bytes": 1684,
+      "sha256": "99065896799f858e779bd3fab556f5847cb90e698b2a621921b4ac44638bb0fe"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/tray/menu.rs",
+      "bytes": 17170,
+      "sha256": "fcfd72126dd4eb2cb4f1d815651eb3f588aa05ab81bb6b785c8398d3c8094e0d"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/tray/mod.rs",
+      "bytes": 34900,
+      "sha256": "c1a592564ad2fc72451436cb70b5fb945f91d63438c13b807a426a4e40e901ae"
+    },
+    {
+      "path": "reference/zoom-sync-rgb565-test/src/weather.rs",
+      "bytes": 5474,
+      "sha256": "c9d7d664896f6956c19c08fff72894cbc2127bba48a9b65e40a797d00ea988d3"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 13,
+      "sha256": "23754b121c68479464c8a3e0600408c95d59cfef986f3ef3a4e6fce33c6a3a14"
+    },
+    {
+      "path": "tiga_display_control.cpp",
+      "bytes": 5761,
+      "sha256": "e2ebfc8c99797fc30f2eddf8aef2c8f1c8930427b4a59864c9e33ecbf75ec59b"
+    },
+    {
+      "path": "tiga_startup_supervisor.ps1",
+      "bytes": 4051,
+      "sha256": "ab2170f7826c3dba02030a923f7dce5aa13cd04da1f30803f04464f1b1450b32"
+    },
+    {
+      "path": "tiga_windows_media_snapshot.cpp",
+      "bytes": 7976,
+      "sha256": "65b2617df95e077298791749997ae9e9e8d394d4b25229c1b1f9aa24a60f3aac"
+    },
+    {
+      "path": "tiga_windows_nowplaying_v2.py",
+      "bytes": 20524,
+      "sha256": "210af187707c86c9039461e6df26450f74e2b23df15db49197b4499d28770ff4"
+    },
+    {
+      "path": "windows_ble_probe/Cargo.toml",
+      "bytes": 206,
+      "sha256": "bd6eac9af7aa95a7290b6135e61e92b532254f703c242e66f60448e80d55400f"
+    },
+    {
+      "path": "windows_ble_probe/src/bin/tiga_stream_watch_flow.rs",
+      "bytes": 12213,
+      "sha256": "51383c60541b7f0361be21120926f5ce03745170b89da6818ff695a8c8604405"
+    },
+    {
+      "path": "windows_ble_probe/src/main.rs",
+      "bytes": 4549,
+      "sha256": "1480a6bce04ca17ed926de23f470aced76ed89259da0688364061cd0a4cd9ddb"
+    }
+  ]
+}
