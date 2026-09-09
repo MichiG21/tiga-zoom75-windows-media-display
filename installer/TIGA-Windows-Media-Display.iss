@@ -37,6 +37,7 @@ Name: "{autoprograms}\TIGA Windows Media Display\Stop Display"; Filename: "power
 Name: "{autoprograms}\TIGA Windows Media Display\Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\STATUS_STACK.ps1"""; WorkingDir: "{app}"
 
 [Run]
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\STOP_STACK.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Stopping any previous TIGA display session..."
 Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\install_tiga_startup.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing automatic startup task..."
 Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ""Start-ScheduledTask -TaskName 'TIGA Windows Media Display'"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Starting TIGA Windows Media Display..."
 Filename: "{app}\app\_internal\tiga_display_control.exe"; Description: "Open TIGA Display Control"; Flags: nowait postinstall skipifsilent unchecked
