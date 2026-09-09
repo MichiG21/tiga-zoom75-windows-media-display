@@ -1,10 +1,15 @@
 # Build output
 windows_ble_probe/target/
 target/
+build/
+dist/
+*.spec
 *.exe
 *.obj
 *.pdb
 *.ilk
+installer/staging/
+installer/output/
 
 # Python
 __pycache__/
@@ -33,5 +38,6 @@ Thumbs.db
 *.pklg
 *.etl
 
-# Internal project transcript
+# Internal project transcript / extracted conversation data
 reference/TRANSCRIPT.md
+extracted/transcript.json
