@@ -1,0 +1,121 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build/upload (for example v0.2.0)"
+        required: true
+        default: "v0.2.0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $version = $tag.TrimStart('v')
+          "TIGA_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TIGA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Python build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build Windows media helper
+        shell: cmd
+        run: cl /nologo /std:c++20 /EHsc tiga_windows_media_snapshot.cpp /Fe:tiga_windows_media_snapshot.exe /link windowsapp.lib
+
+      - name: Build display control utility
+        shell: cmd
+        run: cl /nologo /std:c++20 /EHsc /DUNICODE /D_UNICODE tiga_display_control.cpp /Fe:tiga_display_control.exe /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib ole32.lib
+
+      - name: Build BLE uploader
+        working-directory: windows_ble_probe
+        shell: pwsh
+        run: cargo build --release --bin tiga_stream_watch_flow
+
+      - name: Package renderer with Python runtime
+        shell: pwsh
+        run: pyinstaller --noconfirm --clean --onedir --name tiga_windows_nowplaying tiga_windows_nowplaying_v2.py
+
+      - name: Assemble installer staging tree
+        shell: pwsh
+        run: |
+          $stage = Join-Path $PWD "installer\staging"
+          $app = Join-Path $stage "app"
+          $internal = Join-Path $app "_internal"
+          New-Item -ItemType Directory -Force -Path $stage,$app,$internal,(Join-Path $internal "extracted") | Out-Null
+
+          Copy-Item -Recurse -Force "dist\tiga_windows_nowplaying\*" $app
+          Copy-Item -Force ".\tiga_windows_media_snapshot.exe" $internal
+          Copy-Item -Force ".\tiga_display_control.exe" $internal
+          Copy-Item -Force ".\windows_ble_probe\target\release\tiga_stream_watch_flow.exe" $internal
+          Copy-Item -Force ".\extracted\session_01_bulk_stream.bin" (Join-Path $internal "extracted")
+          Copy-Item -Force ".\extracted\session_01_bulk_stream.redgreen-backup.bin" (Join-Path $internal "extracted")
+
+          Copy-Item -Force ".\installer\runtime\tiga_startup_supervisor.ps1" $stage
+          Copy-Item -Force ".\installer\runtime\START_STACK.ps1" $stage
+          Copy-Item -Force ".\installer\runtime\STOP_STACK.ps1" $stage
+          Copy-Item -Force ".\installer\runtime\STATUS_STACK.ps1" $stage
+          Copy-Item -Force ".\install_tiga_startup.ps1" $stage
+          Copy-Item -Force ".\LICENSE" $stage
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          & $iscc "/DMyAppVersion=$env:TIGA_VERSION" ".\installer\TIGA-Windows-Media-Display.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TIGA-Windows-Media-Display-Setup-v${{ env.TIGA_VERSION }}
+          path: installer/output/TIGA-Windows-Media-Display-Setup-v${{ env.TIGA_VERSION }}.exe
+
+      - name: Upload installer to GitHub release
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:TIGA_TAG" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:TIGA_TAG" --repo "${{ github.repository }}" --title "TIGA Windows Media Display $env:TIGA_TAG" --generate-notes
+          }
+          gh release upload "$env:TIGA_TAG" "installer\output\TIGA-Windows-Media-Display-Setup-v$env:TIGA_VERSION.exe" --repo "${{ github.repository }}" --clobber
