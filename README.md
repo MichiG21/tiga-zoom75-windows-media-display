@@ -9,6 +9,26 @@ BLE media-transfer path.
 > **Unofficial community project.** This project is not affiliated with or
 > endorsed by Meletrix / Wuque Studio.
 
+## Preview
+
+### Now Playing
+
+Displays artwork, title, artist, album, and total media duration from the active Windows media session.
+
+![TIGA Now Playing](Now-Playing.jpeg)
+
+### Standby
+
+When no fresh media is playing, the display switches to a large clock/date standby screen.
+
+![TIGA Standby](Standby.jpeg)
+
+### Intermission / stock animation
+
+The TIGA may briefly show its built-in animation while a new custom image is being committed.
+
+![TIGA Intermission Screen](Intermission-Screen.jpeg)
+
 ## What it does
 
 - Uses Windows **Global System Media Transport Controls (GSMTC)** rather than a
