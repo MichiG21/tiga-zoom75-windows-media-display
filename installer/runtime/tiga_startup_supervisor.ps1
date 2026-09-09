@@ -1,10 +1,9 @@
 # TIGA Windows Media Display packaged startup supervisor
-# Used by the one-click installer build. The development supervisor in the
-# repository root remains optimized for source-tree builds.
-
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$AppRoot = Join-Path $Root "app"
+$RuntimeRoot = Join-Path $AppRoot "_internal"
 $Logs = Join-Path $Root "logs"
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
 
@@ -16,15 +15,13 @@ $BleErr        = Join-Path $Logs "ble_error.log"
 
 function Write-SupervisorLog {
     param([string]$Message)
-    Add-Content -Path $SupervisorLog `
-        -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message) `
-        -Encoding UTF8
+    Add-Content -Path $SupervisorLog -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message) -Encoding UTF8
 }
 
-$Renderer = Join-Path $Root "tiga_windows_nowplaying.exe"
-$Snapshot = Join-Path $Root "tiga_windows_media_snapshot.exe"
-$BleExe   = Join-Path $Root "tiga_stream_watch_flow.exe"
-$Stream   = Join-Path $Root "extracted\session_01_bulk_stream.bin"
+$Renderer = Join-Path $AppRoot "tiga_windows_nowplaying.exe"
+$Snapshot = Join-Path $RuntimeRoot "tiga_windows_media_snapshot.exe"
+$BleExe   = Join-Path $RuntimeRoot "tiga_stream_watch_flow.exe"
+$Stream   = Join-Path $RuntimeRoot "extracted\session_01_bulk_stream.bin"
 
 foreach ($required in @($Renderer, $Snapshot, $BleExe, $Stream)) {
     if (-not (Test-Path $required)) {
@@ -34,12 +31,7 @@ foreach ($required in @($Renderer, $Snapshot, $BleExe, $Stream)) {
 }
 
 $createdNew = $false
-$mutex = New-Object System.Threading.Mutex(
-    $true,
-    "Global\TigaWindowsMediaDisplay",
-    [ref]$createdNew
-)
-
+$mutex = New-Object System.Threading.Mutex($true, "Global\TigaWindowsMediaDisplay", [ref]$createdNew)
 if (-not $createdNew) {
     Write-SupervisorLog "Another supervisor instance is already running; exiting."
     $mutex.Dispose()
@@ -51,39 +43,16 @@ $bleProc = $null
 
 function Start-Renderer {
     Write-SupervisorLog "Starting packaged renderer."
-    return Start-Process `
-        -FilePath $Renderer `
-        -WorkingDirectory $Root `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $RendererOut `
-        -RedirectStandardError $RendererErr `
-        -PassThru
+    Start-Process -FilePath $Renderer -WorkingDirectory $RuntimeRoot -WindowStyle Hidden -RedirectStandardOutput $RendererOut -RedirectStandardError $RendererErr -PassThru
 }
 
 function Start-BleUploader {
     Write-SupervisorLog "Starting packaged BLE uploader."
-
-    $bleArgs = @(
-        '--stream',
-        'extracted\session_01_bulk_stream.bin',
-        '--intra-block-ms',
-        '0',
-        '--confirm-flow-watch'
-    )
-
-    return Start-Process `
-        -FilePath $BleExe `
-        -ArgumentList $bleArgs `
-        -WorkingDirectory $Root `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $BleOut `
-        -RedirectStandardError $BleErr `
-        -PassThru
+    Start-Process -FilePath $BleExe -ArgumentList @('--stream','extracted\session_01_bulk_stream.bin','--intra-block-ms','0','--confirm-flow-watch') -WorkingDirectory $RuntimeRoot -WindowStyle Hidden -RedirectStandardOutput $BleOut -RedirectStandardError $BleErr -PassThru
 }
 
 try {
     Write-SupervisorLog "TIGA packaged startup supervisor launched."
-
     while ($true) {
         if (($null -eq $rendererProc) -or $rendererProc.HasExited) {
             if ($null -ne $rendererProc) {
@@ -92,7 +61,6 @@ try {
             }
             $rendererProc = Start-Renderer
         }
-
         if (($null -eq $bleProc) -or $bleProc.HasExited) {
             if ($null -ne $bleProc) {
                 Write-SupervisorLog "BLE uploader exited with code $($bleProc.ExitCode); restarting in 8s."
@@ -100,21 +68,16 @@ try {
             }
             $bleProc = Start-BleUploader
         }
-
         Start-Sleep -Seconds 2
     }
 }
 finally {
     Write-SupervisorLog "Supervisor stopping; cleaning up children."
-
     foreach ($proc in @($rendererProc, $bleProc)) {
         if (($null -ne $proc) -and (-not $proc.HasExited)) {
-            try {
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            } catch {}
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
         }
     }
-
     try { $mutex.ReleaseMutex() } catch {}
     $mutex.Dispose()
 }
