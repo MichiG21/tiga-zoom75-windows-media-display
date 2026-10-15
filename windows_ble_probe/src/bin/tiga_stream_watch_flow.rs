@@ -601,6 +601,10 @@ where
 // Order: the device that last completed an upload (cached in `<stream>.device`) is
 // tried as soon as the scan sees it. Everything else waits until the scan window has
 // closed, so every candidate is logged, and is then tried in discovery order.
+//
+// If every candidate seen was rejected, the scan runs one more window in case the
+// keyboard was slow to advertise; it is still rejected-for-this-run devices only that
+// are skipped.
 
 const SERVICE_MEDIA: Uuid = Uuid::from_u128(0x1f40eaf8_aab4_14a3_f1ba_f61f35cddbaa);
 const SCAN_WINDOW: Duration = Duration::from_secs(5);
@@ -632,7 +636,11 @@ trait Radio {
     /// Time since the scan started.
     fn elapsed(&self) -> Duration;
     async fn pause(&mut self, d: Duration);
+    /// Start a fresh scan window: `elapsed` counts from zero again.
+    async fn rescan(&mut self);
 }
+
+const SCAN_ROUNDS: u32 = 2;
 
 struct Chosen<D, L> {
     address: String,
@@ -657,6 +665,7 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
     let mut tried: Vec<String> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut any_unreachable = false;
+    let mut round = 1;
 
     loop {
         let mut untried = Vec::new();
@@ -694,7 +703,17 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
 
         let Some(s) = next else {
             if window_closed {
-                break;
+                if tried.is_empty() || round >= SCAN_ROUNDS {
+                    break;
+                }
+                round += 1;
+                log!(
+                    "RESCAN: all {} candidate(s) seen so far were rejected; scanning another {} s for others",
+                    tried.len(),
+                    SCAN_WINDOW.as_secs()
+                );
+                radio.rescan().await;
+                continue;
             }
             radio.pause(SCAN_POLL).await;
             continue;
@@ -735,20 +754,33 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
     Err(Failed::new(
         kind,
         format!(
-            "tried {} candidate(s), none qualified: {}",
+            "tried {} candidate(s) over {round} scan(s), none qualified: {}",
             tried.len(),
             outcomes.join("; ")
         ),
     ))
 }
 
+/// Every service a device exposes, with its characteristics, for the rejection log.
+/// Nobody knows what the second "zoom75" device is; this is the only clue it gives.
+fn describe_services(services: &std::collections::BTreeSet<btleplug::api::Service>) -> String {
+    if services.is_empty() {
+        return "exposes no services".into();
+    }
+    let list: Vec<String> = services
+        .iter()
+        .map(|s| {
+            let chars: Vec<String> = s.characteristics.iter().map(|c| c.uuid.to_string()).collect();
+            format!("{} [{}]", s.uuid, chars.join(", "))
+        })
+        .collect();
+    format!("exposes {} service(s): {}", services.len(), list.join("; "))
+}
+
 /// The four characteristics of the media service, or why this device lacks them.
 fn media_link(services: &std::collections::BTreeSet<btleplug::api::Service>) -> Result<GattLink, String> {
     let Some(service) = services.iter().find(|s| s.uuid == SERVICE_MEDIA) else {
-        return Err(format!(
-            "connected, but no media service {SERVICE_MEDIA} ({} other service(s))",
-            services.len()
-        ));
+        return Err(format!("connected, but no media service {SERVICE_MEDIA}; {}", describe_services(services)));
     };
     let find = |uuid: Uuid| service.characteristics.iter().find(|c| c.uuid == uuid).cloned();
     match (find(CHAR_CONTROL), find(CHAR_NOTIFY), find(CHAR_BULK), find(CHAR_NOTIFY2)) {
@@ -759,7 +791,11 @@ fn media_link(services: &std::collections::BTreeSet<btleplug::api::Service>) -> 
                 .filter(|u| find(**u).is_none())
                 .map(|u| u.to_string()[..8].to_string())
                 .collect();
-            Err(format!("connected, media service present but missing {}", missing.join(", ")))
+            Err(format!(
+                "connected, media service present but missing {}; {}",
+                missing.join(", "),
+                describe_services(services)
+            ))
         }
     }
 }
@@ -824,6 +860,15 @@ impl Radio for BleRadio<'_> {
 
     async fn pause(&mut self, d: Duration) {
         sleep(d).await;
+    }
+
+    async fn rescan(&mut self) {
+        // Restarting the scan is best effort: the one already running keeps reporting.
+        let _ = self.adapter.stop_scan().await;
+        if let Err(e) = self.adapter.start_scan(ScanFilter::default()).await {
+            log!("warning: could not restart the scan: {e}");
+        }
+        self.started = Instant::now();
     }
 }
 
@@ -1298,6 +1343,8 @@ mod tests {
         qualified: Vec<&'static str>,
         unreachable: Vec<&'static str>,
         clock: Duration,
+        scan_started: Duration,
+        rescans: u32,
         probed: Vec<String>,
     }
 
@@ -1308,6 +1355,8 @@ mod tests {
                 qualified: qualified.to_vec(),
                 unreachable: Vec::new(),
                 clock: Duration::ZERO,
+                scan_started: Duration::ZERO,
+                rescans: 0,
                 probed: Vec::new(),
             }
         }
@@ -1339,11 +1388,16 @@ mod tests {
         }
 
         fn elapsed(&self) -> Duration {
-            self.clock
+            self.clock - self.scan_started
         }
 
         async fn pause(&mut self, d: Duration) {
             self.clock += d;
+        }
+
+        async fn rescan(&mut self) {
+            self.rescans += 1;
+            self.scan_started = self.clock;
         }
     }
 
@@ -1365,9 +1419,19 @@ mod tests {
         let mut r = FakeRadio::new(&[(0, BAD)], &[GOOD]);
         let f = select(&mut r, None).unwrap_err();
         assert_eq!(f.kind, Failure::Gatt);
-        assert!(f.detail.contains("tried 1 candidate(s)"), "{}", f.detail);
+        assert!(f.detail.contains("tried 1 candidate(s) over 2 scan(s)"), "{}", f.detail);
         assert!(f.detail.contains(BAD), "{}", f.detail);
-        assert_eq!(r.probed, [BAD]); // tried once, not again on later polls
+        assert_eq!(r.probed, [BAD]); // tried once, not again on later polls or the rescan
+        assert_eq!(r.rescans, 1);
+    }
+
+    #[test]
+    fn rescan_finds_a_device_that_advertised_late() {
+        // The good keyboard only shows up after the first window has closed.
+        let mut r = FakeRadio::new(&[(0, BAD), (8000, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!(r.probed, [BAD, GOOD]);
+        assert_eq!(r.rescans, 1);
     }
 
     #[test]
@@ -1421,6 +1485,8 @@ mod tests {
         assert_eq!(f.kind, Failure::Unreachable);
         assert!(f.detail.contains("not found"), "{}", f.detail);
         assert!(r.probed.is_empty());
+        // Nothing to reject, so no rescan: the supervisor's retry covers this case.
+        assert_eq!(r.rescans, 0);
     }
 
     #[test]
@@ -1453,7 +1519,15 @@ mod tests {
         assert!(media_link(&ok).is_ok());
 
         let none: BTreeSet<Service> = BTreeSet::new();
-        assert!(media_link(&none).unwrap_err().contains("no media service"));
+        let why = media_link(&none).unwrap_err();
+        assert!(why.contains("no media service") && why.contains("exposes no services"), "{why}");
+
+        // A rejected device names what it does expose.
+        let gap = Uuid::from_u128(0x00001800_0000_1000_8000_00805f9b34fb);
+        let name_chr = Uuid::from_u128(0x00002a00_0000_1000_8000_00805f9b34fb);
+        let other: BTreeSet<_> = [service(gap, &[name_chr])].into();
+        let why = media_link(&other).unwrap_err();
+        assert!(why.contains("exposes 1 service(s): 00001800-0000-1000-8000-00805f9b34fb [00002a00-"), "{why}");
 
         // The four characteristics under some other service do not count.
         let elsewhere: BTreeSet<_> = [service(Uuid::from_u128(0x180a), &all)].into();
