@@ -337,3 +337,207 @@ The full plan, with expected log lines and a "what if it goes wrong" table, is i
    halt with no power cycle needed. Turn it on, run START_STACK, and it recovers.
 5. Restore the task to the live copy:
    `powershell -File C:\Users\Regal\source\tiga_ble_re_tools\install_tiga_startup.ps1`.
+
+---
+
+# Device selection run (TASKS_B.md), 2026-10-15 late evening
+
+Branch `fix/device-selection`, pushed. No PR, no merge. Nothing was sent to the keyboard,
+nothing started or stopped the stack, and `tiga_ble_re_tools` and `tiga-runtime-lab` were
+not touched.
+
+## Read this first
+
+1. **The keyboard needs a power cycle before you restart the stack.** The logs show a
+   **second** interrupted transfer that isn't in TASKS_B: at 21:39:48, block 3/53, exit
+   20, halted at 21:39:54. `tiga-fresh-test\logs\uploader_halted.json` is still there
+   from it. Power-cycle, then `START_STACK.ps1`, as the halt says.
+2. **`tiga-fresh-test` was repaired.** An earlier run of this task had worked directly
+   in it, on `fix/device-selection`. There was nothing uncommitted to save: the
+   previous run had already committed its work as `5223945`, and only the five
+   untracked docs were left. They are still there, untouched, because checkout keeps
+   untracked files. I ran `git checkout main` there, then
+   `git worktree add ..\tiga-dev fix/device-selection`. It is now on `main` at
+   `128745d`, same as `origin/main`, with a clean tree apart from those five files.
+   Between 21:55 and about 22:00 its source tree held the branch's uploader source;
+   the checkout restored `main`'s.
+3. **Nothing was built in `tiga-fresh-test` after 21:45.** No `.exe` and nothing under
+   `windows_ble_probe\target` is newer than 21:45. The binaries there date from 21:02
+   and 21:04 (the display control). What changed after 21:45: the previous run's three
+   source edits (now in `5223945`), and renderer output at **21:49**
+   (`windows_nowplaying_preview.png`, `windows_media_thumbnail.bin`, the stream files).
+   So the renderer was still running at 21:49, kept alive by the halt. By about 22:00
+   neither the renderer nor the uploader was running.
+4. **Building and running the uploader was blocked again** by this session's safety
+   policy, even `cargo build --release` and the dry run. `cargo test` was allowed. So
+   `tiga-dev\windows_ble_probe\target\release\tiga_stream_watch_flow.exe` was **not**
+   built from this branch. See "What to do on hardware" step 1.
+
+## Issues
+
+| # | What | Filed |
+|---|---|---|
+| #14 | Uploader picks the wrong BLE device when two advertise a matching name | by the earlier run, 21:51. Identical to `docs/ISSUE_11_DEVICE_SELECTION.md`; not filed twice |
+| #15 | Display control reports a command as sent when the write never reached the renderer | this run |
+
+Commented, not closed, on #4, #5, #6, #9 and #10, with the verified / not-verified lines.
+
+## Commits on `fix/device-selection`
+
+| Commit | Task | Change |
+|---|---|---|
+| `5223945` | 3 | (earlier run) Select by media service, not name; log every candidate; cache last good address in `<stream>.device`; exit 11 only once all were tried |
+| `7002196` | 1 | Commit `PROJECT_HISTORY.md` and `RELEASE_CHECKLIST.md`; ignore `TASKS*.md` and the issue drafts |
+| `ca51d3a` | 3 | Rescan once if every candidate was rejected; a rejected device's log line lists every service and characteristic it exposes |
+| `dc30996` | 4 | Codes 10 and 11: 8/16/32/60 s, then every 5 min, never halt |
+| `1be13bc` | 5 | PROJECT_HISTORY §7 (device selection confirmed) and new §7.1 (the session); README Firefox line removed |
+| `dbc902f` | 6 | Display control: read back, wait for the renderer's ack, no shutdown prompt without it |
+| `f124932` | 6 | `SHUTDOWN_ACK.md` to match |
+| `7c93850` | 7 | Per-character font fallback (CJK, Hangul, ♪) |
+| `777944b` | 7 | Delete `MANIFEST.json` |
+| `e6b8311` | 8 | README install troubleshooting; STATUS labels a past failure as historical |
+| (this) | | These notes |
+
+Tests: 28 Rust (`cargo test --release --locked --bin tiga_stream_watch_flow`), 47 Python,
+and both PowerShell suites, all passing. The display control compiles at `/W4` and was
+not linked or run.
+
+## How device selection behaves now
+
+1. If `extracted\session_01_bulk_stream.bin.device` exists, its address is tried **the
+   moment the scan sees it**, without waiting for the 5 s window and with or without
+   a name.
+2. Otherwise every peripheral whose name contains `zoom75` is a **candidate**. Each is
+   logged once as `CANDIDATE name=… address=… rssi=…`. When the 5 s window closes,
+   candidates are tried in the order they were seen.
+3. Trying one means connecting and discovering services. It **qualifies** only with
+   service `1f40eaf8…` and all four characteristics `1f400001`–`1f400004`. Anything
+   else is disconnected and logged as `REJECTED <address> for this run: connected, but
+   no media service …; exposes N service(s): <uuid> [<char uuids>]; …`. Then the next
+   candidate is tried.
+4. If every candidate seen was rejected, it logs `RESCAN …` and scans one more 5 s
+   window for others. Already-rejected devices are not retried.
+5. `SELECTED <address> … after trying N candidate(s)`, then the usual `Found keyboard at …`.
+6. After the first completed upload, the address is written to `<stream>.device`.
+7. Failure: exit 11 `tried N candidate(s) over M scan(s), none qualified: …` if every
+   candidate was reached. Exit 10 if nothing matched, or if any candidate couldn't even
+   be connected (that one might have been the keyboard). Both now retry every 5 min.
+
+## What to do on hardware
+
+1. **Build and dry-run** (in `tiga-dev\windows_ble_probe`):
+   `cargo build --release`, copy `..\extracted\session_01_bulk_stream.redgreen-backup.bin`
+   to `..\extracted\session_01_bulk_stream.bin`, then
+   `.\target\release\tiga_stream_watch_flow.exe --stream ..\extracted\session_01_bulk_stream.bin`.
+   Expect a timestamped first line with `run_id=`, `Validated: 220649 bytes, 1239 writes,
+   53 x 4096-byte progress blocks`, `DRY RUN ONLY`.
+2. **Getting it onto the scheduled task:** the task runs `tiga-fresh-test`, which is on
+   `main`, so none of this runs until it is merged and pulled there. Running
+   `BUILD_AND_INSTALL.ps1` from `tiga-dev` would re-point the task at `tiga-dev`. That
+   works for a test, but then the task runs whatever `tiga-dev` has checked out.
+3. **First live start, with no `.device` file:** in `ble.log` look for **both**
+   `CANDIDATE` lines. If the scan lists `1B:A3:A9:10:13:5D` first, expect its
+   `REJECTED … exposes …` line before `SELECTED 07:01:88:B3:66:1B`. **Please keep that
+   `exposes` line.** It's the first clue to what that device is. If `07:01…` comes
+   first, the other device is never probed and you won't get that line this time.
+4. **After that upload:** `extracted\session_01_bulk_stream.bin.device` holds
+   `address=07:01:88:B3:66:1B`.
+5. **Next start:** `Scanning … (trying 07:01:88:B3:66:1B first: it completed the last
+   upload)`, then `SELECTED` within a second or two of the scan starting, with no
+   `REJECTED` line.
+6. **Keyboard off, change track:** code 10 at 8/16/32/60 s, then
+   `Restarting BLE uploader in 300s … (no halt)`. Switch it on and do nothing else. It
+   should upload within 5 minutes, with no `START_STACK`.
+7. Probing the wrong device took about 6 s in tonight's log (21:08:53 found → 21:08:59
+   exit). So a cold start without the cache can take about 5 s scan + 6 s + connect
+   before `SELECTED`.
+
+## Task 6: the two questions
+
+- **Path mismatch? No.** The GUI builds the path from its own exe location
+  (`GetModuleFileNameW`), not the working directory, so an Explorer double-click, a
+  shortcut and another CWD all give the same path. The renderer uses its script
+  folder, and its log printed `Control file: C:\Users\Regal\source\tiga-fresh-test\tiga_display_command.txt`.
+  Only one build contains the messages you saw: `tiga-fresh-test\tiga_display_control.exe`,
+  21:04:57. There is no other copy of it anywhere under `source`, Program Files,
+  AppData\Local\Programs, Desktop or Downloads.
+  - The write **reported success** to the GUI; otherwise it would have said "Could not
+    request standby". Yet the renderer logged no command before your hand-written
+    `standby test1` at 21:30:31.
+  - **The same exe worked later.** At 21:34:27, process 32884 (its 3rd command) wrote
+    `auto 134365664677263042-32884-3` into `tiga-fresh-test`. The renderer acted on it
+    at 21:34:28 and acked it; both files are still there. The black at 21:33:04 and
+    the standby at 21:33:18 were probably commands 1 and 2 from that process, but the
+    file was overwritten, so I can't prove it.
+  - That fits CyberCapture holding only the first launch. **Still unconfirmed**; the
+    code rules out the path, not the antivirus.
+- **Can Lock Standby reach "Shut down anyway?"? No.** Lock Standby writes the file and
+  sets the status, nothing else. The text "Standby requested. Waiting for the
+  renderer…" and the "did not confirm standby" dialog exist **only** in the Standby +
+  Shut Down worker. So the message you saw means Standby + Shut Down was pressed.
+- **Fix (#15):** read-back after every write, with a plain error naming the path and
+  antivirus. Every button then waits up to 10 s for the renderer's ack before saying
+  "confirmed". **A read-back alone can't catch a sandbox**, because a sandboxed process
+  reads back its own redirected copy; the ack is the real check. Standby + Shut Down no
+  longer offers to shut down when the renderer didn't ack, since from there a stopped
+  stack and a command that never arrived look the same. The "keyboard has not
+  confirmed the upload" prompt is unchanged.
+
+## Other decisions
+
+- **Retry policy:** an unexplained exit with **no** session marker (code 1, -1, …) still
+  gives up after five attempts. TASKS_B covered only 10 and 11. Say if you want those on
+  the slow retry too.
+- **Font fallback:** Segoe UI, then Yu Gothic → Meiryo → Microsoft YaHei → Malgun
+  Gothic → Segoe UI Symbol, per character. A character counts as missing when it draws
+  identically to the font's missing-glyph box. Latin-only text renders pixel-identical
+  to before. Cosmetic: Malgun's Hangul sits a little taller, so a Hangul album line
+  comes close to the divider. Not tuned.
+- **`MANIFEST.json`: deleted, not regenerated.** Nothing reads it. It hashed the
+  September bundle, most of those files have changed, and it contained a hash of
+  itself, which can't be right. Git already records the content; a regenerated copy
+  would be stale again at the next commit.
+- **README limitations:** removed the Firefox line. The others are grounded: the roar
+  (§4.1), power-cycle after an interrupted transfer (bug A policy), the historical
+  filename, and the task-name replacement. I nearly "corrected" the Standby + Shut Down
+  description to "fixed 12 s" before seeing that #12 (shutdown ack) was merged, so it's
+  right as written.
+
+## Tests skipped under rule 3
+
+None. Before running them I checked both PowerShell suites. They kill only their own
+dummy children, by PID, through `Stop-LoggedProcess`. They read `START_STACK.ps1` as text
+rather than running it. The only real-system call is `STATUS_STACK.ps1`'s read-only
+`Get-ScheduledTask` / process listing, run from a copy in a temp folder.
+
+## Contradicts or extends PROJECT_HISTORY.md
+
+Recorded in §7.1:
+
+1. **A second interrupted transfer** (21:39, block 3/53), 3.7 minutes after a clean
+   upload on the same connection. "The keyboard was in a bad state from stopping the
+   previous stack" does not obviously explain this one.
+2. **Upload times:** 19 uploads took 8.42–10.01 s. §3.3 says ~7.7–8.5 s. The two
+   first-on-a-connection uploads were the fastest (8.71, 8.42); the later ones took
+   9.49–10.01. Two samples; recorded, not explained.
+3. `CLAUDE.md` called `tiga_ble_re_tools` the live copy. Fixed (below).
+
+## Task 9: the stale folder and CLAUDE.md
+
+**`tiga-windows-media-display` is safe to delete.** It has no commits outside `origin`,
+no stash, and every local branch tracks a remote branch. Its untracked files:
+
+- `docs/PROJECT_HISTORY.md`, `docs/ISSUES_TO_FILE.md`: identical to the ones now in `tiga-dev`
+- `RELEASE_CHECKLIST.md`: an older subset of the committed one (0 unique lines)
+- `extracted/session_01_bulk_stream.bin`: byte-identical to the template
+- **`TASKS.md` and `TASKS_A.md`: unique.** The prompts for the first two runs. Copy them
+  out first if you want them kept.
+
+I ran `git fetch` there to compare branches, which updated its remote-tracking refs and
+nothing else.
+
+**`C:\Users\Regal\source\CLAUDE.md` is updated** (outside the repo, so not committed).
+The new folder map: `tiga-fresh-test` is live, `tiga-dev` is the development worktree,
+`tiga_ble_re_tools` is the fallback, and `tiga-windows-media-display` is stale and
+awaiting deletion. The ground rules now include TASKS_B's: work only in `tiga-dev`, no
+START/STOP_STACK, check PowerShell tests before running them, dry runs allowed.
