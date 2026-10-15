@@ -3,8 +3,10 @@ use btleplug::platform::Manager;
 use futures::StreamExt;
 use std::{
     error::Error,
+    fmt::Display,
     fs,
     path::{Path, PathBuf},
+    process::ExitCode,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::sleep;
@@ -122,17 +124,155 @@ fn frame_id_for(stream_path: &Path, crc: &str) -> String {
     }
 }
 
-fn record_delivery(stream_path: &Path, frame_id: &str, crc: &str, elapsed_s: f64) {
-    let path = sidecar_path(stream_path, ".delivered");
-    let tmp = sidecar_path(stream_path, ".delivered.tmp");
-    let text = format!(
-        "delivered_at={}\nframe_id={frame_id}\ncrc32={crc}\nelapsed_s={elapsed_s:.2}\nrun_id={}\n",
-        utc_now(),
-        std::env::var("TIGA_RUN_ID").unwrap_or_default()
-    );
+fn run_id() -> String {
+    std::env::var("TIGA_RUN_ID").unwrap_or_default()
+}
+
+/// Atomically writes `<stream><ext>` (tmp + rename) so readers never see half a file.
+fn write_sidecar(stream_path: &Path, ext: &str, text: &str) {
+    let path = sidecar_path(stream_path, ext);
+    let tmp = sidecar_path(stream_path, &format!("{ext}.tmp"));
     if let Err(e) = fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, &path)) {
         log!("warning: could not write {}: {e}", path.display());
     }
+}
+
+fn record_delivery(stream_path: &Path, frame_id: &str, crc: &str, elapsed_s: f64) {
+    write_sidecar(
+        stream_path,
+        ".delivered",
+        &format!(
+            "delivered_at={}\nframe_id={frame_id}\ncrc32={crc}\nelapsed_s={elapsed_s:.2}\nrun_id={}\n",
+            utc_now(),
+            run_id()
+        ),
+    );
+}
+
+// ---- Failure classes and exit codes (issue #4) ------------------------------------
+//
+// The boundary is CONTROL2: it puts the stock firmware into its upload state (the roar
+// animation). Before it, the keyboard is untouched and a retry is safe. From the moment
+// CONTROL2 is *attempted* (a WriteWithoutResponse that errors may still have gone out),
+// the keyboard may hold a partial media session and must be power-cycled first.
+//
+// The session marker `<stream>.session` is written just before CONTROL2, updated after
+// every ACKed block and removed on COMPLETE. It survives a kill or crash, so the
+// supervisor can tell an open session apart from a clean failure even when the exit
+// code is meaningless (taskkill gives 1).
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failure {
+    /// No adapter, keyboard not found, connect failed, or the link failed before CONTROL2.
+    Unreachable,
+    /// Connected, but service discovery / characteristics / subscriptions failed.
+    Gatt,
+    /// CONTROL2 was sent and the transfer did not finish.
+    Interrupted,
+    /// Every block was ACKed but COMPLETE never arrived.
+    NoCompletion,
+    /// Bad arguments, missing or invalid stream, internal error.
+    Fatal,
+}
+
+impl Failure {
+    fn code(self) -> u8 {
+        match self {
+            Failure::Unreachable => 10,
+            Failure::Gatt => 11,
+            Failure::Interrupted => 20,
+            Failure::NoCompletion => 21,
+            Failure::Fatal => 30,
+        }
+    }
+
+    fn meaning(self) -> &'static str {
+        match self {
+            Failure::Unreachable => "keyboard not reachable (no adapter, not found, connect failed, or link lost before the media session opened); safe to retry",
+            Failure::Gatt => "connected, but the keyboard's GATT service was missing or unusable; safe to retry",
+            Failure::Interrupted => "transfer interrupted after CONTROL2; the keyboard may hold a partial media session; power-cycle it before retrying",
+            Failure::NoCompletion => "all blocks sent but the keyboard never confirmed completion; power-cycle it before retrying",
+            Failure::Fatal => "bad arguments, missing or invalid stream, or internal error; not retried",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Failed {
+    kind: Failure,
+    detail: String,
+    frame_id: Option<String>,
+    last_acked_block: Option<usize>,
+}
+
+impl Failed {
+    fn new(kind: Failure, detail: impl Display) -> Self {
+        Failed { kind, detail: detail.to_string(), frame_id: None, last_acked_block: None }
+    }
+}
+
+/// `result.class(Failure::Gatt)?` turns any error into a classified failure.
+trait Classify<T> {
+    fn class(self, kind: Failure) -> Result<T, Failed>;
+}
+
+impl<T, E: Display> Classify<T> for Result<T, E> {
+    fn class(self, kind: Failure) -> Result<T, Failed> {
+        self.map_err(|e| Failed::new(kind, e))
+    }
+}
+
+/// Which class a failure inside an upload belongs to, given how far it got.
+fn classify_upload_failure(control2_attempted: bool, all_blocks_acked: bool) -> Failure {
+    match (control2_attempted, all_blocks_acked) {
+        (false, _) => Failure::Unreachable,
+        (true, false) => Failure::Interrupted,
+        (true, true) => Failure::NoCompletion,
+    }
+}
+
+fn write_session_marker(stream_path: &Path, frame_id: &str, last_acked: usize, total: usize) {
+    write_sidecar(
+        stream_path,
+        ".session",
+        &format!(
+            "updated_at={}\nframe_id={frame_id}\nlast_acked_block={last_acked}\ntotal_blocks={total}\nrun_id={}\n",
+            utc_now(),
+            run_id()
+        ),
+    );
+}
+
+fn read_session_marker(stream_path: &Path) -> Option<String> {
+    fs::read_to_string(sidecar_path(stream_path, ".session")).ok()
+}
+
+fn clear_session_marker(stream_path: &Path) {
+    let path = sidecar_path(stream_path, ".session");
+    if let Err(e) = fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log!("warning: could not remove {}: {e}", path.display());
+        }
+    }
+}
+
+/// Human-readable record of why this run exited; the supervisor copies it into its
+/// halt state when the run_id matches the process it started.
+fn record_exit(stream_path: &Path, f: &Failed) {
+    write_sidecar(
+        stream_path,
+        ".exit",
+        &format!(
+            "exited_at={}\nrun_id={}\ncode={}\nmeaning={}\ndetail={}\nframe_id={}\nlast_acked_block={}\n",
+            utc_now(),
+            run_id(),
+            f.kind.code(),
+            f.kind.meaning(),
+            f.detail.replace(['\r', '\n'], " "),
+            f.frame_id.as_deref().unwrap_or(""),
+            f.last_acked_block.map(|b| b.to_string()).unwrap_or_default()
+        ),
+    );
 }
 
 fn validate_stream(stream: &[u8], allow_single_frame: bool) -> Result<(), Box<dyn Error>> {
@@ -303,6 +443,33 @@ where
     }
 }
 
+/// How far one upload got; turns any error into a classified failure.
+struct UploadProgress<'a> {
+    stream_path: &'a Path,
+    frame_id: &'a str,
+    total_blocks: usize,
+    control2_attempted: bool,
+    last_acked_block: usize,
+    all_blocks_acked: bool,
+}
+
+impl UploadProgress<'_> {
+    fn fail(&self, detail: impl Display) -> Failed {
+        let kind = classify_upload_failure(self.control2_attempted, self.all_blocks_acked);
+        Failed {
+            kind,
+            detail: if self.control2_attempted {
+                format!("{detail} (last ACKed block {}/{})", self.last_acked_block, self.total_blocks)
+            } else {
+                detail.to_string()
+            },
+            frame_id: Some(self.frame_id.to_string()),
+            last_acked_block: self.control2_attempted.then_some(self.last_acked_block),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn upload_stream<S>(
     peripheral: &btleplug::platform::Peripheral,
     control: &btleplug::api::Characteristic,
@@ -311,10 +478,21 @@ async fn upload_stream<S>(
     chunks: &[Chunk],
     intra_block_ms: u64,
     block_timeout_ms: u64,
-) -> Result<(), Box<dyn Error>>
+    stream_path: &Path,
+    frame_id: &str,
+) -> Result<(), Failed>
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
 {
+    let mut p = UploadProgress {
+        stream_path,
+        frame_id,
+        total_blocks: chunks.iter().filter(|c| c.ends_4k_block).count(),
+        control2_attempted: false,
+        last_acked_block: 0,
+        all_blocks_acked: false,
+    };
+
     // Drain stale notifications.
     let drain = sleep(Duration::from_millis(150));
     tokio::pin!(drain);
@@ -322,43 +500,52 @@ where
         tokio::select! {
             _ = &mut drain => break,
             n = notifications.next() => {
-                if n.is_none() { return Err("notification stream ended".into()); }
+                if n.is_none() { return Err(p.fail("notification stream ended")); }
             }
         }
     }
 
     let stream_len = chunks.iter().map(|c| c.value.len() - 1).sum::<usize>();
-    peripheral.write(control, &control1_for(stream_len), WriteType::WithoutResponse).await?;
-    wait_for_ack_pair(notifications, C1_ACK_A, C1_ACK_B, 1500).await?;
+    peripheral.write(control, &control1_for(stream_len), WriteType::WithoutResponse).await
+        .map_err(|e| p.fail(e))?;
+    wait_for_ack_pair(notifications, C1_ACK_A, C1_ACK_B, 1500).await
+        .map_err(|e| p.fail(e))?;
 
     sleep(Duration::from_millis(60)).await;
-    peripheral.write(control, &CONTROL2, WriteType::WithoutResponse).await?;
-    wait_for_ack_pair(notifications, C2_ACK_A, C2_ACK_B, 1500).await?;
+
+    // ---- Point of no return: from here a failure leaves a partial media session. ----
+    write_session_marker(p.stream_path, p.frame_id, 0, p.total_blocks);
+    p.control2_attempted = true;
+    peripheral.write(control, &CONTROL2, WriteType::WithoutResponse).await
+        .map_err(|e| p.fail(e))?;
+    wait_for_ack_pair(notifications, C2_ACK_A, C2_ACK_B, 1500).await
+        .map_err(|e| p.fail(e))?;
 
     sleep(Duration::from_millis(60)).await;
 
     let started = Instant::now();
-    let mut block_no = 0usize;
-    let total_blocks = chunks.iter().filter(|c| c.ends_4k_block).count();
+    let total_blocks = p.total_blocks;
 
     for (idx, chunk) in chunks.iter().enumerate() {
-        peripheral.write(bulk, &chunk.value, WriteType::WithoutResponse).await?;
+        peripheral.write(bulk, &chunk.value, WriteType::WithoutResponse).await
+            .map_err(|e| p.fail(e))?;
 
         if intra_block_ms > 0 {
             sleep(Duration::from_millis(intra_block_ms)).await;
         }
 
         if chunk.ends_4k_block {
-            block_no += 1;
+            let block_no = p.last_acked_block + 1;
 
-            let ok = wait_for_progress(notifications, block_timeout_ms).await?;
+            let ok = wait_for_progress(notifications, block_timeout_ms).await
+                .map_err(|e| p.fail(e))?;
             if !ok {
-                return Err(format!(
-                    "Timed out waiting for PROGRESS after 4K block {block_no}/{total_blocks} \
-                     (last ACKed block {}). Stop and power-cycle before another media test.",
-                    block_no - 1
-                ).into());
+                return Err(p.fail(format!(
+                    "timed out waiting for PROGRESS after 4K block {block_no}/{total_blocks}"
+                )));
             }
+            p.last_acked_block = block_no;
+            write_session_marker(p.stream_path, p.frame_id, block_no, total_blocks);
 
             if block_no % 5 == 0 || block_no == total_blocks {
                 println!(
@@ -373,53 +560,103 @@ where
         }
     }
 
+    p.all_blocks_acked = true;
     println!("All {total_blocks} progress blocks ACKed; waiting for final completion...");
 
-    if !wait_for_completion(notifications, 8000).await? {
-        return Err(
-            format!(
-                "No completion after all {total_blocks} block ACKs. Stop and power-cycle before another media test."
-            ).into()
-        );
+    if !wait_for_completion(notifications, 8000).await.map_err(|e| p.fail(e))? {
+        return Err(p.fail(format!("no completion after all {total_blocks} block ACKs")));
     }
 
+    // The keyboard closed the session itself.
+    clear_session_marker(p.stream_path);
     Ok(())
 }
 
+struct Opts {
+    stream_path: PathBuf,
+    intra_block_ms: u64,
+    block_timeout_ms: u64,
+    once: bool,
+    live: bool,
+    allow_single_frame: bool,
+}
+
+fn parse_opts(args: &[String]) -> Result<Opts, Failed> {
+    fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a String> {
+        args.windows(2).find(|w| w[0] == flag).map(|w| &w[1])
+    }
+    fn number(args: &[String], flag: &str, default: u64) -> Result<u64, Failed> {
+        match value(args, flag) {
+            None => Ok(default),
+            Some(v) => v.parse().class(Failure::Fatal).map_err(|mut f| {
+                f.detail = format!("{flag} {v}: {}", f.detail);
+                f
+            }),
+        }
+    }
+    Ok(Opts {
+        stream_path: value(args, "--stream")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"..\extracted\session_01_bulk_stream.bin")),
+        intra_block_ms: number(args, "--intra-block-ms", 2)?,
+        block_timeout_ms: number(args, "--block-timeout-ms", 2500)?,
+        once: args.iter().any(|a| a == "--once"),
+        live: args.iter().any(|a| a == "--confirm-flow-watch"),
+        allow_single_frame: args.iter().any(|a| a == "--allow-single-frame"),
+    })
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-
-    let stream_path = args.windows(2)
-        .find(|w| w[0] == "--stream")
-        .map(|w| PathBuf::from(&w[1]))
-        .unwrap_or_else(|| PathBuf::from(r"..\extracted\session_01_bulk_stream.bin"));
-
-    let intra_block_ms: u64 = args.windows(2)
-        .find(|w| w[0] == "--intra-block-ms")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(2);
-
-    let block_timeout_ms: u64 = args.windows(2)
-        .find(|w| w[0] == "--block-timeout-ms")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(2500);
-
-    let once = args.iter().any(|a| a == "--once");
-    let live = args.iter().any(|a| a == "--confirm-flow-watch");
-    let allow_single_frame = args.iter().any(|a| a == "--allow-single-frame");
-
     log!(
         "TIGA flow-controlled stream uploader starting (run_id={})",
         std::env::var("TIGA_RUN_ID").unwrap_or_else(|_| "-".into())
     );
+
+    let opts = match parse_opts(&args) {
+        Ok(o) => o,
+        Err(f) => return exit_with(None, f),
+    };
+    match run(&opts).await {
+        Ok(()) => {
+            log!("EXIT code=0 (success)");
+            ExitCode::SUCCESS
+        }
+        Err(f) => exit_with(Some(&opts.stream_path), f),
+    }
+}
+
+fn exit_with(stream_path: Option<&Path>, f: Failed) -> ExitCode {
+    let line = format!(
+        "EXIT code={} ({}): {}{}",
+        f.kind.code(),
+        f.kind.meaning(),
+        f.detail,
+        f.frame_id.as_deref().map(|id| format!(" frame={id}")).unwrap_or_default()
+    );
+    log!("{line}");
+    eprintln!("{} {line}", utc_now());
+    if let Some(path) = stream_path {
+        record_exit(path, &f);
+    }
+    ExitCode::from(f.kind.code())
+}
+
+async fn run(opts: &Opts) -> Result<(), Failed> {
+    let stream_path = &opts.stream_path;
+    let (intra_block_ms, block_timeout_ms) = (opts.intra_block_ms, opts.block_timeout_ms);
+    let (once, allow_single_frame) = (opts.once, opts.allow_single_frame);
+
     println!("Stream          : {}", stream_path.display());
     println!("Intra-block pace: {} ms/write", intra_block_ms);
     println!("Flow control    : WAIT for one PROGRESS after every 4096-byte DLX block");
     println!("Mode            : {}", if once { "one upload" } else { "watch + coalesce" });
 
-    let initial = fs::read(&stream_path)?;
-    let initial_chunks = build_chunks(&initial, allow_single_frame)?;
+    let initial = fs::read(stream_path)
+        .class(Failure::Fatal)
+        .map_err(|mut f| { f.detail = format!("{}: {}", stream_path.display(), f.detail); f })?;
+    let initial_chunks = build_chunks(&initial, allow_single_frame).class(Failure::Fatal)?;
     println!(
         "Validated: {} bytes, {} writes, {} x 4096-byte progress blocks{}",
         initial.len(),
@@ -428,16 +665,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if allow_single_frame { "  [--allow-single-frame: EXPERIMENTAL]" } else { "" }
     );
 
-    if !live {
+    // A session left open by an earlier run (killed, crashed, or the PC shut down
+    // mid-transfer) means the keyboard has not been power-cycled since.
+    if let Some(marker) = read_session_marker(stream_path) {
+        let frame = sidecar_value(&marker, "frame_id").unwrap_or("?").to_string();
+        let block = sidecar_value(&marker, "last_acked_block").and_then(|b| b.parse().ok());
+        let detail = format!(
+            "a media session was left open by an earlier run (frame {frame}, last ACKed block {}); \
+             power-cycle the keyboard, then run START_STACK.ps1 (or delete {})",
+            block.map(|b: usize| b.to_string()).unwrap_or_else(|| "?".into()),
+            sidecar_path(stream_path, ".session").display()
+        );
+        if opts.live {
+            return Err(Failed {
+                kind: Failure::Interrupted,
+                detail,
+                frame_id: Some(frame),
+                last_acked_block: block,
+            });
+        }
+        println!("WARNING: {detail}");
+    }
+
+    if !opts.live {
         println!();
         println!("DRY RUN ONLY — no Bluetooth connection was opened.");
         println!("Live mode requires --confirm-flow-watch");
         return Ok(());
     }
 
-    let manager = Manager::new().await?;
-    let adapters = manager.adapters().await?;
-    let adapter = adapters.first().ok_or("No Bluetooth adapter found")?;
+    let manager = Manager::new().await.class(Failure::Unreachable)?;
+    let adapters = manager.adapters().await.class(Failure::Unreachable)?;
+    let adapter = adapters.first().ok_or("No Bluetooth adapter found").class(Failure::Unreachable)?;
     log!(
         "Using adapter 1/{}: {}",
         adapters.len(),
@@ -445,42 +704,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     log!("Scanning for {TARGET_NAME}...");
-    adapter.start_scan(ScanFilter::default()).await?;
+    adapter.start_scan(ScanFilter::default()).await.class(Failure::Unreachable)?;
     sleep(Duration::from_secs(5)).await;
 
     let mut target = None;
-    for p in adapter.peripherals().await? {
-        let props = p.properties().await?;
+    for p in adapter.peripherals().await.class(Failure::Unreachable)? {
+        let props = p.properties().await.class(Failure::Unreachable)?;
         let name = props.as_ref().and_then(|p| p.local_name.as_deref()).unwrap_or("");
         if name == TARGET_NAME || name.to_ascii_lowercase().contains("zoom75") {
             target = Some(p);
             break;
         }
     }
-    let peripheral = target.ok_or("Zoom75 Tiga not found")?;
+    let peripheral = target.ok_or("Zoom75 Tiga not found").class(Failure::Unreachable)?;
     log!("Found keyboard at {}", peripheral.address());
 
-    if !peripheral.is_connected().await? {
-        peripheral.connect().await?;
+    if !peripheral.is_connected().await.class(Failure::Unreachable)? {
+        peripheral.connect().await.class(Failure::Unreachable)?;
     }
-    peripheral.discover_services().await?;
+    peripheral.discover_services().await.class(Failure::Gatt)?;
 
     let chars = peripheral.characteristics();
-    let control = chars.iter().find(|c| c.uuid == CHAR_CONTROL).cloned().ok_or("control char missing")?;
-    let notify1 = chars.iter().find(|c| c.uuid == CHAR_NOTIFY).cloned().ok_or("notify 0002 missing")?;
-    let bulk = chars.iter().find(|c| c.uuid == CHAR_BULK).cloned().ok_or("bulk 0003 missing")?;
-    let notify2 = chars.iter().find(|c| c.uuid == CHAR_NOTIFY2).cloned().ok_or("notify 0004 missing")?;
+    let find = |uuid: Uuid, what: &str| {
+        chars.iter().find(|c| c.uuid == uuid).cloned().ok_or(format!("{what} missing")).class(Failure::Gatt)
+    };
+    let control = find(CHAR_CONTROL, "control char")?;
+    let notify1 = find(CHAR_NOTIFY, "notify 0002")?;
+    let bulk = find(CHAR_BULK, "bulk 0003")?;
+    let notify2 = find(CHAR_NOTIFY2, "notify 0004")?;
 
-    let mut notifications = peripheral.notifications().await?;
-    peripheral.subscribe(&notify1).await?;
-    peripheral.subscribe(&notify2).await?;
+    let mut notifications = peripheral.notifications().await.class(Failure::Gatt)?;
+    peripheral.subscribe(&notify1).await.class(Failure::Gatt)?;
+    peripheral.subscribe(&notify2).await.class(Failure::Gatt)?;
     log!("Connected once. Notifications active.");
 
     let mut last_uploaded: Option<Vec<u8>> = None;
 
     loop {
-        let stream = fs::read(&stream_path)?;
-        validate_stream(&stream, allow_single_frame)?;
+        let stream = fs::read(stream_path).class(Failure::Fatal)?;
+        validate_stream(&stream, allow_single_frame).class(Failure::Fatal)?;
 
         if last_uploaded.as_deref() == Some(stream.as_slice()) {
             if once { break; }
@@ -488,14 +750,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let chunks = build_chunks(&stream, allow_single_frame)?;
+        let chunks = build_chunks(&stream, allow_single_frame).class(Failure::Fatal)?;
         let crc = format!("{:08x}", crc32(&stream));
-        let frame_id = frame_id_for(&stream_path, &crc);
+        let frame_id = frame_id_for(stream_path, &crc);
         println!();
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
         let started = Instant::now();
-        if let Err(e) = upload_stream(
+        if let Err(f) = upload_stream(
             &peripheral,
             &control,
             &bulk,
@@ -503,19 +765,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &chunks,
             intra_block_ms,
             block_timeout_ms,
+            stream_path,
+            &frame_id,
         )
         .await
         {
             log!(
-                "UPLOAD FAILED frame={frame_id} crc32={crc} after {:.2}s: {e}",
-                started.elapsed().as_secs_f64()
+                "UPLOAD FAILED frame={frame_id} crc32={crc} after {:.2}s: {}",
+                started.elapsed().as_secs_f64(),
+                f.detail
             );
-            return Err(e);
+            return Err(f);
         }
 
         let elapsed = started.elapsed().as_secs_f64();
         log!("UPLOAD COMPLETE frame={frame_id} crc32={crc} in {elapsed:.2}s");
-        record_delivery(&stream_path, &frame_id, &crc, elapsed);
+        record_delivery(stream_path, &frame_id, &crc, elapsed);
 
         last_uploaded = Some(stream);
 
@@ -526,7 +791,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         sleep(Duration::from_millis(100)).await;
     }
 
-    peripheral.disconnect().await?;
+    peripheral.disconnect().await.class(Failure::Unreachable)?;
     log!("Disconnected cleanly.");
     Ok(())
 }
@@ -583,6 +848,102 @@ mod tests {
         let stream = fs::read(path).unwrap();
         assert_eq!(build_chunks(&stream, false).unwrap().len(), CAPTURED_BULK_WRITES);
         assert_eq!(build_chunks(&stream, true).unwrap().len(), CAPTURED_BULK_WRITES);
+    }
+
+    #[test]
+    fn exit_codes_are_stable() {
+        // The supervisors depend on these numbers.
+        let codes: Vec<u8> = [
+            Failure::Unreachable,
+            Failure::Gatt,
+            Failure::Interrupted,
+            Failure::NoCompletion,
+            Failure::Fatal,
+        ]
+        .iter()
+        .map(|f| f.code())
+        .collect();
+        assert_eq!(codes, [10, 11, 20, 21, 30]);
+        assert!(Failure::Interrupted.meaning().contains("power-cycle"));
+        assert!(Failure::NoCompletion.meaning().contains("power-cycle"));
+        assert!(Failure::Unreachable.meaning().contains("safe to retry"));
+    }
+
+    #[test]
+    fn control2_is_the_boundary() {
+        // Anything before CONTROL2 is retryable, however far it got.
+        assert_eq!(classify_upload_failure(false, false), Failure::Unreachable);
+        // From CONTROL2 on, a session may be open, even with zero bulk writes.
+        assert_eq!(classify_upload_failure(true, false), Failure::Interrupted);
+        assert_eq!(classify_upload_failure(true, true), Failure::NoCompletion);
+    }
+
+    #[test]
+    fn upload_progress_reports_block_only_after_control2() {
+        let path = Path::new("unused.bin");
+        let mut p = UploadProgress {
+            stream_path: path,
+            frame_id: "r-f0007",
+            total_blocks: 53,
+            control2_attempted: false,
+            last_acked_block: 0,
+            all_blocks_acked: false,
+        };
+        let f = p.fail("C1 ACK timed out");
+        assert_eq!((f.kind, f.last_acked_block), (Failure::Unreachable, None));
+        assert_eq!(f.frame_id.as_deref(), Some("r-f0007"));
+
+        p.control2_attempted = true;
+        let f = p.fail("C2 ACK timed out");
+        assert_eq!((f.kind, f.last_acked_block), (Failure::Interrupted, Some(0)));
+        assert!(f.detail.contains("last ACKed block 0/53"), "{}", f.detail);
+
+        p.last_acked_block = 17;
+        let f = p.fail("notification stream ended");
+        assert_eq!((f.kind, f.last_acked_block), (Failure::Interrupted, Some(17)));
+
+        p.last_acked_block = 53;
+        p.all_blocks_acked = true;
+        assert_eq!(p.fail("no completion").kind, Failure::NoCompletion);
+    }
+
+    #[test]
+    fn session_marker_and_exit_record() {
+        let dir = std::env::temp_dir().join(format!("tiga_session_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+
+        assert!(read_session_marker(&stream).is_none());
+        write_session_marker(&stream, "r-f0003", 12, 53);
+        let m = read_session_marker(&stream).unwrap();
+        assert_eq!(sidecar_value(&m, "frame_id"), Some("r-f0003"));
+        assert_eq!(sidecar_value(&m, "last_acked_block"), Some("12"));
+        clear_session_marker(&stream);
+        assert!(read_session_marker(&stream).is_none());
+        clear_session_marker(&stream); // absent is fine
+
+        let f = Failed {
+            kind: Failure::Interrupted,
+            detail: "line one\nline two".into(),
+            frame_id: Some("r-f0003".into()),
+            last_acked_block: Some(12),
+        };
+        record_exit(&stream, &f);
+        let e = fs::read_to_string(sidecar_path(&stream, ".exit")).unwrap();
+        assert_eq!(sidecar_value(&e, "code"), Some("20"));
+        assert_eq!(sidecar_value(&e, "detail"), Some("line one line two"));
+        assert_eq!(sidecar_value(&e, "last_acked_block"), Some("12"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn bad_numeric_argument_is_fatal() {
+        let args: Vec<String> = ["--intra-block-ms", "fast"].iter().map(|s| s.to_string()).collect();
+        let Err(f) = parse_opts(&args) else { panic!("accepted a bad number") };
+        assert_eq!(f.kind, Failure::Fatal);
+        let ok: Vec<String> = ["--stream", "x.bin", "--confirm-flow-watch"].iter().map(|s| s.to_string()).collect();
+        let o = parse_opts(&ok).unwrap();
+        assert!(o.live && !o.once && o.intra_block_ms == 2 && o.block_timeout_ms == 2500);
     }
 
     #[test]

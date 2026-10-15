@@ -30,6 +30,8 @@ extracted/session_01_bulk_stream.bin
 extracted/session_01_bulk_stream.windows_nowplaying.bin
 extracted/session_01_bulk_stream.diagnostic.bin
 extracted/*.bin.delivered
+extracted/*.bin.session
+extracted/*.bin.exit
 *.tmp
 
 # IDE / OS
