@@ -31,6 +31,20 @@ Each exit is logged as one line in `ble.log` and `ble_error.log`:
 `EXIT code=20 (transfer interrupted after CONTROL2; …): timed out waiting for PROGRESS after 4K block 18/53 (last ACKed block 17/53) frame=…`.
 The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
 
+### Block timeout
+
+After each 4096-byte block the uploader waits for the keyboard's PROGRESS. If it does
+not come within the **block timeout**, the transfer is abandoned with code 20, and an
+abandoned transfer is what leaves the keyboard needing its battery disconnected. A
+block that is merely slow should therefore be waited for.
+
+The default is **10000 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
+value in effect as `Block timeout`). It was 2500 ms until 2026-10-15. All five
+interrupted transfers that day ran with 2500 ms; the uploads after the change all
+completed, but none came near either limit and they followed a full battery reset, so
+**the longer wait is an unverified mitigation, not a fix** (PROJECT_HISTORY §7.1). Its
+cost is that a keyboard that is truly stuck is detected about 7.5 s later.
+
 ### The session marker
 
 `extracted\session_01_bulk_stream.bin.session` is written just before CONTROL2,

@@ -930,6 +930,12 @@ fn write_cached_device(stream_path: &Path, address: &str, name: &str) {
     );
 }
 
+/// How long to wait for one block's PROGRESS before abandoning the transfer. Abandoning
+/// it is what leaves the keyboard holding a partial session that needs the battery
+/// disconnected, so a block that is merely slow should be waited for. Was 2500 until
+/// 2026-10-15; the longer wait is an unverified mitigation (PROJECT_HISTORY §7.1).
+const BLOCK_TIMEOUT_MS: u64 = 10_000;
+
 struct Opts {
     stream_path: PathBuf,
     intra_block_ms: u64,
@@ -957,7 +963,7 @@ fn parse_opts(args: &[String]) -> Result<Opts, Failed> {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"..\extracted\session_01_bulk_stream.bin")),
         intra_block_ms: number(args, "--intra-block-ms", 2)?,
-        block_timeout_ms: number(args, "--block-timeout-ms", 2500)?,
+        block_timeout_ms: number(args, "--block-timeout-ms", BLOCK_TIMEOUT_MS)?,
         once: args.iter().any(|a| a == "--once"),
         live: args.iter().any(|a| a == "--confirm-flow-watch"),
         allow_single_frame: args.iter().any(|a| a == "--allow-single-frame"),
@@ -1009,6 +1015,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     println!("Stream          : {}", stream_path.display());
     println!("Intra-block pace: {} ms/write", intra_block_ms);
     println!("Flow control    : WAIT for one PROGRESS after every 4096-byte DLX block");
+    println!("Block timeout   : {} ms", block_timeout_ms);
     println!("Mode            : {}", if once { "one upload" } else { "watch + coalesce" });
 
     let initial = fs::read(stream_path)
@@ -1321,7 +1328,7 @@ mod tests {
         assert_eq!(f.kind, Failure::Fatal);
         let ok: Vec<String> = ["--stream", "x.bin", "--confirm-flow-watch"].iter().map(|s| s.to_string()).collect();
         let o = parse_opts(&ok).unwrap();
-        assert!(o.live && !o.once && o.intra_block_ms == 2 && o.block_timeout_ms == 2500);
+        assert!(o.live && !o.once && o.intra_block_ms == 2 && o.block_timeout_ms == 10_000);
     }
 
     #[test]
