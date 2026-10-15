@@ -184,6 +184,30 @@ class TextLayoutTests(unittest.TestCase):
         self.assert_no_overlap(items)
 
 
+class ArtworkChangeTests(SandboxedRenderer):
+    """Issue #10: artwork changes are detected by content, not byte count."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.THUMBNAIL_FILE = self.tmp / "thumb.bin"
+
+    def key_with_art(self, data: bytes):
+        self.r.THUMBNAIL_FILE.write_bytes(data)
+        return self.r.media_key(media(thumbnail=True, thumbnail_bytes=len(data)))
+
+    def test_same_size_different_artwork_changes_key(self):
+        self.assertNotEqual(self.key_with_art(b"\x01" * 1000), self.key_with_art(b"\x02" * 1000))
+
+    def test_same_artwork_keeps_key(self):
+        self.assertEqual(self.key_with_art(b"\x01" * 1000), self.key_with_art(b"\x01" * 1000))
+
+    def test_no_thumbnail_ignores_stale_file(self):
+        self.r.THUMBNAIL_FILE.write_bytes(b"old art")
+        a = self.r.media_key(media(thumbnail=False))
+        self.r.THUMBNAIL_FILE.write_bytes(b"other old art")
+        self.assertEqual(a, self.r.media_key(media(thumbnail=False)))
+
+
 def media(state="Playing", position=30_000, title="Song", **extra):
     m = {
         "present": True,

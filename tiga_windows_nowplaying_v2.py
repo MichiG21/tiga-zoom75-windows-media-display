@@ -572,6 +572,18 @@ def snapshot() -> dict:
     return json.loads(stdout)
 
 
+def thumbnail_digest(media: dict) -> str:
+    # Hash the artwork itself: different artwork of identical byte size used to be
+    # treated as unchanged (issue #10). The snapshot helper rewrites the file on
+    # every query, so it always belongs to this snapshot when "thumbnail" is true.
+    if not media.get("thumbnail"):
+        return ""
+    try:
+        return hashlib.sha256(THUMBNAIL_FILE.read_bytes()).hexdigest()
+    except OSError:
+        return f"unreadable:{media.get('thumbnail_bytes', 0)}"
+
+
 def media_key(media: dict) -> str:
     # Deliberately ignore play/pause state so pausing does not trigger a ~7.7 s image upload.
     fields = [
@@ -583,7 +595,7 @@ def media_key(media: dict) -> str:
         media.get("subtitle", ""),
         str(media.get("track_number", 0)),
         str(media.get("duration_ms", 0)),
-        str(media.get("thumbnail_bytes", 0)),
+        thumbnail_digest(media),
     ]
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
