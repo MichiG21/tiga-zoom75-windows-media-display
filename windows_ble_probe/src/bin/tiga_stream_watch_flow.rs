@@ -190,8 +190,8 @@ impl Failure {
         match self {
             Failure::Unreachable => "keyboard not reachable (no adapter, not found, connect failed, or link lost before the media session opened); safe to retry",
             Failure::Gatt => "connected, but the keyboard's GATT service was missing or unusable; safe to retry",
-            Failure::Interrupted => "transfer interrupted after CONTROL2; the keyboard may hold a partial media session; power-cycle it before retrying",
-            Failure::NoCompletion => "all blocks sent but the keyboard never confirmed completion; power-cycle it before retrying",
+            Failure::Interrupted => "transfer interrupted after CONTROL2; the keyboard may hold a partial media session; power-cycle it before retrying (power switch, not USB unplug: it has a battery)",
+            Failure::NoCompletion => "all blocks sent but the keyboard never confirmed completion; power-cycle it before retrying (power switch, not USB unplug: it has a battery)",
             Failure::Fatal => "bad arguments, missing or invalid stream, or internal error; not retried",
         }
     }
@@ -986,7 +986,8 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         let block = sidecar_value(&marker, "last_acked_block").and_then(|b| b.parse().ok());
         let detail = format!(
             "a media session was left open by an earlier run (frame {frame}, last ACKed block {}); \
-             power-cycle the keyboard, then run START_STACK.ps1 (or delete {})",
+             power-cycle the keyboard with its power switch (unplugging USB does not: it has a battery; \
+             if the display stays stuck, disconnect the battery), then run START_STACK.ps1 (or delete {})",
             block.map(|b: usize| b.to_string()).unwrap_or_else(|| "?".into()),
             sidecar_path(stream_path, ".session").display()
         );

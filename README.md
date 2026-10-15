@@ -142,7 +142,7 @@ The current release is still a **public beta**. Additional testing across Window
 ### Known behavior / limitations
 
 - The TIGA can briefly show its built-in roar animation during a custom-image upload.
-- If a BLE upload is interrupted partway through, fully power-cycle the keyboard before attempting another media upload.
+- If a BLE upload is interrupted partway through, power-cycle the keyboard before attempting another media upload: use its power switch, and if the display stays stuck, disconnect the battery. Unplugging USB does not power-cycle it, because the TIGA has a battery.
 - The renderer keeps the historical filename `tiga_windows_nowplaying_v2.py` internally for compatibility with the existing stack.
 - An existing older/manual installation may have its `TIGA Windows Media Display` Scheduled Task replaced by the installer.
 
@@ -263,12 +263,12 @@ If an upload stops partway through, the keyboard can be left holding an unfinish
 
 ```
 Status        : HALTED - transfer interrupted after CONTROL2 ...
-Action        : Power-cycle the keyboard (...), then run START_STACK.ps1.
+Action        : Power-cycle the keyboard with its power switch (off, then on). Unplugging USB does NOT ...
 ```
 
 To recover:
 
-1. Power-cycle the keyboard. If the display stays white or frozen, do a full battery power-cycle.
+1. Power-cycle the keyboard **with its power switch** (off, then on). **Unplugging USB does not power-cycle it**: the TIGA has a battery and keeps running. If the display stays white, frozen or on the roar animation, disconnect the battery.
 2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have power-cycled it": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
 
 If the uploader cannot reach the keyboard (switched off, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No power cycle and no **Start Display** needed; turning the keyboard on is enough, within about 5 minutes.

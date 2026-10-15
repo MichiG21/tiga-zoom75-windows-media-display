@@ -18,6 +18,8 @@ if ($cleared) {
     Write-Host "Cleared the halt, assuming the keyboard has been power-cycled:"
     $cleared | ForEach-Object { Write-Host "  removed $_" }
     Write-Host "If it was NOT power-cycled, run STOP_STACK.ps1 now, power-cycle it, and start again."
+    Write-Host "Use the keyboard's power switch. Unplugging USB does NOT power-cycle it (it has a battery);"
+    Write-Host "if the display stays stuck, disconnect the battery."
 }
 
 Start-ScheduledTask -TaskName $taskName

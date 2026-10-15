@@ -130,8 +130,11 @@ $UploaderExitMeanings = @{
     30 = "bad arguments, missing or invalid stream, or internal error"
 }
 
-$PowerCycleInstruction = "Power-cycle the keyboard (switch it off and on again; if the display " +
-    "stays white or frozen, do the full battery power-cycle), then run START_STACK.ps1."
+# Unplugging USB is not a power cycle: the TIGA keeps running on its battery. On
+# 2026-10-15 a 5-second USB unplug did not reset it; disconnecting the battery did.
+$PowerCycleInstruction = "Power-cycle the keyboard with its power switch (off, then on). Unplugging USB " +
+    "does NOT power-cycle it: the TIGA has a battery. If the display stays white, frozen or on the " +
+    "roar animation, disconnect the battery. Then run START_STACK.ps1."
 
 function Get-UploaderExitMeaning {
     param([int]$Code)
@@ -270,7 +273,7 @@ function Invoke-SupervisorLoop {
 
     if (Test-Path -LiteralPath $HaltFile) {
         $State.Halted = $true
-        Write-SupervisorLog "BLE uploader is halted ($HaltFile); not starting it. Power-cycle the keyboard, then run START_STACK.ps1."
+        Write-SupervisorLog "BLE uploader is halted ($HaltFile); not starting it. Power-cycle the keyboard with its power switch (unplugging USB does not: it has a battery; if the display stays stuck, disconnect the battery), then run START_STACK.ps1."
     }
 
     $i = 0

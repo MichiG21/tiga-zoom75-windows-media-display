@@ -194,7 +194,8 @@ that matters:
 - [ ] `.\STATUS_STACK.ps1` shows the halt, with frame and block number
 - [ ] `logs\uploader_halted.json` exists with those fields
 - [ ] Note what the LCD shows — **don't touch the keyboard yet**
-- [ ] Power-cycle the keyboard (full battery disconnect if it's stuck)
+- [ ] Power-cycle the keyboard with its power switch (full battery disconnect if it's stuck).
+      **Unplugging USB is not a power cycle**: the TIGA has a battery.
 - [ ] `.\START_STACK.ps1` → clears the halt → display recovers
 
 **This is the whole point of bug A.** Before tonight it would have retried every 8

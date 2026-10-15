@@ -531,14 +531,22 @@ evening's narrative at the time of writing; its halt (`uploader_halted.json`, 21
 was still in place when the logs were read.
 
 **What happened after the first one — read carefully.** Bug A's halt fired correctly
-(21:05:53, `session-open`). After a power cycle and `START_STACK` (halt cleared 21:08:48),
-three attempts failed — **all three on the wrong device** (`1B:A3:A9:10:13:5D`), so they
-say nothing about whether that power cycle worked — and the supervisor halted as `gave-up`
-at 21:09:40. The stock roar stayed visible after that first power cycle, which may mean
-the LCD had not cleared, but the logs cannot separate that from the wrong-device bug.
-After a second power cycle (supervisor start 21:15:10) it worked, though even then the
-first attempt hit the wrong device. **"A shallow power cycle is insufficient" is not a
-finding.** It is unproven either way.
+(21:05:53, `session-open`).
+
+- **First recovery attempt: unplugging USB for about 5 seconds. It did not reset the
+  keyboard.** The stock roar stayed visible. **Unplugging USB is not a power cycle:** the
+  TIGA has a battery and keeps running without USB power. After this and `START_STACK`
+  (halt cleared 21:08:48), three attempts failed and the supervisor halted as `gave-up`
+  at 21:09:40. All three were on the **wrong device** (`1B:A3:A9:10:13:5D`), so the logs
+  alone say nothing about the keyboard's state. The evidence that it was not reset is
+  the roar staying on screen.
+- **Second attempt: disconnecting the battery. That did reset it.** After it (supervisor
+  start 21:15:10) uploads worked, though even then the first attempt hit the wrong device.
+
+So the recovery instruction now says: use the power switch, not USB; if the display stays
+stuck, disconnect the battery. Tonight's record does not say whether the power switch
+alone would have been enough after an interrupted transfer. Unplugging USB is ruled out;
+nothing else about "how deep a power cycle is needed" is established.
 
 **Verified on hardware:**
 
