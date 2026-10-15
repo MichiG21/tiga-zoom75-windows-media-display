@@ -1,7 +1,7 @@
 # Offline test for the supervisor logging helpers (issues #8, #9).
 #
-# Loads the helper functions from both supervisors without running their main loops,
-# then launches a harmless child (python -c ...) from a directory whose path contains
+# Loads the helpers both supervisors share (tiga_supervisor_common.ps1) without running
+# either supervisor's main loop, then launches a harmless child (python -c ...) from a directory whose path contains
 # spaces. Nothing here touches Bluetooth or the keyboard.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_supervisor_logging.ps1
@@ -16,29 +16,27 @@ function Assert-True {
     else { Write-Host "  FAIL $Message"; $script:failures++ }
 }
 
-function Import-SupervisorHelpers {
-    # Define only the function declarations; skip the mutex and the restart loop.
-    param([string]$Path)
+# Both supervisors must take their helpers from the common file, not carry copies.
+foreach ($supervisor in @("tiga_startup_supervisor.ps1", "installer\runtime\tiga_startup_supervisor.ps1")) {
     $tokens = $null; $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
-    if ($errors.Count) { throw "Parse errors in ${Path}: $($errors -join '; ')" }
-    $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) |
-        ForEach-Object { $_.Extent.Text }
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $RepoRoot $supervisor), [ref]$tokens, [ref]$errors)
+    $defined = @($ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+    Assert-True ($errors.Count -eq 0) "$supervisor parses"
+    Assert-True ($ast.Extent.Text -match 'tiga_supervisor_common\.ps1') "$supervisor dot-sources the common helpers"
+    Assert-True (-not ($defined -contains "Start-LoggedProcess")) "$supervisor has no private copy of the helpers"
 }
 
 $python = (Get-Command py.exe -ErrorAction Stop).Source
 
-foreach ($supervisor in @("tiga_startup_supervisor.ps1", "installer\runtime\tiga_startup_supervisor.ps1")) {
-    Write-Host "== $supervisor"
+foreach ($common in @("tiga_supervisor_common.ps1")) {
+    Write-Host "== $common"
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ("tiga log test " + [guid]::NewGuid().ToString("N").Substring(0, 6))
     $logs = Join-Path $work "log dir"
     New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
     $SupervisorLog = Join-Path $logs "startup_supervisor.log"
-    $LogMaxBytes   = 2KB
-    $LogKeep       = 3
-    $Utf8NoBom     = New-Object System.Text.UTF8Encoding $false
-    . ([scriptblock]::Create((Import-SupervisorHelpers (Join-Path $RepoRoot $supervisor)) -join "`n"))
+    . (Join-Path $RepoRoot $common)
+    $LogMaxBytes   = 2KB   # after dot-sourcing, so the test limit wins
 
     # Issue #8: the old dev supervisor passed the script path unquoted, so a checkout
     # under e.g. "C:\My Projects\" launched Python with a truncated path.
