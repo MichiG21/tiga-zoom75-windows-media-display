@@ -22,7 +22,9 @@ $KnownGoodSha256 = "a4be0a5df3e785a7cc4a13969d1b28b72312eda684627e487859ef11bdfa
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($Stream)) {
-    $Stream = Join-Path $Here "extracted\session_01_bulk_stream.bin"
+    # This script lives in reference\diagnostics; the stream is in <repo>\extracted.
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $Here)
+    $Stream = Join-Path $RepoRoot "extracted\session_01_bulk_stream.bin"
 }
 
 $Backup = Join-Path (Split-Path $Stream -Parent) "session_01_bulk_stream.redgreen-backup.bin"

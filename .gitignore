@@ -23,6 +23,14 @@ logs/*
 windows_media_thumbnail.bin
 windows_nowplaying_preview.png
 tiga_display_command.txt
+tiga_display_command.ack
+extracted/*.bin.frame
+# Rewritten by the renderer on every frame; seeded from
+# extracted/session_01_bulk_stream.redgreen-backup.bin when missing.
+extracted/session_01_bulk_stream.bin
+extracted/session_01_bulk_stream.windows_nowplaying.bin
+extracted/session_01_bulk_stream.diagnostic.bin
+extracted/*.bin.delivered
 *.tmp
 
 # IDE / OS

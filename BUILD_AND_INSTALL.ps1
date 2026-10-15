@@ -30,7 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw "Display control build failed." }
 Write-Host "[4/5] Building flow-controlled BLE uploader..."
 Push-Location "$Root\windows_ble_probe"
 try {
-    & cargo build --release --bin tiga_stream_watch_flow
+    & cargo build --release --locked --bin tiga_stream_watch_flow
     if ($LASTEXITCODE -ne 0) { throw "BLE uploader build failed." }
 } finally { Pop-Location }
 

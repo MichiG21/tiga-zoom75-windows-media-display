@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import hashlib
 import io
 import json
 import os
 import subprocess
+import sys
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+import tiga_dlx
 
 WIDTH = 320
 HEIGHT = 172
@@ -37,8 +42,42 @@ THUMBNAIL_FILE = HERE / "windows_media_thumbnail.bin"
 POLL_INTERVAL = 1.0
 IDLE_TO_STANDBY_SECONDS = 60.0
 FRESH_POSITION_ADVANCE_MS = 1500
+# Some providers report Playing with a position that never moves. Without this escape,
+# media that was already playing at startup stayed on standby indefinitely (issue #5).
+STEADY_PLAYING_RELEASE_SECONDS = 15.0
 COMMAND_FILE = HERE / "tiga_display_command.txt"
+# Written after a command's frame is installed; the control utility waits for it
+# before "Standby + Shut Down" (issue #7).
+COMMAND_ACK_FILE = HERE / "tiga_display_command.ack"
 COVER_SIZE = 122
+
+# Experimental (PROJECT_HISTORY.md section 3.4): a single-frame DLX container instead
+# of the captured 2-frame one. Never sent to a keyboard yet; enable only with
+# --dlx-frames 1, and the uploader must also be given --allow-single-frame.
+DLX_FRAMES = 2
+DLX_LAYOUT = "index"
+
+# Frame correlation (issue #9). The sidecar is written before the stream is replaced,
+# so the uploader always finds a sidecar at least as new as the stream it reads. The
+# CRC-32 of the full stream is the join key between renderer.log and ble.log.
+FRAME_SIDECAR = ACTIVE_STREAM.with_name(ACTIVE_STREAM.name + ".frame")
+RUN_ID = os.environ.get("TIGA_RUN_ID") or f"renderer-{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}"
+_frame_seq = 0
+
+
+def log(message: str):
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"{stamp} {message}", flush=True)
+
+
+def stream_crc32(data: bytes) -> str:
+    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
+
+
+def next_frame_id() -> str:
+    global _frame_seq
+    _frame_seq += 1
+    return f"{RUN_ID}-f{_frame_seq:04d}"
 
 
 def find_font(size: int, bold: bool = False):
@@ -57,30 +96,51 @@ def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lin
     if not words:
         return [""]
 
+    def width(s: str) -> int:
+        return draw.textbbox((0, 0), s, font=font)[2]
+
+    # A word wider than the box (a long unbroken title, or CJK text without spaces)
+    # is broken between characters; otherwise it was drawn as one over-wide line.
+    tokens = []
+    for word in words:
+        if width(word) <= max_width:
+            tokens.append(word)
+            continue
+        piece = ""
+        for ch in word:
+            if piece and width(piece + ch) > max_width:
+                tokens.append(piece)
+                piece = ch
+            else:
+                piece += ch
+        tokens.append(piece)
+
     lines = []
     current = ""
+    truncated = False
 
-    for word in words:
-        test = word if not current else current + " " + word
-        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
+    for token in tokens:
+        test = token if not current else current + " " + token
+        if width(test) <= max_width:
             current = test
-        else:
-            if current:
-                lines.append(current)
-            current = word
-            if len(lines) >= max_lines:
-                break
-
-    if len(lines) < max_lines and current:
+            continue
         lines.append(current)
+        current = token
+        if len(lines) >= max_lines:
+            truncated = True
+            current = ""
+            break
 
-    lines = lines[:max_lines]
-    shown = " ".join(lines)
+    if current:
+        if len(lines) < max_lines:
+            lines.append(current)
+        else:
+            truncated = True
 
-    if shown != text and lines:
+    if truncated:
         last = lines[-1]
         ell = "…"
-        while last and draw.textbbox((0, 0), last + ell, font=font)[2] > max_width:
+        while last and width(last + ell) > max_width:
             last = last[:-1]
         lines[-1] = last.rstrip() + ell
 
@@ -254,13 +314,116 @@ def media_fingerprint(media: dict) -> str:
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
 
-def write_display(img: Image.Image, preview: bool = True):
+class FreshnessGate:
+    """Holds standby until playback is proven fresh.
+
+    Windows keeps remembered media sessions around after playback stops or across a
+    reboot. The gate records what was there when standby was entered and releases
+    only on evidence of real playback:
+
+    - a different media item,
+    - a transition from a non-playing state to Playing,
+    - the timeline advancing by FRESH_POSITION_ADVANCE_MS, or
+    - the same valid media reporting Playing continuously for
+      STEADY_PLAYING_RELEASE_SECONDS (for providers whose position never moves).
+
+    A remembered session that reports Paused/Stopped, or Playing without a title,
+    stays on standby.
+    """
+
+    def __init__(self, media: dict | None = None):
+        self.arm(media)
+
+    def arm(self, media: dict | None):
+        if media and media.get("present"):
+            self.fp = media_fingerprint(media)
+            self.position = int(media.get("position_ms", 0) or 0)
+            self.state = str(media.get("state", ""))
+        else:
+            self.fp = None
+            self.position = None
+            self.state = None
+        self.interrupt()
+
+    def interrupt(self):
+        self.steady_fp = None
+        self.steady_since = None
+
+    def observe(self, media: dict, now: float) -> str | None:
+        """Feed one snapshot taken while on standby; returns a release reason or None."""
+        state = str(media.get("state", ""))
+        fp = media_fingerprint(media)
+        position = int(media.get("position_ms", 0) or 0)
+
+        if state != "Playing":
+            self.fp = fp
+            self.position = position
+            self.state = state
+            self.interrupt()
+            return None
+
+        if self.fp is None or fp != self.fp:
+            return "new media"
+
+        if self.state is not None and self.state != "Playing":
+            return "playback started"
+
+        if self.position is not None and position > 0:
+            if position - int(self.position or 0) >= FRESH_POSITION_ADVANCE_MS:
+                return "timeline advancing"
+
+        if (media.get("title") or "").strip():
+            if self.steady_fp != fp:
+                self.steady_fp = fp
+                self.steady_since = now
+            elif now - self.steady_since >= STEADY_PLAYING_RELEASE_SECONDS:
+                return "steady playback"
+        else:
+            self.interrupt()
+
+        if self.position is None:
+            self.position = position
+        self.state = state
+        return None
+
+
+def write_display(img: Image.Image, reason: str, preview: bool = True) -> tuple[str, str]:
+    """Render, install, and return (frame_id, crc32) of the installed stream."""
+    frame_id = next_frame_id()
+    log(f"FRAME {frame_id} rendered ({reason})")
     if preview:
         img.save(PREVIEW)
-    install_image(img)
+    crc = install_image(img, frame_id, reason)
+    log(f"FRAME {frame_id} installed crc32={crc}")
+    return frame_id, crc
+
+
+def write_command_ack(command_text: str, command: str, frame: tuple[str, str]):
+    """Tell the control utility which frame (by CRC) answers its command.
+
+    It then waits for <stream>.delivered to show the same CRC, which the uploader
+    writes only after the keyboard's completion notification.
+    """
+    frame_id, crc = frame
+    text = (
+        f"command_text={command_text}\n"
+        f"command={command}\n"
+        f"frame_id={frame_id}\n"
+        f"crc32={crc}\n"
+        f"handled_at={datetime.now().astimezone().isoformat(timespec='seconds')}\n"
+    )
+    tmp = COMMAND_ACK_FILE.with_suffix(".ack.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, COMMAND_ACK_FILE)
 
 
 def read_control_command(last_text: str | None):
+    """Return (command, text_to_remember).
+
+    The control utility writes "<command> <unique id>", so pressing the same button
+    twice still changes the file (issue #6). The bare form "<command>" written by older
+    builds is still accepted, with its old limitation.
+    """
     try:
         raw = COMMAND_FILE.read_text(encoding="utf-8").strip().lower()
     except FileNotFoundError:
@@ -271,10 +434,45 @@ def read_control_command(last_text: str | None):
     if not raw or raw == last_text:
         return None, last_text
 
-    if raw in {"auto", "standby", "black"}:
-        return raw, raw
+    command = raw.split()[0]
+    if command in {"auto", "standby", "black"}:
+        return command, raw
 
     return None, raw
+
+
+DIVIDER_Y = 135
+TITLE_STEP, ARTIST_STEP, ALBUM_STEP = 20, 21, 17
+
+
+def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w):
+    """Return (y, text, font, fill) for the title/artist/album lines.
+
+    The album starts below the last artist line and gets only the lines that fit
+    above the divider. It used to be clamped to y=110, which drew it over a
+    two-line artist (issue #10).
+    """
+    items = []
+
+    y = 9
+    for line in fit_text(draw, title, title_font, max_text_w, 3):
+        items.append((y, line, title_font, (242, 242, 245)))
+        y += TITLE_STEP
+
+    y = max(y + 4, 72)
+    for line in fit_text(draw, secondary, artist_font, max_text_w, 2):
+        items.append((y, line, artist_font, (224, 224, 230)))
+        y += ARTIST_STEP
+
+    if tertiary:
+        album_y = y + 1
+        room = min(2, (DIVIDER_Y - album_y) // ALBUM_STEP)
+        if room > 0:
+            for line in fit_text(draw, tertiary, album_font, max_text_w, room):
+                items.append((album_y, line, album_font, (180, 180, 188)))
+                album_y += ALBUM_STEP
+
+    return items
 
 
 def render_media(media: dict) -> Image.Image:
@@ -307,26 +505,12 @@ def render_media(media: dict) -> Image.Image:
 
     tertiary = media.get("album") or source_name(media.get("source", ""))
 
-    title_lines = fit_text(draw, title, title_font, max_text_w, 3)
-    y = 9
-    for line in title_lines:
-        draw.text((text_x, y), line, font=title_font, fill=(242, 242, 245))
-        y += 20
+    for y, line, font, fill in layout_text_block(
+        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w
+    ):
+        draw.text((text_x, y), line, font=font, fill=fill)
 
-    artist_lines = fit_text(draw, secondary, artist_font, max_text_w, 2)
-    y = max(y + 4, 72)
-    for line in artist_lines:
-        draw.text((text_x, y), line, font=artist_font, fill=(224, 224, 230))
-        y += 21
-
-    if tertiary:
-        album_lines = fit_text(draw, tertiary, album_font, max_text_w, 2)
-        album_y = min(y + 1, 110)
-        for line in album_lines:
-            draw.text((text_x, album_y), line, font=album_font, fill=(180, 180, 188))
-            album_y += 17
-
-    draw.line((8, 135, 312, 135), fill=(45, 45, 50), width=1)
+    draw.line((8, DIVIDER_Y, 312, DIVIDER_Y), fill=(45, 45, 50), width=1)
     draw.text((8, 146), "NOW PLAYING", font=label_font, fill=(210, 210, 216))
 
     duration = format_duration_ms(media.get("duration_ms", 0))
@@ -356,7 +540,19 @@ def render_media(media: dict) -> Image.Image:
     return canvas
 
 
-def install_image(img: Image.Image):
+def write_frame_sidecar(frame_id: str, crc: str, reason: str):
+    text = (
+        f"frame_id={frame_id}\n"
+        f"crc32={crc}\n"
+        f"rendered_at={datetime.now().astimezone().isoformat(timespec='seconds')}\n"
+        f"reason={reason}\n"
+    )
+    tmp = FRAME_SIDECAR.with_suffix(".frame.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, FRAME_SIDECAR)
+
+
+def install_image(img: Image.Image, frame_id: str, reason: str) -> str:
     if not BACKUP_STREAM.exists():
         raise RuntimeError(f"Known-good stream backup missing: {BACKUP_STREAM}")
 
@@ -364,17 +560,24 @@ def install_image(img: Image.Image):
     validate_stream(base)
 
     frame = rgb565_be_bytes(img)
-    modified = bytearray(base)
-    modified[FRAME1_START:FRAME1_START + FRAME_BYTES] = frame
-    modified[FRAME2_START:FRAME2_START + FRAME_BYTES] = frame
-    modified = bytes(modified)
-    validate_stream(modified)
+    if DLX_FRAMES == 2:
+        modified = bytearray(base)
+        modified[FRAME1_START:FRAME1_START + FRAME_BYTES] = frame
+        modified[FRAME2_START:FRAME2_START + FRAME_BYTES] = frame
+        modified = bytes(modified)
+        validate_stream(modified)
+    else:
+        modified = tiga_dlx.build_stream(base, [frame], DLX_LAYOUT)
 
     OUTPUT_STREAM.write_bytes(modified)
+
+    crc = stream_crc32(modified)
+    write_frame_sidecar(frame_id, crc, reason)
 
     tmp = ACTIVE_STREAM.with_suffix(".bin.tmp")
     tmp.write_bytes(modified)
     os.replace(tmp, ACTIVE_STREAM)
+    return crc
 
 
 def snapshot() -> dict:
@@ -404,6 +607,18 @@ def snapshot() -> dict:
     return json.loads(stdout)
 
 
+def thumbnail_digest(media: dict) -> str:
+    # Hash the artwork itself: different artwork of identical byte size used to be
+    # treated as unchanged (issue #10). The snapshot helper rewrites the file on
+    # every query, so it always belongs to this snapshot when "thumbnail" is true.
+    if not media.get("thumbnail"):
+        return ""
+    try:
+        return hashlib.sha256(THUMBNAIL_FILE.read_bytes()).hexdigest()
+    except OSError:
+        return f"unreadable:{media.get('thumbnail_bytes', 0)}"
+
+
 def media_key(media: dict) -> str:
     # Deliberately ignore play/pause state so pausing does not trigger a ~7.7 s image upload.
     fields = [
@@ -415,12 +630,24 @@ def media_key(media: dict) -> str:
         media.get("subtitle", ""),
         str(media.get("track_number", 0)),
         str(media.get("duration_ms", 0)),
-        str(media.get("thumbnail_bytes", 0)),
+        thumbnail_digest(media),
     ]
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
 
+def configure_output():
+    # Redirected output defaults to the ANSI code page and block buffering; a title the
+    # code page cannot encode would crash the renderer, and an abrupt exit would lose
+    # the tail of the log.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    configure_output()
     print()
     print("=" * 72)
     print("TIGA - WINDOWS NOW PLAYING RENDERER + STANDBY")
@@ -431,24 +658,21 @@ def main():
     print(f"Control file: {COMMAND_FILE}")
     print(f"Preview     : {PREVIEW}")
     print(f"Stream      : {ACTIVE_STREAM}")
+    print(f"Run ID      : {RUN_ID}")
+    if DLX_FRAMES != 2:
+        print(f"DLX         : EXPERIMENTAL {DLX_FRAMES}-frame container, layout={DLX_LAYOUT}")
     print("Ctrl+C to stop.")
     print()
 
-    write_display(render_standby("Waiting for fresh playback"))
-    print("STARTUP -> standby rendered + installed")
+    write_display(render_standby("Waiting for fresh playback"), "startup standby")
+    log("STARTUP -> standby rendered + installed")
 
-    startup_fp = None
-    startup_position = None
-    startup_state = None
+    gate = FreshnessGate()
 
     try:
-        startup_media = snapshot()
-        if startup_media.get("present"):
-            startup_fp = media_fingerprint(startup_media)
-            startup_position = int(startup_media.get("position_ms", 0) or 0)
-            startup_state = str(startup_media.get("state", ""))
+        gate.arm(snapshot())
     except Exception as exc:
-        print(f"Initial media query warning: {exc}")
+        log(f"Initial media query warning: {exc}")
 
     mode = "auto"
 
@@ -463,10 +687,7 @@ def main():
     active_fp = None
     active_render_key = None
     nonplaying_since = None
-
-    gate_fp = startup_fp
-    gate_position = startup_position
-    gate_state = startup_state
+    query_error = None
 
     try:
         while True:
@@ -474,41 +695,33 @@ def main():
             if command is not None:
                 if command == "standby":
                     mode = "standby"
-                    write_display(render_standby("Manual standby"))
+                    frame = write_display(render_standby("Manual standby"), "control: standby")
                     active_fp = None
                     active_render_key = None
-                    print("\nCONTROL -> manual standby")
+                    log("CONTROL -> manual standby")
 
                 elif command == "black":
                     mode = "black"
-                    write_display(render_black())
+                    frame = write_display(render_black(), "control: black")
                     active_fp = None
                     active_render_key = None
-                    print("\nCONTROL -> black screen")
+                    log("CONTROL -> black screen")
 
                 elif command == "auto":
                     mode = "auto"
-                    write_display(render_standby("Waiting for fresh playback"))
+                    frame = write_display(render_standby("Waiting for fresh playback"), "control: auto")
                     active_fp = None
                     active_render_key = None
                     nonplaying_since = None
 
                     try:
-                        current = snapshot()
-                        if current.get("present"):
-                            gate_fp = media_fingerprint(current)
-                            gate_position = int(current.get("position_ms", 0) or 0)
-                            gate_state = str(current.get("state", ""))
-                        else:
-                            gate_fp = None
-                            gate_position = None
-                            gate_state = None
+                        gate.arm(snapshot())
                     except Exception:
-                        gate_fp = None
-                        gate_position = None
-                        gate_state = None
+                        gate.arm(None)
 
-                    print("\nCONTROL -> automatic mode re-armed")
+                    log("CONTROL -> automatic mode re-armed")
+
+                write_command_ack(last_command_text, command, frame)
 
             if mode != "auto":
                 time.sleep(POLL_INTERVAL)
@@ -516,10 +729,17 @@ def main():
 
             try:
                 media = snapshot()
+                if query_error is not None:
+                    log("Windows media query recovered")
+                    query_error = None
             except Exception as exc:
-                print(f"\nWindows media query/render warning: {exc}")
-                time.sleep(POLL_INTERVAL)
-                continue
+                # Treat a failed query like "no media" so idle handling still applies;
+                # it used to `continue` here and leave the last track up forever
+                # (issue #10). Log each distinct error once, not every second.
+                if str(exc) != query_error:
+                    log(f"Windows media query/render warning: {exc}")
+                    query_error = str(exc)
+                media = {"present": False}
 
             now_mono = time.monotonic()
 
@@ -528,36 +748,31 @@ def main():
                     if nonplaying_since is None:
                         nonplaying_since = now_mono
                     elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("No media playing"))
-                        print("\nIDLE -> standby rendered + installed")
+                        write_display(render_standby("No media playing"), "idle: no media")
+                        log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
-                        gate_fp = None
-                        gate_position = None
-                        gate_state = None
+                        gate.arm(None)
+                else:
+                    gate.interrupt()
                 time.sleep(POLL_INTERVAL)
                 continue
 
             state = str(media.get("state", ""))
             fp = media_fingerprint(media)
-            position = int(media.get("position_ms", 0) or 0)
 
             if state != "Playing":
                 if active_fp is not None:
                     if nonplaying_since is None:
                         nonplaying_since = now_mono
                     elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("Playback stopped"))
-                        print("\nIDLE -> standby rendered + installed")
+                        write_display(render_standby("Playback stopped"), "idle: playback stopped")
+                        log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
-                        gate_fp = fp
-                        gate_position = position
-                        gate_state = state
+                        gate.arm(media)
                 else:
-                    gate_fp = fp
-                    gate_position = position
-                    gate_state = state
+                    gate.observe(media, now_mono)
 
                 time.sleep(POLL_INTERVAL)
                 continue
@@ -568,10 +783,9 @@ def main():
                 key = media_key(media)
                 if key != active_render_key:
                     img = render_media(media)
-                    write_display(img)
+                    write_display(img, "media changed")
 
-                    print()
-                    print("NEW WINDOWS MEDIA -> rendered + installed")
+                    log("NEW WINDOWS MEDIA -> rendered + installed")
                     print(f"Source   : {source_name(media.get('source', ''))}")
                     print(f"Title    : {media.get('title') or '(empty)'}")
                     print(f"Artist   : {media.get('artist') or '(empty)'}")
@@ -585,40 +799,21 @@ def main():
                 time.sleep(POLL_INTERVAL)
                 continue
 
-            fresh = False
-            fresh_reason = ""
+            fresh_reason = gate.observe(media, now_mono)
 
-            if gate_fp is None or fp != gate_fp:
-                fresh = True
-                fresh_reason = "new media"
-
-            elif gate_state is not None and gate_state != "Playing":
-                fresh = True
-                fresh_reason = "playback started"
-
-            elif gate_position is not None and position > 0:
-                if position - int(gate_position or 0) >= FRESH_POSITION_ADVANCE_MS:
-                    fresh = True
-                    fresh_reason = "timeline advancing"
-
-            if fresh:
+            if fresh_reason:
                 img = render_media(media)
-                write_display(img)
+                write_display(img, f"fresh playback: {fresh_reason}")
                 active_fp = fp
                 active_render_key = media_key(media)
 
-                print()
-                print(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
+                log(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
                 print(f"Source   : {source_name(media.get('source', ''))}")
                 print(f"Title    : {media.get('title') or '(empty)'}")
                 print(f"Artist   : {media.get('artist') or '(empty)'}")
                 print(f"Album    : {media.get('album') or '(empty)'}")
                 print(f"Duration : {format_duration_ms(media.get('duration_ms', 0)) or '(unknown)'}")
                 print(f"Thumbnail: {'YES' if media.get('thumbnail') else 'NO'}")
-            else:
-                if gate_position is None:
-                    gate_position = position
-                gate_state = state
 
             time.sleep(POLL_INTERVAL)
 
@@ -626,5 +821,22 @@ def main():
         print("\nStopped Windows Now Playing renderer.")
 
 
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="TIGA Windows Now Playing renderer")
+    parser.add_argument(
+        "--dlx-frames", type=int, choices=(1, 2), default=2,
+        help="frames per DLX container (default 2, the captured layout; 1 is experimental "
+             "and needs the uploader's --allow-single-frame)",
+    )
+    parser.add_argument(
+        "--dlx-layout", choices=tiga_dlx.LAYOUTS, default="index",
+        help="frame-index interpretation for --dlx-frames 1 (see docs/DLX_FORMAT.md)",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    _args = parse_args(sys.argv[1:])
+    DLX_FRAMES = _args.dlx_frames
+    DLX_LAYOUT = _args.dlx_layout
     main()

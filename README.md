@@ -215,6 +215,8 @@ To avoid showing an old track immediately at login, the renderer:
 
 Fresh playback can be detected through a new media item, a playback-state transition, or an advancing timeline when the source provides one.
 
+Some sources report "Playing" but never advance their position. If the same media item, with a title, reports "Playing" continuously for 15 seconds, that also counts as fresh. A remembered session that reports Paused or Stopped still stays on standby.
+
 ---
 
 ## BLE uploader
@@ -251,6 +253,10 @@ Runtime logs stay local and are ignored by Git.
 Wait for the current upload to finish first.
 
 If the custom frame never appears, use the installed **Status** shortcut and inspect the local logs in the installation directory.
+
+**Status** reports the last frame rendered and the last frame actually delivered to the keyboard (`OK`, `PENDING` or `STALLED`), not just whether the processes are running.
+
+Logs in `logs\` are appended across restarts and rotated at 5 MB (`renderer.log.1` ... `.3`). Every process start is stamped with a run ID, and every frame has a frame ID (for example `renderer-20261015-091500-a1b2c3-f0004`) that appears in `renderer.log` when it is rendered and in `ble.log` at `UPLOAD START`, `UPLOAD COMPLETE` or `UPLOAD FAILED`, so the two logs can be matched up.
 
 ### BLE upload was interrupted
 
@@ -317,7 +323,7 @@ Other development commands:
 
 ### Manual BLE test
 
-From the `windows_ble_probe` folder after building:
+From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_stream.bin` is generated at runtime and is not in Git; on a fresh checkout, run the renderer once or copy `extracted\session_01_bulk_stream.redgreen-backup.bin` to that name first.
 
 ```powershell
 .\target\release\tiga_stream_watch_flow.exe --stream "..\extracted\session_01_bulk_stream.bin" --intra-block-ms 0 --confirm-flow-watch
