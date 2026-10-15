@@ -337,3 +337,442 @@ The full plan, with expected log lines and a "what if it goes wrong" table, is i
    halt with no power cycle needed. Turn it on, run START_STACK, and it recovers.
 5. Restore the task to the live copy:
    `powershell -File C:\Users\Regal\source\tiga_ble_re_tools\install_tiga_startup.ps1`.
+
+---
+
+# Device selection run (TASKS_B.md), 2026-10-15 late evening
+
+Branch `fix/device-selection`, pushed. No PR, no merge. Nothing was sent to the keyboard,
+nothing started or stopped the stack, and `tiga_ble_re_tools` and `tiga-runtime-lab` were
+not touched.
+
+## Read this first
+
+1. **The keyboard needs a power cycle before you restart the stack.** The logs show a
+   **second** interrupted transfer that isn't in TASKS_B: at 21:39:48, block 3/53, exit
+   20, halted at 21:39:54. `tiga-fresh-test\logs\uploader_halted.json` is still there
+   from it. Power-cycle, then `START_STACK.ps1`, as the halt says.
+2. **`tiga-fresh-test` was repaired.** An earlier run of this task had worked directly
+   in it, on `fix/device-selection`. There was nothing uncommitted to save: the
+   previous run had already committed its work as `5223945`, and only the five
+   untracked docs were left. They are still there, untouched, because checkout keeps
+   untracked files. I ran `git checkout main` there, then
+   `git worktree add ..\tiga-dev fix/device-selection`. It is now on `main` at
+   `128745d`, same as `origin/main`, with a clean tree apart from those five files.
+   Between 21:55 and about 22:00 its source tree held the branch's uploader source;
+   the checkout restored `main`'s.
+3. **Nothing was built in `tiga-fresh-test` after 21:45.** No `.exe` and nothing under
+   `windows_ble_probe\target` is newer than 21:45. The binaries there date from 21:02
+   and 21:04 (the display control). What changed after 21:45: the previous run's three
+   source edits (now in `5223945`), and renderer output at **21:49**
+   (`windows_nowplaying_preview.png`, `windows_media_thumbnail.bin`, the stream files).
+   So the renderer was still running at 21:49, kept alive by the halt. By about 22:00
+   neither the renderer nor the uploader was running.
+4. **Building and running the uploader was blocked again** by this session's safety
+   policy, even `cargo build --release` and the dry run. `cargo test` was allowed. So
+   `tiga-dev\windows_ble_probe\target\release\tiga_stream_watch_flow.exe` was **not**
+   built from this branch. See "What to do on hardware" step 1.
+
+## Issues
+
+| # | What | Filed |
+|---|---|---|
+| #14 | Uploader picks the wrong BLE device when two advertise a matching name | by the earlier run, 21:51. Identical to `docs/ISSUE_11_DEVICE_SELECTION.md`; not filed twice |
+| #15 | Display control reports a command as sent when the write never reached the renderer | this run |
+
+Commented, not closed, on #4, #5, #6, #9 and #10, with the verified / not-verified lines.
+
+## Commits on `fix/device-selection`
+
+| Commit | Task | Change |
+|---|---|---|
+| `5223945` | 3 | (earlier run) Select by media service, not name; log every candidate; cache last good address in `<stream>.device`; exit 11 only once all were tried |
+| `7002196` | 1 | Commit `PROJECT_HISTORY.md` and `RELEASE_CHECKLIST.md`; ignore `TASKS*.md` and the issue drafts |
+| `ca51d3a` | 3 | Rescan once if every candidate was rejected; a rejected device's log line lists every service and characteristic it exposes |
+| `dc30996` | 4 | Codes 10 and 11: 8/16/32/60 s, then every 5 min, never halt |
+| `1be13bc` | 5 | PROJECT_HISTORY §7 (device selection confirmed) and new §7.1 (the session); README Firefox line removed |
+| `dbc902f` | 6 | Display control: read back, wait for the renderer's ack, no shutdown prompt without it |
+| `f124932` | 6 | `SHUTDOWN_ACK.md` to match |
+| `7c93850` | 7 | Per-character font fallback (CJK, Hangul, ♪) |
+| `777944b` | 7 | Delete `MANIFEST.json` |
+| `e6b8311` | 8 | README install troubleshooting; STATUS labels a past failure as historical |
+| (this) | | These notes |
+
+Tests: 28 Rust (`cargo test --release --locked --bin tiga_stream_watch_flow`), 47 Python,
+and both PowerShell suites, all passing. The display control compiles at `/W4` and was
+not linked or run.
+
+## How device selection behaves now
+
+1. If `extracted\session_01_bulk_stream.bin.device` exists, its address is tried **the
+   moment the scan sees it**, without waiting for the 5 s window and with or without
+   a name.
+2. Otherwise every peripheral whose name contains `zoom75` is a **candidate**. Each is
+   logged once as `CANDIDATE name=… address=… rssi=…`. When the 5 s window closes,
+   candidates are tried in the order they were seen.
+3. Trying one means connecting and discovering services. It **qualifies** only with
+   service `1f40eaf8…` and all four characteristics `1f400001`–`1f400004`. Anything
+   else is disconnected and logged as `REJECTED <address> for this run: connected, but
+   no media service …; exposes N service(s): <uuid> [<char uuids>]; …`. Then the next
+   candidate is tried.
+4. If every candidate seen was rejected, it logs `RESCAN …` and scans one more 5 s
+   window for others. Already-rejected devices are not retried.
+5. `SELECTED <address> … after trying N candidate(s)`, then the usual `Found keyboard at …`.
+6. After the first completed upload, the address is written to `<stream>.device`.
+7. Failure: exit 11 `tried N candidate(s) over M scan(s), none qualified: …` if every
+   candidate was reached. Exit 10 if nothing matched, or if any candidate couldn't even
+   be connected (that one might have been the keyboard). Both now retry every 5 min.
+
+## What to do on hardware
+
+1. **Build and dry-run** (in `tiga-dev\windows_ble_probe`):
+   `cargo build --release`, copy `..\extracted\session_01_bulk_stream.redgreen-backup.bin`
+   to `..\extracted\session_01_bulk_stream.bin`, then
+   `.\target\release\tiga_stream_watch_flow.exe --stream ..\extracted\session_01_bulk_stream.bin`.
+   Expect a timestamped first line with `run_id=`, `Validated: 220649 bytes, 1239 writes,
+   53 x 4096-byte progress blocks`, `DRY RUN ONLY`.
+2. **Getting it onto the scheduled task:** the task runs `tiga-fresh-test`, which is on
+   `main`, so none of this runs until it is merged and pulled there. Running
+   `BUILD_AND_INSTALL.ps1` from `tiga-dev` would re-point the task at `tiga-dev`. That
+   works for a test, but then the task runs whatever `tiga-dev` has checked out.
+3. **First live start, with no `.device` file:** in `ble.log` look for **both**
+   `CANDIDATE` lines. If the scan lists `1B:A3:A9:10:13:5D` first, expect its
+   `REJECTED … exposes …` line before `SELECTED 07:01:88:B3:66:1B`. **Please keep that
+   `exposes` line.** It's the first clue to what that device is. If `07:01…` comes
+   first, the other device is never probed and you won't get that line this time.
+4. **After that upload:** `extracted\session_01_bulk_stream.bin.device` holds
+   `address=07:01:88:B3:66:1B`.
+5. **Next start:** `Scanning … (trying 07:01:88:B3:66:1B first: it completed the last
+   upload)`, then `SELECTED` within a second or two of the scan starting, with no
+   `REJECTED` line.
+6. **Keyboard off, change track:** code 10 at 8/16/32/60 s, then
+   `Restarting BLE uploader in 300s … (no halt)`. Switch it on and do nothing else. It
+   should upload within 5 minutes, with no `START_STACK`.
+7. Probing the wrong device took about 6 s in tonight's log (21:08:53 found → 21:08:59
+   exit). So a cold start without the cache can take about 5 s scan + 6 s + connect
+   before `SELECTED`.
+
+## Task 6: the two questions
+
+- **Path mismatch? No.** The GUI builds the path from its own exe location
+  (`GetModuleFileNameW`), not the working directory, so an Explorer double-click, a
+  shortcut and another CWD all give the same path. The renderer uses its script
+  folder, and its log printed `Control file: C:\Users\Regal\source\tiga-fresh-test\tiga_display_command.txt`.
+  Only one build contains the messages you saw: `tiga-fresh-test\tiga_display_control.exe`,
+  21:04:57. There is no other copy of it anywhere under `source`, Program Files,
+  AppData\Local\Programs, Desktop or Downloads.
+  - The write **reported success** to the GUI; otherwise it would have said "Could not
+    request standby". Yet the renderer logged no command before your hand-written
+    `standby test1` at 21:30:31.
+  - **The same exe worked later.** At 21:34:27, process 32884 (its 3rd command) wrote
+    `auto 134365664677263042-32884-3` into `tiga-fresh-test`. The renderer acted on it
+    at 21:34:28 and acked it; both files are still there. The black at 21:33:04 and
+    the standby at 21:33:18 were probably commands 1 and 2 from that process, but the
+    file was overwritten, so I can't prove it.
+  - That fits CyberCapture holding only the first launch. **Still unconfirmed**; the
+    code rules out the path, not the antivirus.
+- **Can Lock Standby reach "Shut down anyway?"? No.** Lock Standby writes the file and
+  sets the status, nothing else. The text "Standby requested. Waiting for the
+  renderer…" and the "did not confirm standby" dialog exist **only** in the Standby +
+  Shut Down worker. So the message you saw means Standby + Shut Down was pressed.
+- **Fix (#15):** read-back after every write, with a plain error naming the path and
+  antivirus. Every button then waits up to 10 s for the renderer's ack before saying
+  "confirmed". **A read-back alone can't catch a sandbox**, because a sandboxed process
+  reads back its own redirected copy; the ack is the real check. Standby + Shut Down no
+  longer offers to shut down when the renderer didn't ack, since from there a stopped
+  stack and a command that never arrived look the same. The "keyboard has not
+  confirmed the upload" prompt is unchanged.
+
+## Other decisions
+
+- **Retry policy:** an unexplained exit with **no** session marker (code 1, -1, …) still
+  gives up after five attempts. TASKS_B covered only 10 and 11. Say if you want those on
+  the slow retry too.
+- **Font fallback:** Segoe UI, then Yu Gothic → Meiryo → Microsoft YaHei → Malgun
+  Gothic → Segoe UI Symbol, per character. A character counts as missing when it draws
+  identically to the font's missing-glyph box. Latin-only text renders pixel-identical
+  to before. Cosmetic: Malgun's Hangul sits a little taller, so a Hangul album line
+  comes close to the divider. Not tuned.
+- **`MANIFEST.json`: deleted, not regenerated.** Nothing reads it. It hashed the
+  September bundle, most of those files have changed, and it contained a hash of
+  itself, which can't be right. Git already records the content; a regenerated copy
+  would be stale again at the next commit.
+- **README limitations:** removed the Firefox line. The others are grounded: the roar
+  (§4.1), power-cycle after an interrupted transfer (bug A policy), the historical
+  filename, and the task-name replacement. I nearly "corrected" the Standby + Shut Down
+  description to "fixed 12 s" before seeing that #12 (shutdown ack) was merged, so it's
+  right as written.
+
+## Tests skipped under rule 3
+
+None. Before running them I checked both PowerShell suites. They kill only their own
+dummy children, by PID, through `Stop-LoggedProcess`. They read `START_STACK.ps1` as text
+rather than running it. The only real-system call is `STATUS_STACK.ps1`'s read-only
+`Get-ScheduledTask` / process listing, run from a copy in a temp folder.
+
+## Contradicts or extends PROJECT_HISTORY.md
+
+Recorded in §7.1:
+
+1. **A second interrupted transfer** (21:39, block 3/53), 3.7 minutes after a clean
+   upload on the same connection. "The keyboard was in a bad state from stopping the
+   previous stack" does not obviously explain this one.
+2. **Upload times:** 19 uploads took 8.42–10.01 s. §3.3 says ~7.7–8.5 s. The two
+   first-on-a-connection uploads were the fastest (8.71, 8.42); the later ones took
+   9.49–10.01. Two samples; recorded, not explained.
+3. `CLAUDE.md` called `tiga_ble_re_tools` the live copy. Fixed (below).
+
+## Task 9: the stale folder and CLAUDE.md
+
+**`tiga-windows-media-display` is safe to delete.** It has no commits outside `origin`,
+no stash, and every local branch tracks a remote branch. Its untracked files:
+
+- `docs/PROJECT_HISTORY.md`, `docs/ISSUES_TO_FILE.md`: identical to the ones now in `tiga-dev`
+- `RELEASE_CHECKLIST.md`: an older subset of the committed one (0 unique lines)
+- `extracted/session_01_bulk_stream.bin`: byte-identical to the template
+- **`TASKS.md` and `TASKS_A.md`: unique.** The prompts for the first two runs. Copy them
+  out first if you want them kept.
+
+I ran `git fetch` there to compare branches, which updated its remote-tracking refs and
+nothing else.
+
+**`C:\Users\Regal\source\CLAUDE.md` is updated** (outside the repo, so not committed).
+The new folder map: `tiga-fresh-test` is live, `tiga-dev` is the development worktree,
+`tiga_ble_re_tools` is the fallback, and `tiga-windows-media-display` is stale and
+awaiting deletion. The ground rules now include TASKS_B's: work only in `tiga-dev`, no
+START/STOP_STACK, check PowerShell tests before running them, dry runs allowed.
+
+## Follow-up: two missed items
+
+**1. Unplugging USB is not a power cycle** (`583faf9`). Every place the halt instruction
+appears now says: use the keyboard's **power switch**; unplugging USB does not
+power-cycle the TIGA because it has a battery; if the display stays stuck, **disconnect
+the battery**. That covers:
+
+- the supervisor's halt instruction (`tiga_supervisor_common.ps1`), which is what
+  `STATUS_STACK.ps1` shows and `uploader_halted.json` stores
+- the "halted at startup" supervisor log line
+- the uploader's exit meanings for codes 20 and 21, and its session-marker refusal
+- `START_STACK.ps1`, dev and packaged
+- README, `BUILD_AND_RECOVERY.md`, `RETRY_RECOVERY.md` and `RELEASE_CHECKLIST.md` (Phase 4)
+
+PROJECT_HISTORY §7.1 now records the two attempts. The first was a ~5 s USB unplug,
+which did not reset the keyboard (the roar stayed). The second was a battery disconnect,
+which did. It also says what is still open: whether the power switch alone is enough
+after an interrupted transfer isn't shown by tonight's record. The same section said
+"after a power cycle"; that was wrong, because the first attempt was not a power cycle.
+
+Tests after the change: 28 Rust, both PowerShell suites, all passing. The uploader binary
+still isn't rebuilt (blocked, as before), so the new exit-meaning text appears only after
+your `cargo build --release`.
+
+**2. #7 commented, not closed.** TASKS_B Task 5 has no #7 line, so the comment uses
+Task 6's observation. Standby + Shut Down was pressed on the ack-wait build. It did
+**not** shut down on a timer: it waited for the renderer's ack, got none, and asked. The
+command never reached the renderer (#15), so the delivery-ack stage and the actual
+shutdown were never exercised. Verdict: partly exercised, happy path unverified. Also
+added to §7.1's "not verified" list (`(this)` commit). Correct me if you had a
+different #7 result in mind.
+
+
+---
+
+# Hardware results run (TASKS_C.md), 2026-10-15, about 23:20–23:35
+
+## Step 0: what was live
+
+**`tiga-fresh-test` was live, so the run went ahead.** All three checks agreed:
+
+- the task action runs `tiga-fresh-test\tiga_startup_supervisor.ps1`
+- the running `tiga_stream_watch_flow.exe` and the renderer's Python are both from `tiga-fresh-test`
+- the newest supervisor launch is `tiga-fresh-test`'s, at 23:15:15; `tiga-dev`'s last one is 23:09:12
+
+`tiga-fresh-test` is on `main`, level with `origin/main`, with no tracked changes. It does
+have five untracked files from earlier runs (`RELEASE_CHECKLIST.md`, `TASKS_B.md`,
+`docs/ISSUES_TO_FILE.md`, `docs/ISSUE_11_DEVICE_SELECTION.md`, `docs/PROJECT_HISTORY.md`). I left
+them alone.
+
+## Commits on `fix/device-selection` (pushed)
+
+| Commit | What |
+|---|---|
+| `cc07788` | Task 1: try `Zoom75 Tiga` first, `… BT<n>` last |
+| `4e5b2ac` | Task 2: a scan that has seen nothing keeps going up to 15 s |
+| `224e771` | Task 3: block timeout 10000 ms as the uploader's default; hand edit dropped |
+| `60e94c1` | Task 4: no power switch; disconnect the battery for at least 30 s |
+| `e1bd5d2` | Task 5: PROJECT_HISTORY §7.1, second part |
+| `2baca15` | Task 6: every upload of the day in one table, with answers |
+| (this) | these notes |
+
+Tests after the last code change: 35 Rust (was 28 before TASKS_B's follow-up; 7 new tonight),
+47 Python, and both PowerShell suites, all passing. **None skipped under rule 3:** I
+re-checked both suites. They run `STATUS_STACK.ps1` from a temp copy (read-only
+`Get-ScheduledTask`), read `START_STACK.ps1` as text, and kill only their own children by
+PID.
+
+**The uploader is rebuilt this time** (`tiga-dev\windows_ble_probe\target\release`,
+23:23+). The dry run prints `Block timeout   : 10000 ms`. This matters because of Task 3,
+below.
+
+## Task 1: prefer the exact display name
+
+Ranking is now: cached address → exactly `Zoom75 Tiga` → any other name containing
+"zoom75" → names ending in ` BT<digits>` (any case). Within each group, discovery order.
+Still nothing is tried before the 5 s window closes, except the cached device, so every
+candidate still gets its `CANDIDATE` line.
+
+New tests: BT1 seen first, `Zoom75 Tiga` is still tried first (and BT1 second if the
+display doesn't qualify); a third, other zoom75 name lands between them; only BT1
+present still gets probed; a cached address wins even over the exact name; the BT-suffix
+matcher itself.
+
+## Task 2: invisible after a restart → implemented
+
+Simple and testable offline, so I implemented it rather than proposing it. If the scan
+has seen **no candidate at all** when the 5 s window closes, it keeps scanning up to 15 s
+and tries the first candidate that appears. It logs one line when it does:
+`Nothing seen in 5 s; scanning up to 15 s …`. Candidates that were seen and rejected
+still get exactly one 5 s rescan, as before. The code-10 message now says "15 s scan".
+
+**Honest arithmetic: 15 s would not have prevented the code-10s, only halved them.**
+The live log shows the same thing after two more restarts, so there are three cases:
+21:35 (keyboard first seen ~19 s after start), 23:09 (~38 s), 23:15 (~67 s). With 15 s,
+23:09 and 23:15 would most likely each have logged one code 10 instead of two. Absorbing
+them completely would need a 30–60 s first scan. I stayed with your 15 s because a
+longer scan also makes every "keyboard really is off" attempt that much longer. Say if
+you want 30 s.
+
+Side effect on the "keyboard off" test (step 6 of the TASKS_B hardware list): each code-10
+attempt now takes ~15 s instead of ~5 s before the 8/16/32/60 s backoff. Nothing else
+changes.
+
+One counter-observation is recorded in §7.1: the 22:59 start found the keyboard within
+2 s, a few minutes after the live stack's last upload. When that stack was stopped isn't
+logged, so it doesn't refute the "still holding the old connection" idea. It doesn't
+support it either.
+
+## Task 3: block timeout, decided
+
+I took the preferred option. **10000 ms is now the uploader's own default**, so the
+packaged supervisor gets it with no change, and the hand-added `--block-timeout-ms 10000`
+is dropped from `tiga-dev\tiga_startup_supervisor.ps1` (it would be redundant). Rule 6
+said don't discard that edit; dropping it is what Task 3's option 1 asks for, and the
+behaviour it added is kept. `ble.log` now prints `Block timeout   : N ms` in its header,
+so future logs say which value was in effect. RETRY_RECOVERY.md has a new "Block
+timeout" section. §7.1 records it as an **unverified mitigation**.
+
+**Consequence: the binary must match.** A `tiga-dev` run with an *old* binary would now
+use 2500 ms, because the supervisor no longer passes the argument. I rebuilt it, so
+`tiga-dev` is consistent. **The live install keeps 2500 ms** until this branch is merged,
+pulled into `tiga-fresh-test` *and* the uploader there is rebuilt.
+
+## Task 4: power-cycle wording
+
+Short form in: the supervisor instruction (→ `uploader_halted.json` and `STATUS_STACK.ps1`),
+the "halted at startup" log line, `START_STACK.ps1` (dev and packaged), and the
+uploader's code-20/21 exit meanings and session-marker refusal. Long form in README (the
+limitations bullet and the recovery steps), `BUILD_AND_RECOVERY.md`, `RETRY_RECOVERY.md`
+(step 6 and both "if it goes wrong" rows) and `RELEASE_CHECKLIST.md` (Phase 4 and the
+rollback note, whose §2.4 reference I changed to §7.1). Tests now assert on the new text,
+including that "power switch (" no longer appears.
+
+Left alone on purpose: the generic "power-cycle" mentions (the exit-code table's "halt,
+power-cycle", code comments, legacy probes in `reference/`, the September bundle notes),
+and `main`.
+
+**Three places now read oddly, and I didn't change them, because I don't know the
+answer:** README line ~274 ("If the uploader cannot reach the keyboard (**switched
+off**, …) … turning the keyboard on is enough"), RETRY_RECOVERY step 4 ("Switch the
+keyboard's Bluetooth off, **or turn the keyboard off**"), and RELEASE_CHECKLIST ~line 204
+("Keyboard off …"). With no power switch, how do you turn it off for that test: the
+mode toggle (BT / 2.4 GHz / wired), or Bluetooth off on the PC? Tell me and I'll fix
+all three. Separately, RELEASE_CHECKLIST line ~204 still says code 10 ends in "a halt
+with no power cycle needed". That's stale since the slow retry (it never halts now).
+
+## Task 5: §7.1 and #14
+
+§7.1 has a new second part covering: BT1 identified; the rejection path, the address
+cache and the code-10 retry on hardware; the three restart-invisibility cases; no power
+switch and the 10–15 s / 30 s result (one observation each, so 30 s is a working
+minimum); the slowing and sudden signatures; the block-timeout experiment. I also
+corrected §7's "what 1B:A3… is remains unknown" paragraph and the §7.1 paragraph that
+assumed a power switch, and fixed a stray backspace character that had turned
+`logs\ble.log` into `logs<BS>le.log`.
+
+Two things the logs added beyond the task text:
+
+- **The slowing signature, made precise.** The log prints every fifth block, so "each
+  ACK slower than the last" can't be read directly. But blocks 6–10 each had to arrive
+  within 2.5 s and together took ~9.6 s, so **at least four of the five took 1.8–2.5 s**,
+  against ~0.15 s healthy. Sustained, not one hiccup.
+- **Five dev uploads completed, not four.** The fifth (23:13:15, 9.62 s) came after
+  TASKS_C was written. The live install then completed eight more at 2500 ms after
+  23:15, which is part of why the timeout evidence stays inconclusive.
+
+**#14 commented** with the hardware results and the two follow-up commits (not closed):
+https://github.com/MichiG21/tiga-zoom75-windows-media-display/issues/14#issuecomment-6202678563
+
+## Task 6: every upload, side by side
+
+The table and answers are in §7.1 ("Every upload of 2026-10-15"): 42 uploads, read at 23:29.
+Short version:
+
+1. **21:05 was sudden** *(medium-high)*: block 4 arrived at about the healthy pace, then
+   nothing. **21:39 was probably sudden** *(low-medium)*. These are placed using a
+   derived ~0.42 s pre-block overhead, which the three failures with block data agree
+   on to ±0.01 s.
+2. **No drift before failures** *(high, at 5-block granularity)*. The upload just before
+   21:39 was the fastest of the evening.
+3. **22:44/22:46 as the uncleared 21:39 state: can't tell** *(low)*. The identical
+   block-11 stall with different images suggests a stable keyboard-side state, but the
+   signature changed from sudden to slowing, so the 10–15 s disconnect did *something*.
+   It could have been a partial clear or a brown-out.
+4. **Earlier detection** (proposal only): log per-block and CONTROL1/2 ACK latencies
+   first. Look for a signal *before* CONTROL2, the only point where stopping is still
+   safe. Inside the transfer, warn on a block over ~1 s rather than aborting sooner,
+   because aborting is itself what creates the partial session.
+
+Two patterns that came out of the table:
+
+- **First-on-connection uploads are ~0.7 s faster, 6 of 6.** All of the difference is
+  already there by block 5. Later uploads lose ~0.7 s in their first five blocks, then
+  run at the same pace. That's no longer "two samples, maybe coincidence".
+- **Failures cluster at connection start**: 4 of 5 were first uploads and 1 a second
+  upload; 0 of the other 31 later uploads failed. This is confounded with
+  "restarts follow resets and failures", so don't read it as cause.
+
+Minor, not changed: `extracted\…bin.device` records `last_completed_at` only for the first
+completion in each uploader process (by design: `device_recorded`), so the name of that
+field slightly overstates it.
+
+## Ready to merge?
+
+**Verified on hardware** (`fix/device-selection`, 22:59–23:13, plus earlier `main` work):
+
+- #14: service check; BT1 rejected and the display selected (23:06); address cache used
+  (23:09); 6 uploads on the branch, 5 completed, the failure unrelated to selection
+- the code-10 retry recovering from a temporarily invisible keyboard without a halt
+- #4 (bug A): real code-20 halts at 21:05, 21:39, 22:44, 22:46 and 23:00, each held
+  until START_STACK after a battery disconnect
+- #6, #9, #10 and the Unicode crash fix (from the first part of §7.1)
+
+**Not verified on hardware:**
+
+- **Tonight's own changes**: the name ranking (cc07788), the 15 s scan (4e5b2ac), the
+  10000 ms default as compiled in (224e771; the 10000 ms *behaviour* ran via the hand
+  edit, but never near the limit), and the new instruction text (60e94c1). All are
+  covered by offline tests only. The binary they're in has had a dry run only.
+- the block-timeout change as a fix for anything: inconclusive by design until an upload
+  comes near 2.5 s and survives, or a slowing run is seen with 10 s
+- #15 (display-control false success) and #7's delivery-ack and shutdown stages
+- #5 (bug B) in the field; #8 (bug E, paths with spaces)
+- the killed-process / session-marker path of #4
+- what BT1 exposes (its connect failed, so no `exposes …` line yet)
+
+**My read:** mergeable once one short hardware session on the rebuilt `tiga-dev` binary
+shows: a cold start with no `.device` file selecting `Zoom75 Tiga` without probing BT1
+first; `Block timeout   : 10000 ms` in the header; and a restart logging the
+`Nothing seen in 5 s; scanning up to 15 s` line, if the keyboard is invisible again.
+Everything else on the branch has either run on hardware or only changes text. After
+merging, pull into `tiga-fresh-test` **and rebuild its uploader**, or the live install
+keeps 2500 ms.

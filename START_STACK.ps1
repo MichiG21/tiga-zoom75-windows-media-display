@@ -15,9 +15,10 @@ if (Test-Path -LiteralPath $haltFile) {
 }
 $cleared = Clear-UploaderHalt -HaltFile $haltFile -StreamPath (Join-Path $PSScriptRoot "extracted\session_01_bulk_stream.bin")
 if ($cleared) {
-    Write-Host "Cleared the halt, assuming the keyboard has been power-cycled:"
+    Write-Host "Cleared the halt, assuming the keyboard's battery has been disconnected and reconnected:"
     $cleared | ForEach-Object { Write-Host "  removed $_" }
-    Write-Host "If it was NOT power-cycled, run STOP_STACK.ps1 now, power-cycle it, and start again."
+    Write-Host "If it was NOT, run STOP_STACK.ps1 now. Then:"
+    Write-Host "Disconnect the keyboard's battery for at least 30 s (there is no power switch; unplugging USB doesn't count), then run START_STACK.ps1."
 }
 
 Start-ScheduledTask -TaskName $taskName

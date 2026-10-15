@@ -59,10 +59,16 @@ Standby + Shut Down within a minute of Lock Standby would wait out the full time
 | Renderer ack | 15 s | The renderer polls once a second; rendering takes < 1 s. |
 | Delivery ack | 90 s | Covers an in-flight upload (~8 s), ours (~8 s), a reconnect, and margin. |
 
-If either stage times out, the GUI **does not shut down automatically**. It shows a
-Yes/No warning that explains what was not confirmed, with **No** as the default. On
-No, the button is re-enabled and the status line says why. On Yes, it shuts down
-(status: "without confirmation").
+If either stage times out, the GUI **does not shut down automatically**.
+
+- **Renderer ack times out:** the GUI cancels and explains, naming the command file
+  and antivirus as a possible cause. It does **not** offer to shut down. From here a
+  stopped stack and a command that never arrived look the same, and on 2026-10-15
+  it was the second (#15). Writes are also read back first; a write that did not
+  land cancels the same way.
+- **Delivery ack times out:** it shows a Yes/No warning that explains what was not
+  confirmed, with **No** as the default. On No, the button is re-enabled and the
+  status line says why. On Yes, it shuts down (status: "without confirmation").
 
 The button is disabled while a wait is running, so two waits cannot overlap.
 

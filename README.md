@@ -141,9 +141,8 @@ The current release is still a **public beta**. Additional testing across Window
 
 ### Known behavior / limitations
 
-- Firefox + YouTube may expose title and thumbnail but no usable total duration.
 - The TIGA can briefly show its built-in roar animation during a custom-image upload.
-- If a BLE upload is interrupted partway through, fully power-cycle the keyboard before attempting another media upload.
+- If a BLE upload is interrupted partway through, the keyboard must be reset before another media upload. The TIGA has no power switch, and unplugging USB doesn't reset it — it has a battery. Open the case, disconnect the battery from the PCB, and wait at least 30 seconds, pressing a few keys while it's disconnected. Reconnect, then run `START_STACK.ps1`. A 10–15 second disconnect was not enough in testing.
 - The renderer keeps the historical filename `tiga_windows_nowplaying_v2.py` internally for compatibility with the existing stack.
 - An existing older/manual installation may have its `TIGA Windows Media Display` Scheduled Task replaced by the installer.
 
@@ -264,15 +263,15 @@ If an upload stops partway through, the keyboard can be left holding an unfinish
 
 ```
 Status        : HALTED - transfer interrupted after CONTROL2 ...
-Action        : Power-cycle the keyboard (...), then run START_STACK.ps1.
+Action        : Disconnect the keyboard's battery for at least 30 s (there is no power switch; ...
 ```
 
 To recover:
 
-1. Power-cycle the keyboard. If the display stays white or frozen, do a full battery power-cycle.
-2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have power-cycled it": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
+1. **The TIGA has no power switch, and unplugging USB doesn't reset it** — it has a battery. Open the case, disconnect the battery from the PCB, and wait **at least 30 seconds**, pressing a few keys while it's disconnected. Reconnect. A 10–15 second disconnect was not enough in testing.
+2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have reset the keyboard": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
 
-The uploader also halts, without needing a power cycle, if it cannot reach the keyboard after several attempts (8, 16, 32 and 60 seconds apart). Check that Bluetooth is on and the keyboard is awake, then run **Start Display**.
+If the uploader cannot reach the keyboard (switched off, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No power cycle and no **Start Display** needed; turning the keyboard on is enough, within about 5 minutes.
 
 Stopping the stack (or shutting Windows down) in the middle of an upload counts as an interruption too. The next start will report it as halted.
 
@@ -341,6 +340,43 @@ From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_s
 
 ```powershell
 .\target\release\tiga_stream_watch_flow.exe --stream "..\extracted\session_01_bulk_stream.bin" --intra-block-ms 0 --confirm-flow-watch
+```
+
+Leave out `--confirm-flow-watch` for a dry run: it validates the stream and opens no Bluetooth connection.
+
+### Installing from source: troubleshooting
+
+Problems hit on a from-scratch install. None of them means the project is broken.
+
+**PowerShell refuses to run the scripts** (`UnauthorizedAccess`, "running scripts is disabled on this system").
+Windows blocks `.ps1` files by default. Allow them for your user once (no admin needed):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+or prefix each call with `powershell -ExecutionPolicy Bypass -File`.
+
+**"… is not digitally signed"**, even after that.
+Files extracted from a downloaded ZIP carry Windows' mark-of-the-web. Unblock them from the repository folder:
+
+```powershell
+Get-ChildItem -Recurse -File | Unblock-File
+```
+
+A `git clone` doesn't have this problem.
+
+**A freshly built `.exe` seems to do nothing, or its files never appear.**
+Antivirus software (Norton CyberCapture, for example) may hold or sandbox an executable it hasn't seen before, so its writes don't reach the folder. The Display Control utility now says so if the renderer never confirms a command ([#15](https://github.com/MichiG21/tiga-zoom75-windows-media-display/issues/15)). Wait for the scan to finish, or allow the program in your antivirus.
+
+**`tiga_stream_watch_flow.exe` "is not recognized"** after `cargo test`.
+`cargo test` builds a separate test binary. Build the real one with `cargo build --release` in `windows_ble_probe`.
+
+**Manual dry run fails with `EXIT code=30 … cannot find the file specified`.**
+A fresh clone has no `extracted\session_01_bulk_stream.bin`; it is generated at runtime. The supervisors seed it automatically, but a manual run needs it copied first:
+
+```powershell
+Copy-Item .\extracted\session_01_bulk_stream.redgreen-backup.bin .\extracted\session_01_bulk_stream.bin
 ```
 
 ---

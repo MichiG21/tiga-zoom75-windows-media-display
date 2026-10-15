@@ -100,9 +100,14 @@ function Stop-LoggedProcess {
 # The uploader (windows_ble_probe/src/bin/tiga_stream_watch_flow.rs) exits with a
 # class code and keeps <stream>.session while a media session is open on the keyboard:
 #
-#   10 unreachable, 11 GATT          -> retry with backoff, then give up
+#   10 unreachable, 11 GATT          -> retry with backoff, then every 5 min, never halt
 #   20 interrupted, 21 no completion -> halt: the keyboard needs a power cycle
 #   30 bad arguments / stream        -> halt: configuration problem
+#   anything else, no marker         -> retry with backoff, then give up
+#
+# 10 and 11 never open a media session, so the keyboard is not in a bad state; it is
+# off, asleep or out of range (11: no candidate had the media service, issue #14).
+# Halting on those meant a dead display the next morning until START_STACK.ps1.
 #
 # A surviving session marker means "halt, power-cycle" whatever the exit code: a
 # killed or crashed uploader cannot report its own class.
@@ -111,8 +116,9 @@ function Stop-LoggedProcess {
 # START_STACK.ps1 deletes the halt file (and the marker); a running supervisor notices
 # and starts the uploader again. Nothing clears it on a timer.
 
-$BleRetryDelays       = @(8, 16, 32, 60)  # seconds before retries 1..4; the 5th failure gives up
-$BleGattRetryCap      = 2                 # code 11 gives up after this many retries
+$BleRetryDelays       = @(8, 16, 32, 60)  # seconds before retries 1..4
+$BleSlowRetryDelay    = 300               # 10 and 11 after the backoff: every 5 min, indefinitely
+$BleSlowRetryCodes    = @(10, 11)
 $RendererRestartDelay = 8
 
 $UploaderExitMeanings = @{
@@ -124,8 +130,11 @@ $UploaderExitMeanings = @{
     30 = "bad arguments, missing or invalid stream, or internal error"
 }
 
-$PowerCycleInstruction = "Power-cycle the keyboard (switch it off and on again; if the display " +
-    "stays white or frozen, do the full battery power-cycle), then run START_STACK.ps1."
+# The TIGA has no power switch, and unplugging USB does not reset it: it keeps running on
+# its battery. On 2026-10-15 a 10-15 s battery disconnect did not clear a stuck keyboard;
+# 30 s did (one observation each; PROJECT_HISTORY section 7.1).
+$PowerCycleInstruction = "Disconnect the keyboard's battery for at least 30 s (there is no power switch; " +
+    "unplugging USB doesn't count), then run START_STACK.ps1."
 
 function Get-UploaderExitMeaning {
     param([int]$Code)
@@ -172,8 +181,11 @@ function Get-UploaderDecision {
             "Check logs\ble_error.log for the cause and fix it, then run START_STACK.ps1. The keyboard was not touched."
     }
 
-    $cap = if ($ExitCode -eq 11) { $BleGattRetryCap } else { $BleRetryDelays.Count }
-    if ($ExitCode -ne 0 -and $Attempt -gt $cap) {
+    if ($ExitCode -ne 0 -and $Attempt -gt $BleRetryDelays.Count) {
+        if ($BleSlowRetryCodes -contains $ExitCode) {
+            return New-UploaderDecision retry "slow-retry" $false $BleSlowRetryDelay `
+                "code ${ExitCode}: $meaning; still not reachable after $Attempt attempts, retrying every $BleSlowRetryDelay s" ""
+        }
         return New-UploaderDecision halt "gave-up" $false 0 `
             "gave up after $Attempt failed attempts; last was code ${ExitCode}: $meaning" `
             "Check that Bluetooth is on and the keyboard is awake and in range, then run START_STACK.ps1. No media session was opened."
@@ -241,7 +253,8 @@ function Resolve-UploaderExit {
         Write-SupervisorLog "BLE uploader HALTED ($($d.Class)): $($d.Reason). $($d.Instruction) The renderer keeps running."
     } else {
         $State.NextUploaderStart = (Get-Date).AddSeconds($d.Delay)
-        Write-SupervisorLog "Restarting BLE uploader in $($d.Delay)s (consecutive failures: $($State.Attempts))."
+        $slow = if ($d.Class -eq "slow-retry") { " Keyboard still not reachable; retrying every $($d.Delay)s until it is (no halt)." } else { "" }
+        Write-SupervisorLog "Restarting BLE uploader in $($d.Delay)s (consecutive failures: $($State.Attempts)).$slow"
     }
 }
 
@@ -260,7 +273,7 @@ function Invoke-SupervisorLoop {
 
     if (Test-Path -LiteralPath $HaltFile) {
         $State.Halted = $true
-        Write-SupervisorLog "BLE uploader is halted ($HaltFile); not starting it. Power-cycle the keyboard, then run START_STACK.ps1."
+        Write-SupervisorLog "BLE uploader is halted ($HaltFile); not starting it. Disconnect the keyboard's battery for at least 30 s (there is no power switch; unplugging USB doesn't count), then run START_STACK.ps1."
     }
 
     $i = 0

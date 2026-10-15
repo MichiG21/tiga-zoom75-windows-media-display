@@ -91,13 +91,122 @@ def find_font(size: int, bold: bool = False):
     return ImageFont.load_default()
 
 
+# Segoe UI has no CJK or Hangul glyphs and no "♪", and Pillow does no font fallback of
+# its own: a Japanese title rendered as empty boxes on hardware. Text that comes from
+# media metadata is therefore drawn with a chain of fonts, one character at a time.
+FALLBACK_FONT_FILES = [
+    # (regular, bold); the first that exists is used for each slot
+    ("YuGothR.ttc", "YuGothB.ttc"),    # Japanese
+    ("meiryo.ttc", "meiryob.ttc"),     # Japanese, older Windows
+    ("msyh.ttc", "msyhbd.ttc"),        # Chinese (Microsoft YaHei)
+    ("malgun.ttf", "malgunbd.ttf"),    # Korean
+    ("seguisym.ttf", "seguisym.ttf"),  # symbols, including ♪
+]
+_NOTDEF_PROBE = "\U0010fffd"  # private use, plane 16: no font here maps it
+_glyph_cache: dict[tuple[int, str], bool] = {}
+
+
+def _glyph_mask(font, ch: str) -> bytes:
+    size = getattr(font, "size", 16) * 2
+    img = Image.new("L", (size, size))
+    ImageDraw.Draw(img).text((0, 0), ch, font=font, fill=255)
+    return img.tobytes()
+
+
+def has_glyph(font, ch: str) -> bool:
+    """Whether `font` draws `ch` as something other than its missing-glyph box."""
+    if ch.isspace() or not ch.isprintable():
+        return True
+    key = (id(font), ch)
+    if key not in _glyph_cache:
+        notdef = (id(font), _NOTDEF_PROBE)
+        if notdef not in _glyph_cache:
+            _glyph_cache[notdef] = _glyph_mask(font, _NOTDEF_PROBE)
+        _glyph_cache[key] = _glyph_mask(font, ch) != _glyph_cache[notdef]
+    return _glyph_cache[key]
+
+
+class FontChain:
+    """A primary font plus fallbacks, chosen per character."""
+
+    def __init__(self, fonts: list):
+        self.fonts = fonts
+        self.primary = fonts[0]
+        self.size = getattr(self.primary, "size", 16)
+
+    def font_for(self, ch: str):
+        for font in self.fonts:
+            if has_glyph(font, ch):
+                return font
+        return self.primary
+
+    def runs(self, text: str) -> list[tuple[str, object]]:
+        """Split `text` into (substring, font) runs."""
+        out: list[tuple[str, object]] = []
+        for ch in text:
+            font = self.font_for(ch)
+            if out and out[-1][1] is font:
+                out[-1] = (out[-1][0] + ch, font)
+            else:
+                out.append((ch, font))
+        return out
+
+
+_chains: dict[tuple[int, bool], FontChain] = {}
+
+
+def find_text_font(size: int, bold: bool = False) -> FontChain:
+    """find_font() with fallbacks, for text that comes from media metadata."""
+    key = (size, bold)
+    if key not in _chains:
+        fonts = [find_font(size, bold)]
+        folder = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        for regular, bold_file in FALLBACK_FONT_FILES:
+            p = folder / (bold_file if bold else regular)
+            if not p.exists():
+                p = folder / regular
+            if p.exists():
+                try:
+                    fonts.append(ImageFont.truetype(str(p), size=size))
+                except OSError:
+                    pass
+        _chains[key] = FontChain(fonts)
+    return _chains[key]
+
+
+def text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    if not isinstance(font, FontChain):
+        return draw.textbbox((0, 0), text, font=font)[2]
+    runs = font.runs(text)
+    if len(runs) == 1:
+        return draw.textbbox((0, 0), text, font=runs[0][1])[2]
+    return int(round(sum(f.getlength(s) for s, f in runs)))
+
+
+def draw_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill):
+    """draw.text(), with per-character fallback when `font` is a FontChain."""
+    if not isinstance(font, FontChain):
+        draw.text(xy, text, font=font, fill=fill)
+        return
+    runs = font.runs(text)
+    if len(runs) == 1 and runs[0][1] is font.primary:
+        draw.text(xy, text, font=font.primary, fill=fill)  # unchanged for plain Latin text
+        return
+    # Share the primary font's baseline, so mixed scripts sit on one line.
+    x, y = xy
+    baseline = y + font.primary.getmetrics()[0]
+    for s, f in runs:
+        draw.text((x, baseline), s, font=f, fill=fill, anchor="ls")
+        x += f.getlength(s)
+
+
 def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int):
     words = (text or "").split()
     if not words:
         return [""]
 
     def width(s: str) -> int:
-        return draw.textbbox((0, 0), s, font=font)[2]
+        return text_width(draw, s, font)
 
     # A word wider than the box (a long unbroken title, or CJK text without spaces)
     # is broken between characters; otherwise it was drawn as one over-wide line.
@@ -205,11 +314,12 @@ def load_thumbnail(has_thumbnail: bool) -> Image.Image:
     # Neutral fallback tile.
     img = Image.new("RGB", (COVER_SIZE, COVER_SIZE), (35, 35, 40))
     draw = ImageDraw.Draw(img)
-    font = find_font(42, bold=True)
+    # Segoe UI Bold has no "♪" (it drew a missing-glyph box); take it from a fallback.
     text = "♪"
+    font = find_text_font(42, bold=True).font_for(text)
     bbox = draw.textbbox((0, 0), text, font=font)
-    x = (COVER_SIZE - (bbox[2] - bbox[0])) // 2
-    y = (COVER_SIZE - (bbox[3] - bbox[1])) // 2 - 4
+    x = (COVER_SIZE - (bbox[2] - bbox[0])) // 2 - bbox[0]
+    y = (COVER_SIZE - (bbox[3] - bbox[1])) // 2 - bbox[1]
     draw.text((x, y), text, font=font, fill=(190, 190, 200))
     return img
 
@@ -483,9 +593,9 @@ def render_media(media: dict) -> Image.Image:
     cover = load_thumbnail(bool(media.get("thumbnail")))
     canvas.paste(cover, (8, 7))
 
-    title_font = find_font(18, bold=True)
-    artist_font = find_font(18, bold=False)
-    album_font = find_font(16, bold=False)
+    title_font = find_text_font(18, bold=True)
+    artist_font = find_text_font(18, bold=False)
+    album_font = find_text_font(16, bold=False)
     label_font = find_font(12, bold=True)
     duration_font = find_font(13, bold=True)
 
@@ -508,7 +618,7 @@ def render_media(media: dict) -> Image.Image:
     for y, line, font, fill in layout_text_block(
         draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w
     ):
-        draw.text((text_x, y), line, font=font, fill=fill)
+        draw_text(draw, (text_x, y), line, font, fill)
 
     draw.line((8, DIVIDER_Y, 312, DIVIDER_Y), fill=(45, 45, 50), width=1)
     draw.text((8, 146), "NOW PLAYING", font=label_font, fill=(210, 210, 216))

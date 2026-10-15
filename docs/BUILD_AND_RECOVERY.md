@@ -31,6 +31,7 @@ cargo build --release --locked --bin tiga_stream_watch_flow
 - `extracted\session_01_bulk_stream.windows_nowplaying.bin`
 - `extracted\session_01_bulk_stream.bin.frame` (ID of the last rendered frame)
 - `extracted\session_01_bulk_stream.bin.delivered` (last frame the keyboard confirmed)
+- `extracted\session_01_bulk_stream.bin.device` (address of the keyboard that completed the last upload; the uploader tries it first. Delete it to force a full scan)
 
 ## Full stack stop
 
@@ -40,4 +41,4 @@ cargo build --release --locked --bin tiga_stream_watch_flow
 
 ## BLE recovery
 
-If an upload is interrupted after CONTROL2 (the point where the keyboard shows its upload animation), the supervisor halts the uploader instead of retrying, and writes `logs\uploader_halted.json`. `STATUS_STACK.ps1` shows why. Power-cycle the keyboard, then run `START_STACK.ps1`, which clears the halt. Do not flash firmware or factory-reset the board as a first-line recovery step. See `docs/design/RETRY_RECOVERY.md` for the exit codes and the full policy.
+If an upload is interrupted after CONTROL2 (the point where the keyboard shows its upload animation), the supervisor halts the uploader instead of retrying, and writes `logs\uploader_halted.json`. `STATUS_STACK.ps1` shows why. The TIGA has no power switch, and unplugging USB doesn't reset it — it has a battery. Open the case, disconnect the battery from the PCB, and wait at least 30 seconds, pressing a few keys while it's disconnected. Reconnect, then run `START_STACK.ps1`, which clears the halt. A 10–15 second disconnect was not enough in testing. Do not flash firmware or factory-reset the board as a first-line recovery step. See `docs/design/RETRY_RECOVERY.md` for the exit codes and the full policy.

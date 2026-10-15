@@ -33,6 +33,7 @@ extracted/session_01_bulk_stream.diagnostic.bin
 extracted/*.bin.delivered
 extracted/*.bin.session
 extracted/*.bin.exit
+extracted/*.bin.device
 *.tmp
 
 # IDE / OS
@@ -51,3 +52,8 @@ Thumbs.db
 # Internal project transcript / extracted conversation data
 reference/TRANSCRIPT.md
 extracted/transcript.json
+
+# Local task files and issue drafts (GitHub is the record once filed)
+TASKS*.md
+docs/ISSUE*_*.md
+docs/ISSUES_TO_FILE.md

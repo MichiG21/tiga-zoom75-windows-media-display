@@ -1,7 +1,9 @@
 # Uploader failure classes and recovery (issue #4)
 
-**Status:** implemented on `fix/a-retry-recovery` and tested offline only. The hardware
-plan below has **not** been run.
+**Status:** implemented on `fix/a-retry-recovery` and merged. The interrupted-transfer
+halt (step 2's outcome, from a real PROGRESS timeout rather than a kill) was seen on
+hardware on 2026-10-15; the rest of the plan below has not been run. The slow retry for
+10 and 11 (below) was added on `fix/device-selection` and is tested offline only.
 
 ## The rule
 
@@ -18,8 +20,8 @@ have gone out anyway.
 | Code | Class | Supervisor |
 |---:|---|---|
 | 0 | success (only with `--once`; watch mode normally never exits) | restart |
-| 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff |
-| 11 | connected, GATT service missing or unusable | retry with backoff, low cap |
+| 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff, then every 5 min; **never halts** |
+| 11 | connected, but the media service was missing or unusable: every candidate was reached and none qualified (issue #14), or subscribing to its notifications failed | retry with backoff, then every 5 min; **never halts** |
 | 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | **halt, power-cycle** |
 | 21 | every block ACKed, COMPLETE never arrived | **halt, power-cycle** |
 | 30 | bad arguments, missing or invalid stream, internal error | halt, no power cycle |
@@ -28,6 +30,20 @@ have gone out anyway.
 Each exit is logged as one line in `ble.log` and `ble_error.log`:
 `EXIT code=20 (transfer interrupted after CONTROL2; …): timed out waiting for PROGRESS after 4K block 18/53 (last ACKed block 17/53) frame=…`.
 The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
+
+### Block timeout
+
+After each 4096-byte block the uploader waits for the keyboard's PROGRESS. If it does
+not come within the **block timeout**, the transfer is abandoned with code 20, and an
+abandoned transfer is what leaves the keyboard needing its battery disconnected. A
+block that is merely slow should therefore be waited for.
+
+The default is **10000 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
+value in effect as `Block timeout`). It was 2500 ms until 2026-10-15. All five
+interrupted transfers that day ran with 2500 ms; the uploads after the change all
+completed, but none came near either limit and they followed a full battery reset, so
+**the longer wait is an unverified mitigation, not a fix** (PROJECT_HISTORY §7.1). Its
+cost is that a keyboard that is truly stuck is detected about 7.5 s later.
 
 ### The session marker
 
@@ -44,10 +60,17 @@ shut down mid-transfer.
 
 ## Supervisor policy (`tiga_supervisor_common.ps1`, used by both supervisors)
 
-- **Retryable** (10, 11, or an unexplained exit with no marker): restart after 8, 16,
-  32, 60 s. The 5th consecutive failure gives up (code 11: the 3rd). A frame delivered
-  during a run resets the count.
-- **Halt** (marker present, 20, 21, 30, or retries exhausted): the uploader is not
+- **Slow retry** (10, 11): restart after 8, 16, 32, 60 s, then every 300 s for as long
+  as it keeps failing. Neither code opens a media session, so the keyboard is not in a
+  bad state; it is off, asleep or out of range. Halting here used to mean a dead display
+  the next morning until someone ran `START_STACK.ps1`. Code 11 used to give up after
+  three attempts, which is what stranded the display on 2026-10-15 when the uploader
+  kept picking the wrong device (#14). The supervisor log says
+  `retrying every 300s until it is (no halt)` once the slow interval starts.
+- **Retryable, then give up** (an unexplained exit with no marker): restart after 8, 16,
+  32, 60 s; the 5th consecutive failure halts as `gave-up`, no power cycle needed.
+- A frame delivered during a run resets the count.
+- **Halt** (marker present, 20, 21, 30, or an unexplained exit's retries exhausted): the uploader is not
   restarted. `logs\uploader_halted.json` records the time, code, meaning, class,
   frame ID, last ACKed block, the uploader's detail line, and an instruction. The
   renderer keeps running.
@@ -100,7 +123,7 @@ branch, point the task at the repo, and restore it at the end (step 6).
    - `startup_supervisor.log`: `BLE uploader exited with code <N> (unexpected exit (crashed or killed))`.
      N is whatever a forced kill produces through the `cmd.exe` wrapper (1 or -1); any
      code not in the table is treated the same. Then
-     `BLE uploader HALTED (session-open): uploader exited (code N: …) while a media session was open on the keyboard. Power-cycle the keyboard …`
+     `BLE uploader HALTED (session-open): uploader exited (code N: …) while a media session was open on the keyboard. Disconnect the keyboard's battery for at least 30 s …`
    - **No** `Started ble run=…` after it. The uploader is not restarted.
    - `logs\uploader_halted.json` exists, with `class: session-open`,
      `needs_power_cycle: true`, the frame ID from `UPLOAD START`, and a `last_acked_block`
@@ -111,8 +134,10 @@ branch, point the task at the repo, and restore it at the end (step 6).
    white, previous image, or recovered by itself? This is new information. The history
    only says retrying is harmful, not what the idle state looks like.
 5. Wait two minutes. The supervisor log must show nothing new about the uploader.
-6. Recover: power-cycle the keyboard. If the LCD stays white, frozen, or stuck on the
-   roar, do the **full battery power-cycle** (PROJECT_HISTORY §2.4 / CLAUDE.md). Then
+6. Recover. **The TIGA has no power switch, and unplugging USB doesn't reset it** — it
+   has a battery. Open the case, disconnect the battery from the PCB, and wait at least
+   30 seconds, pressing a few keys while it's disconnected. A 10–15 second disconnect
+   was not enough in testing (PROJECT_HISTORY §7.1). Reconnect, then
    run `.\START_STACK.ps1`. Expect it to print the halt reason and `removed …session` /
    `removed …uploader_halted.json`, then a new `Started ble run=…` in the supervisor
    log, then a successful upload of the current track.
@@ -133,12 +158,13 @@ branch, point the task at the repo, and restore it at the end (step 6).
 1. Stack running, with OK status. Switch the keyboard's Bluetooth off, or turn the keyboard off.
 2. Change track, so an upload is needed.
 3. Expect `EXIT code=10 (keyboard not reachable …)`, then `Restarting BLE uploader in 8s`,
-   then 16s, 32s, 60s, then `HALTED (gave-up)`. That's about 2.5 minutes including the
-   scans. The halt file has `needs_power_cycle: false`, and there is no marker.
+   then 16s, 32s, 60s, then `Restarting BLE uploader in 300s … (no halt)`, repeating.
+   **No halt file**, no marker.
    - The first failure may appear only when the next upload is attempted: the uploader
      does not notice a dropped link while idle (§7 "suspected but unproven").
    - If the link drops *during* an upload, after CONTROL2, that is a step-2 case and must halt with session-open.
-4. Turn the keyboard back on and run `.\START_STACK.ps1`. It should recover **without** a power cycle.
+4. Turn the keyboard back on and **don't** run anything. Within 5 minutes the next retry
+   should connect and upload the current track, with no power cycle and no START_STACK.
 
 ### 5. Code 21 (not induced)
 
@@ -156,8 +182,8 @@ Then check `(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.A
 
 | Symptom | Meaning | Do |
 |---|---|---|
-| A `Started ble run=…` appears after an exit while the marker existed | the halt did not engage: **the bug this branch fixes** | `STOP_STACK.ps1` immediately, power-cycle, keep all logs |
+| A `Started ble run=…` appears after an exit while the marker existed | the halt did not engage: **the bug this branch fixes** | `STOP_STACK.ps1` immediately, disconnect the battery for at least 30 s (not USB), keep all logs |
 | No halt file, no marker after killing mid-upload | the kill landed before CONTROL2 (too early) or after COMPLETE (too late) | check `ble.log` for where it was; retry with a different delay |
 | Halt file present but STATUS doesn't show HALTED | status script reading the wrong root (dev vs packaged) | compare `$Stream` and `$Logs` in `STATUS_STACK.ps1` with where the files are |
 | START_STACK clears but the uploader doesn't start | supervisor not running, or task still pointing at `tiga_ble_re_tools` | check the task action (step 6) and `startup_supervisor.log` |
-| LCD broken after recovery | partial session survived a normal power cycle | full battery power-cycle (§2.4); do not upload again until the screen is normal |
+| LCD broken after recovery | the battery disconnect was too short (10–15 s was not enough on 2026-10-15), or only USB was unplugged, which is not a reset | disconnect the battery again for at least 30 s, pressing a few keys; do not upload again until the screen is normal |
