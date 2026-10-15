@@ -54,7 +54,34 @@ if ($rendered) {
         $verdict = "PENDING - newest frame rendered ${age}s ago; upload should be in progress"
     }
 }
-Write-Host "Status        : $verdict"
+
+# Halted uploader (issue #4): this outranks every other state.
+$haltFile = Join-Path $Logs "uploader_halted.json"
+$halt = $null
+if (Test-Path -LiteralPath $haltFile) {
+    try { $halt = Get-Content -Raw -LiteralPath $haltFile | ConvertFrom-Json } catch { $halt = $null }
+    if ($null -eq $halt) { $halt = [pscustomobject]@{ reason = "halt file unreadable: $haltFile" } }
+    $verdict = "HALTED - BLE uploader stopped and will NOT retry by itself: $($halt.reason)"
+} elseif (Test-Path -LiteralPath "$Stream.session") {
+    $session = Read-KeyValueFile "$Stream.session"
+    $verdict += " (media session open: frame $($session.frame_id), block $($session.last_acked_block)/$($session.total_blocks))"
+}
+
+if ($halt) {
+    Write-Host ""
+    Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+}
+Write-Host "Status        : $verdict" -ForegroundColor $(if ($halt) { "Red" } else { "Gray" })
+if ($halt) {
+    Write-Host ("Halted at     : {0}  (exit code {1}: {2})" -f $halt.halted_at, $halt.exit_code, $halt.meaning)
+    if ($halt.frame_id) {
+        $blocks = if ($null -ne $halt.last_acked_block) { "; last ACKed block $($halt.last_acked_block)$(if ($halt.total_blocks) { "/$($halt.total_blocks)" })" } else { "" }
+        Write-Host "Frame         : $($halt.frame_id)$blocks"
+    }
+    if ($halt.detail) { Write-Host "Detail        : $($halt.detail)" }
+    Write-Host "Action        : $($halt.instruction)" -ForegroundColor Yellow
+    Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+}
 
 $lastFailure = Get-ChildItem -Path $Logs -Filter "ble.log*" -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime |

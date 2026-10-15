@@ -184,6 +184,28 @@ try {
     Remove-Job $clearer -Force
 }
 
+# STATUS_STACK.ps1 (dev layout) shows the halt prominently. It only reads, so a copy
+# can run against a fake install root.
+Write-Host "== STATUS_STACK.ps1"
+$root = Join-Path $work "status root"
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "extracted") | Out-Null
+Copy-Item (Join-Path $RepoRoot "STATUS_STACK.ps1") $root
+$fakeStream = Join-Path $root "extracted\session_01_bulk_stream.bin"
+Set-Content -LiteralPath "$fakeStream.frame" -Encoding ASCII -Value "frame_id=r-f0042", "crc32=aaaa0042", "rendered_at=2026-10-15T20:00:00+02:00", "reason=media changed"
+$decision = Get-UploaderDecision -ExitCode 20 -Session @{ frame_id = "r-f0042" } -Attempt 1
+Write-UploaderHaltState -Path (Join-Path $root "logs\uploader_halted.json") -Decision $decision -ExitCode 20 `
+    -Session @{ frame_id = "r-f0042"; last_acked_block = "17"; total_blocks = "53" } `
+    -ExitRecord @{ detail = "timed out waiting for PROGRESS after 4K block 18/53" } -Attempts 1
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: HALTED") "status verdict is HALTED"
+Assert-True ($out -match "exit code 20") "status shows the exit code"
+Assert-True ($out -match "r-f0042; last ACKed block 17/53") "status shows frame and block"
+Assert-True ($out -match "Action\s+: Power-cycle the keyboard.*START_STACK\.ps1") "status gives the power-cycle instruction"
+Remove-Item (Join-Path $root "logs\uploader_halted.json")
+Set-Content -LiteralPath "$fakeStream.session" -Encoding ASCII -Value "frame_id=r-f0042", "last_acked_block=5", "total_blocks=53"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -notmatch "HALTED" -and $out -match "media session open: frame r-f0042, block 5/53") "an in-progress upload is shown, not as halted"
+
 # START_STACK.ps1 (dev and packaged) must clear the halt before starting the task.
 # (Running it here would start the real scheduled task, so its text is checked instead.)
 Write-Host "== START_STACK.ps1"
