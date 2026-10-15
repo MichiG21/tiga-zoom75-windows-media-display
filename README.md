@@ -141,7 +141,6 @@ The current release is still a **public beta**. Additional testing across Window
 
 ### Known behavior / limitations
 
-- Firefox + YouTube may expose title and thumbnail but no usable total duration.
 - The TIGA can briefly show its built-in roar animation during a custom-image upload.
 - If a BLE upload is interrupted partway through, fully power-cycle the keyboard before attempting another media upload.
 - The renderer keeps the historical filename `tiga_windows_nowplaying_v2.py` internally for compatibility with the existing stack.

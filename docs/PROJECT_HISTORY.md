@@ -458,11 +458,32 @@ content; repeated media-query failures bypass idle handling and leave the last m
 indefinitely; the active stream is tracked by Git but overwritten during normal source
 execution; the production Rust app has **no committed lockfile**.
 
+**Confirmed on hardware, 2026-10-15: device selection by name.** The uploader took the
+first peripheral whose name contained `zoom75`. On this PC **two** devices match, and only
+one exposes the media service (issue #14). Every connection attempt that evening:
+
+| Local time | Address | Result |
+|---|---|---|
+| 21:05:46 | `07:01:88:B3:66:1B` | connected, upload started (then interrupted, see §7.1) |
+| 21:08:53 | `1B:A3:A9:10:13:5D` | connected, `control char missing` (exit 11) |
+| 21:09:13 | `1B:A3:A9:10:13:5D` | connected, `control char missing` (exit 11) |
+| 21:09:37 | `1B:A3:A9:10:13:5D` | connected, `control char missing` (exit 11) |
+| 21:15:15 | `1B:A3:A9:10:13:5D` | connected, `control char missing` (exit 11) |
+| 21:15:29 | `07:01:88:B3:66:1B` | upload completed in 8.71 s |
+| 21:35:54 | `07:01:88:B3:66:1B` | upload completed in 8.42 s |
+
+Every `control char missing` was `1B:A3:A9:10:13:5D`; every upload was `07:01:88:B3:66:1B`.
+Both addresses were stable across two keyboard power cycles. **What `1B:A3:A9:10:13:5D`
+actually is remains unknown.** It connects and has no media service; the fix on
+`fix/device-selection` logs the services it does expose, so the next run against it should
+say more. Fixed on that branch by qualifying a device by service rather than name; not yet
+run on hardware.
+
 **Suspected but unproven.** These are concrete implementation limitations, but which one
 causes any given field failure was never established: the uploader selects only the first
-Bluetooth adapter, scans for a fixed 5 s, matches by name rather than device identity, always
-uses 182-byte writes without checking usable MTU, uses fixed timeouts, and does not actively
-recover a dropped connection while the stream is unchanged. Also: only Windows' *current*
+Bluetooth adapter, scans for a fixed 5 s, always uses 182-byte writes without checking
+usable MTU, uses fixed timeouts, and does not actively recover a dropped connection while
+the stream is unchanged. Also: only Windows' *current*
 session is queried — the helper does not enumerate sessions to find another actively playing
 source, and a thumbnail retrieval failure fails the whole snapshot.
 
@@ -479,6 +500,67 @@ details, frame IDs, freshness decisions, last acknowledged block — i.e. fix F)
 recovery (A) → fix freshness and command handling (B, C) → replace the fixed shutdown wait
 with acknowledgement (D) → harden startup/install (E) → improve discovery and connection
 handling → lock dependencies → then rendering defects (G).
+
+### 7.1 First hardware session of the fixed build, 2026-10-15
+
+Source: `logsle.log`, `renderer.log` and `startup_supervisor.log` from the
+`tiga-fresh-test` install (a clone of `main` after the bug A merge), 21:05–21:49 local
+time, plus Michi's observations at the keyboard. Times below are local (UTC+2).
+
+**Measured uploads.** Stream 220,649 bytes / 1,239 writes / 53 PROGRESS blocks,
+intra-block pace 0 ms. 19 uploads completed, between **8.42 s and 10.01 s**. The two
+quoted that evening were 8.71 s and 9.85 s. The 8.71 s run was linear at about
+**0.154 s per block** (block 53 ACKed at 8.15 s), then ~0.56 s waiting for completion.
+The two fastest (8.71 s, 8.42 s) were each the first upload on a new connection; the
+other 17, later uploads on the same connection, took 9.49–10.01 s. That is two samples
+and may be coincidence; it is recorded, not explained.
+
+**Interrupted transfers, cause unknown.** Two, both PROGRESS timeouts after CONTROL2:
+
+| Time | Upload on this connection | Failed at | After |
+|---|---|---|---|
+| 21:05:49 | 1st | block 5/53 (last ACKed 4) | 3.68 s |
+| 21:39:48 | 2nd (previous one completed at 21:36:05) | block 3/53 (last ACKed 2) | 4.21 s |
+
+The keyboard stopped acknowledging. Intra-block pace was 0 ms, the same as every
+successful upload, so pace is not the obvious cause. The first may be explained by the
+keyboard being in a bad state after the previous stack was stopped; that is a guess. The
+second came 3.7 minutes after a clean upload on the same connection, so that explanation
+does not obviously cover it. **Cause unknown for both.** The second was not part of the
+evening's narrative at the time of writing; its halt (`uploader_halted.json`, 21:39:54)
+was still in place when the logs were read.
+
+**What happened after the first one — read carefully.** Bug A's halt fired correctly
+(21:05:53, `session-open`). After a power cycle and `START_STACK` (halt cleared 21:08:48),
+three attempts failed — **all three on the wrong device** (`1B:A3:A9:10:13:5D`), so they
+say nothing about whether that power cycle worked — and the supervisor halted as `gave-up`
+at 21:09:40. The stock roar stayed visible after that first power cycle, which may mean
+the LCD had not cleared, but the logs cannot separate that from the wrong-device bug.
+After a second power cycle (supervisor start 21:15:10) it worked, though even then the
+first attempt hit the wrong device. **"A shallow power cycle is insufficient" is not a
+finding.** It is unproven either way.
+
+**Verified on hardware:**
+
+- **#4 (bug A):** a *real* interrupted transfer halted, was not retried, wrote
+  `uploader_halted.json`, kept the renderer running, and recovered via `START_STACK`.
+  The killed-process / session-marker path was **not** tested.
+- **#6 (bug C):** repeated identical commands are acted on. Verified by writing the
+  command file by hand (`standby test1`, then `standby test2`; renderer log 21:30:31 and
+  21:31:38). The GUI path was blocked: the display-control utility reported the request
+  but no command file appeared (see the issue filed for it).
+- **#9 (bug F):** logs keep history across restarts, with run and frame IDs.
+- **#10 (bug G):** a 34-character unbroken title wraps instead of running off the screen.
+- **The Unicode crash fix:** a Japanese title (`トーキョーレギー`) rendered, as empty
+  boxes, without crashing the renderer. The boxes are a font-fallback gap, not a crash.
+
+**Not verified on hardware:**
+
+- **#5 (bug B):** a restart with Spotify already playing released standby in 2 s through
+  the *old* "timeline advancing" path. The new 15-second rule never fired. The original
+  bug was only ever reproduced synthetically, and **no real-world provider is known to
+  report a frozen timeline.** Fixed in code, unproven in the field.
+- **#8 (bug E):** paths with spaces. Not tried.
 
 ---
 
