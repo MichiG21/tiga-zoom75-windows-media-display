@@ -409,6 +409,40 @@ def read_control_command(last_text: str | None):
     return None, raw
 
 
+DIVIDER_Y = 135
+TITLE_STEP, ARTIST_STEP, ALBUM_STEP = 20, 21, 17
+
+
+def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w):
+    """Return (y, text, font, fill) for the title/artist/album lines.
+
+    The album starts below the last artist line and gets only the lines that fit
+    above the divider. It used to be clamped to y=110, which drew it over a
+    two-line artist (issue #10).
+    """
+    items = []
+
+    y = 9
+    for line in fit_text(draw, title, title_font, max_text_w, 3):
+        items.append((y, line, title_font, (242, 242, 245)))
+        y += TITLE_STEP
+
+    y = max(y + 4, 72)
+    for line in fit_text(draw, secondary, artist_font, max_text_w, 2):
+        items.append((y, line, artist_font, (224, 224, 230)))
+        y += ARTIST_STEP
+
+    if tertiary:
+        album_y = y + 1
+        room = min(2, (DIVIDER_Y - album_y) // ALBUM_STEP)
+        if room > 0:
+            for line in fit_text(draw, tertiary, album_font, max_text_w, room):
+                items.append((album_y, line, album_font, (180, 180, 188)))
+                album_y += ALBUM_STEP
+
+    return items
+
+
 def render_media(media: dict) -> Image.Image:
     bg = (12, 12, 14)
     canvas = Image.new("RGB", (WIDTH, HEIGHT), bg)
@@ -439,26 +473,12 @@ def render_media(media: dict) -> Image.Image:
 
     tertiary = media.get("album") or source_name(media.get("source", ""))
 
-    title_lines = fit_text(draw, title, title_font, max_text_w, 3)
-    y = 9
-    for line in title_lines:
-        draw.text((text_x, y), line, font=title_font, fill=(242, 242, 245))
-        y += 20
+    for y, line, font, fill in layout_text_block(
+        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w
+    ):
+        draw.text((text_x, y), line, font=font, fill=fill)
 
-    artist_lines = fit_text(draw, secondary, artist_font, max_text_w, 2)
-    y = max(y + 4, 72)
-    for line in artist_lines:
-        draw.text((text_x, y), line, font=artist_font, fill=(224, 224, 230))
-        y += 21
-
-    if tertiary:
-        album_lines = fit_text(draw, tertiary, album_font, max_text_w, 2)
-        album_y = min(y + 1, 110)
-        for line in album_lines:
-            draw.text((text_x, album_y), line, font=album_font, fill=(180, 180, 188))
-            album_y += 17
-
-    draw.line((8, 135, 312, 135), fill=(45, 45, 50), width=1)
+    draw.line((8, DIVIDER_Y, 312, DIVIDER_Y), fill=(45, 45, 50), width=1)
     draw.text((8, 146), "NOW PLAYING", font=label_font, fill=(210, 210, 216))
 
     duration = format_duration_ms(media.get("duration_ms", 0))

@@ -142,6 +142,47 @@ class TextLayoutTests(unittest.TestCase):
         out = self.fit("one two", lines=1)
         self.assertEqual(out, ["one two"])
 
+    def layout(self, title, artist, album):
+        r = self.r
+        fonts = (r.find_font(18, True), r.find_font(18), r.find_font(16))
+        return r.layout_text_block(self.draw, title, artist, album, *fonts, self.MAX_W)
+
+    def role(self, item):
+        return {242: "title", 224: "artist", 180: "album"}[item[3][0]]
+
+    def assert_no_overlap(self, items):
+        step = {"title": self.r.TITLE_STEP, "artist": self.r.ARTIST_STEP, "album": self.r.ALBUM_STEP}
+        prev_bottom = 0
+        for item in items:
+            self.assertGreaterEqual(item[0], prev_bottom, items)
+            prev_bottom = item[0] + step[self.role(item)]
+        self.assertLessEqual(prev_bottom, self.r.DIVIDER_Y, items)
+
+    def count(self, items, role):
+        return sum(1 for i in items if self.role(i) == role)
+
+    def test_album_does_not_overlap_two_line_artist(self):
+        items = self.layout("Title", "A very long list of featured artists on this track", "The Album Name")
+        self.assertEqual(self.count(items, "artist"), 2)
+        self.assertEqual(self.count(items, "album"), 1)
+        self.assert_no_overlap(items)
+
+    def test_worst_case_layout_stays_above_divider(self):
+        items = self.layout(
+            "Word " * 20,
+            "A very long list of featured artists on this track",
+            "A rather long album title that needs two lines",
+        )
+        self.assertEqual(self.count(items, "title"), 3)
+        self.assertEqual(self.count(items, "artist"), 2)
+        self.assertEqual(self.count(items, "album"), 1)
+        self.assert_no_overlap(items)
+
+    def test_album_gets_two_lines_when_artist_is_short(self):
+        items = self.layout("Title", "Artist", "A rather long album title that needs two lines")
+        self.assertEqual(self.count(items, "album"), 2)
+        self.assert_no_overlap(items)
+
 
 def media(state="Playing", position=30_000, title="Song", **extra):
     m = {
