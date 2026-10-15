@@ -541,3 +541,35 @@ The new folder map: `tiga-fresh-test` is live, `tiga-dev` is the development wor
 `tiga_ble_re_tools` is the fallback, and `tiga-windows-media-display` is stale and
 awaiting deletion. The ground rules now include TASKS_B's: work only in `tiga-dev`, no
 START/STOP_STACK, check PowerShell tests before running them, dry runs allowed.
+
+## Follow-up: two missed items
+
+**1. Unplugging USB is not a power cycle** (`583faf9`). Every place the halt instruction
+appears now says: use the keyboard's **power switch**; unplugging USB does not
+power-cycle the TIGA because it has a battery; if the display stays stuck, **disconnect
+the battery**. That covers:
+
+- the supervisor's halt instruction (`tiga_supervisor_common.ps1`), which is what
+  `STATUS_STACK.ps1` shows and `uploader_halted.json` stores
+- the "halted at startup" supervisor log line
+- the uploader's exit meanings for codes 20 and 21, and its session-marker refusal
+- `START_STACK.ps1`, dev and packaged
+- README, `BUILD_AND_RECOVERY.md`, `RETRY_RECOVERY.md` and `RELEASE_CHECKLIST.md` (Phase 4)
+
+PROJECT_HISTORY §7.1 now records the two attempts. The first was a ~5 s USB unplug,
+which did not reset the keyboard (the roar stayed). The second was a battery disconnect,
+which did. It also says what is still open: whether the power switch alone is enough
+after an interrupted transfer isn't shown by tonight's record. The same section said
+"after a power cycle"; that was wrong, because the first attempt was not a power cycle.
+
+Tests after the change: 28 Rust, both PowerShell suites, all passing. The uploader binary
+still isn't rebuilt (blocked, as before), so the new exit-meaning text appears only after
+your `cargo build --release`.
+
+**2. #7 commented, not closed.** TASKS_B Task 5 has no #7 line, so the comment uses
+Task 6's observation. Standby + Shut Down was pressed on the ack-wait build. It did
+**not** shut down on a timer: it waited for the renderer's ack, got none, and asked. The
+command never reached the renderer (#15), so the delivery-ack stage and the actual
+shutdown were never exercised. Verdict: partly exercised, happy path unverified. Also
+added to §7.1's "not verified" list (`(this)` commit). Correct me if you had a
+different #7 result in mind.

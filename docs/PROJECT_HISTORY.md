@@ -568,6 +568,9 @@ nothing else about "how deep a power cycle is needed" is established.
   the *old* "timeline advancing" path. The new 15-second rule never fired. The original
   bug was only ever reproduced synthetically, and **no real-world provider is known to
   report a frozen timeline.** Fixed in code, unproven in the field.
+- **#7 (bug D):** partly exercised. Standby + Shut Down did not shut down on a timer; it
+  waited for the renderer's ack, got none, and asked. But the command never reached the
+  renderer (#15), so the delivery-ack stage and the actual shutdown were never reached.
 - **#8 (bug E):** paths with spaces. Not tried.
 
 ---
