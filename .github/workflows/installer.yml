@@ -85,7 +85,8 @@ jobs:
           Copy-Item -Force ".\tiga_windows_media_snapshot.exe" $internal
           Copy-Item -Force ".\tiga_display_control.exe" $internal
           Copy-Item -Force ".\windows_ble_probe\target\release\tiga_stream_watch_flow.exe" $internal
-          Copy-Item -Force ".\extracted\session_01_bulk_stream.bin" (Join-Path $internal "extracted")
+          # The active stream is not tracked (runtime output); stage it from the template.
+          Copy-Item -Force ".\extracted\session_01_bulk_stream.redgreen-backup.bin" (Join-Path $internal "extracted\session_01_bulk_stream.bin")
           Copy-Item -Force ".\extracted\session_01_bulk_stream.redgreen-backup.bin" (Join-Path $internal "extracted")
 
           Copy-Item -Force ".\installer\runtime\tiga_startup_supervisor.ps1" $stage

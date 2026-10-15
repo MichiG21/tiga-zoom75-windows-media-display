@@ -108,6 +108,13 @@ $Snapshot = Join-Path $RuntimeRoot "tiga_windows_media_snapshot.exe"
 $BleExe   = Join-Path $RuntimeRoot "tiga_stream_watch_flow.exe"
 $Stream   = Join-Path $RuntimeRoot "extracted\session_01_bulk_stream.bin"
 
+# The installer stages the stream, but recreate it from the template if it was deleted.
+$StreamTemplate = Join-Path $RuntimeRoot "extracted\session_01_bulk_stream.redgreen-backup.bin"
+if ((-not (Test-Path $Stream)) -and (Test-Path $StreamTemplate)) {
+    Copy-Item -LiteralPath $StreamTemplate -Destination $Stream
+    Write-SupervisorLog "Seeded $Stream from $StreamTemplate."
+}
+
 foreach ($required in @($Renderer, $Snapshot, $BleExe, $Stream)) {
     if (-not (Test-Path $required)) {
         Write-SupervisorLog "Required file missing: $required"

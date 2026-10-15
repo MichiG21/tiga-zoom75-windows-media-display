@@ -110,6 +110,14 @@ $BleExe = Join-Path $BleWorkDir "target\release\tiga_stream_watch_flow.exe"
 $BleStreamRelative = "..\extracted\session_01_bulk_stream.bin"
 $StreamAbsolute = Join-Path $Root "extracted\session_01_bulk_stream.bin"
 
+# The active stream is runtime output and not tracked by Git; seed it from the
+# committed template so a fresh checkout starts (issue #10).
+$StreamTemplate = Join-Path $Root "extracted\session_01_bulk_stream.redgreen-backup.bin"
+if ((-not (Test-Path $StreamAbsolute)) -and (Test-Path $StreamTemplate)) {
+    Copy-Item -LiteralPath $StreamTemplate -Destination $StreamAbsolute
+    Write-SupervisorLog "Seeded $StreamAbsolute from $StreamTemplate."
+}
+
 foreach ($required in @($Renderer, $Snapshot, $BleExe, $StreamAbsolute)) {
     if (-not (Test-Path $required)) {
         Write-SupervisorLog "Required file missing: $required"

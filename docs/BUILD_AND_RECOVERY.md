@@ -27,6 +27,7 @@ cargo build --release --bin tiga_stream_watch_flow
 - `windows_nowplaying_preview.png`
 - `tiga_display_command.txt`
 - `logs\*.log` (appended across restarts, rotated to `*.log.1`..`.3` at 5 MB)
+- `extracted\session_01_bulk_stream.bin` (the active upload stream; seeded from `session_01_bulk_stream.redgreen-backup.bin`, then rewritten on every frame)
 - `extracted\session_01_bulk_stream.windows_nowplaying.bin`
 - `extracted\session_01_bulk_stream.bin.frame` (ID of the last rendered frame)
 - `extracted\session_01_bulk_stream.bin.delivered` (last frame the keyboard confirmed)

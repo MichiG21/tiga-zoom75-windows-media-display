@@ -323,7 +323,7 @@ Other development commands:
 
 ### Manual BLE test
 
-From the `windows_ble_probe` folder after building:
+From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_stream.bin` is generated at runtime and is not in Git; on a fresh checkout, run the renderer once or copy `extracted\session_01_bulk_stream.redgreen-backup.bin` to that name first.
 
 ```powershell
 .\target\release\tiga_stream_watch_flow.exe --stream "..\extracted\session_01_bulk_stream.bin" --intra-block-ms 0 --confirm-flow-watch
