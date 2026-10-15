@@ -14,6 +14,8 @@ $RendererOut   = Join-Path $Logs "renderer.log"
 $RendererErr   = Join-Path $Logs "renderer_error.log"
 $BleOut        = Join-Path $Logs "ble.log"
 $BleErr        = Join-Path $Logs "ble_error.log"
+# Present while the uploader is halted (issue #4); START_STACK.ps1 removes it.
+$HaltFile      = Join-Path $Logs "uploader_halted.json"
 
 . (Join-Path $PSScriptRoot "tiga_supervisor_common.ps1")
 
@@ -46,8 +48,7 @@ if (-not $createdNew) {
     exit 0
 }
 
-$rendererProc = $null
-$bleProc = $null
+$state = New-SupervisorState
 
 function Start-Renderer {
     Write-SupervisorLog "Starting packaged renderer."
@@ -61,27 +62,12 @@ function Start-BleUploader {
 
 try {
     Write-SupervisorLog "TIGA packaged startup supervisor launched (pid $PID)."
-    while ($true) {
-        if (($null -eq $rendererProc) -or $rendererProc.HasExited) {
-            if ($null -ne $rendererProc) {
-                Write-SupervisorLog "Renderer exited with code $($rendererProc.ExitCode); restarting in 8s."
-                Start-Sleep -Seconds 8
-            }
-            $rendererProc = Start-Renderer
-        }
-        if (($null -eq $bleProc) -or $bleProc.HasExited) {
-            if ($null -ne $bleProc) {
-                Write-SupervisorLog "BLE uploader exited with code $($bleProc.ExitCode); restarting in 8s."
-                Start-Sleep -Seconds 8
-            }
-            $bleProc = Start-BleUploader
-        }
-        Start-Sleep -Seconds 2
-    }
+    Invoke-SupervisorLoop -State $state -StartRenderer { Start-Renderer } -StartUploader { Start-BleUploader } `
+        -HaltFile $HaltFile -StreamPath $Stream
 }
 finally {
     Write-SupervisorLog "Supervisor stopping; cleaning up children."
-    foreach ($proc in @($rendererProc, $bleProc)) {
+    foreach ($proc in @($state.Renderer, $state.Uploader)) {
         try { Stop-LoggedProcess $proc } catch {}
     }
     try { $mutex.ReleaseMutex() } catch {}
