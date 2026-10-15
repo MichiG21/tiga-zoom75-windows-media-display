@@ -184,6 +184,16 @@ try {
     Remove-Job $clearer -Force
 }
 
+# START_STACK.ps1 (dev and packaged) must clear the halt before starting the task.
+# (Running it here would start the real scheduled task, so its text is checked instead.)
+Write-Host "== START_STACK.ps1"
+foreach ($script in @("START_STACK.ps1", "installer\runtime\START_STACK.ps1")) {
+    $text = Get-Content -Raw (Join-Path $RepoRoot $script)
+    $clear = $text.IndexOf("Clear-UploaderHalt")
+    $start = $text.IndexOf("Start-ScheduledTask")
+    Assert-True ($clear -ge 0 -and $clear -lt $start) "$script clears the halt before Start-ScheduledTask"
+}
+
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }
 Write-Host "All supervisor retry checks passed."

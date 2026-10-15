@@ -40,4 +40,4 @@ cargo build --release --locked --bin tiga_stream_watch_flow
 
 ## BLE recovery
 
-If an upload is interrupted in the middle and later attempts time out waiting for `PROGRESS`, stop the stack and fully power-cycle the keyboard before another upload attempt. Do not flash firmware or factory-reset the board as a first-line recovery step.
+If an upload is interrupted after CONTROL2 (the point where the keyboard shows its upload animation), the supervisor halts the uploader instead of retrying, and writes `logs\uploader_halted.json`. `STATUS_STACK.ps1` shows why. Power-cycle the keyboard, then run `START_STACK.ps1`, which clears the halt. Do not flash firmware or factory-reset the board as a first-line recovery step. See `docs/design/RETRY_RECOVERY.md` for the exit codes and the full policy.

@@ -258,9 +258,23 @@ If the custom frame never appears, use the installed **Status** shortcut and ins
 
 Logs in `logs\` are appended across restarts and rotated at 5 MB (`renderer.log.1` ... `.3`). Every process start is stamped with a run ID, and every frame has a frame ID (for example `renderer-20261015-091500-a1b2c3-f0004`) that appears in `renderer.log` when it is rendered and in `ble.log` at `UPLOAD START`, `UPLOAD COMPLETE` or `UPLOAD FAILED`, so the two logs can be matched up.
 
-### BLE upload was interrupted
+### BLE upload was interrupted (uploader halted)
 
-If an upload is stopped halfway through and later uploads time out, fully power-cycle the keyboard before trying again.
+If an upload stops partway through, the keyboard can be left holding an unfinished media session, and retrying makes that worse. So the stack does **not** retry it. The BLE uploader halts, the Now Playing renderer keeps running, and **Status** reports:
+
+```
+Status        : HALTED - transfer interrupted after CONTROL2 ...
+Action        : Power-cycle the keyboard (...), then run START_STACK.ps1.
+```
+
+To recover:
+
+1. Power-cycle the keyboard. If the display stays white or frozen, do a full battery power-cycle.
+2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have power-cycled it": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
+
+The uploader also halts, without needing a power cycle, if it cannot reach the keyboard after several attempts (8, 16, 32 and 60 seconds apart). Check that Bluetooth is on and the keyboard is awake, then run **Start Display**.
+
+Stopping the stack (or shutting Windows down) in the middle of an upload counts as an interruption too. The next start will report it as halted.
 
 ### Media is detected but duration is missing
 
