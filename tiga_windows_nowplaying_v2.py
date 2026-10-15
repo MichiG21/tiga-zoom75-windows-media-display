@@ -46,6 +46,9 @@ FRESH_POSITION_ADVANCE_MS = 1500
 # media that was already playing at startup stayed on standby indefinitely (issue #5).
 STEADY_PLAYING_RELEASE_SECONDS = 15.0
 COMMAND_FILE = HERE / "tiga_display_command.txt"
+# Written after a command's frame is installed; the control utility waits for it
+# before "Standby + Shut Down" (issue #7).
+COMMAND_ACK_FILE = HERE / "tiga_display_command.ack"
 COVER_SIZE = 122
 
 # Experimental (PROJECT_HISTORY.md section 3.4): a single-frame DLX container instead
@@ -384,14 +387,34 @@ class FreshnessGate:
         return None
 
 
-def write_display(img: Image.Image, reason: str, preview: bool = True) -> str:
+def write_display(img: Image.Image, reason: str, preview: bool = True) -> tuple[str, str]:
+    """Render, install, and return (frame_id, crc32) of the installed stream."""
     frame_id = next_frame_id()
     log(f"FRAME {frame_id} rendered ({reason})")
     if preview:
         img.save(PREVIEW)
     crc = install_image(img, frame_id, reason)
     log(f"FRAME {frame_id} installed crc32={crc}")
-    return frame_id
+    return frame_id, crc
+
+
+def write_command_ack(command_text: str, command: str, frame: tuple[str, str]):
+    """Tell the control utility which frame (by CRC) answers its command.
+
+    It then waits for <stream>.delivered to show the same CRC, which the uploader
+    writes only after the keyboard's completion notification.
+    """
+    frame_id, crc = frame
+    text = (
+        f"command_text={command_text}\n"
+        f"command={command}\n"
+        f"frame_id={frame_id}\n"
+        f"crc32={crc}\n"
+        f"handled_at={datetime.now().astimezone().isoformat(timespec='seconds')}\n"
+    )
+    tmp = COMMAND_ACK_FILE.with_suffix(".ack.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, COMMAND_ACK_FILE)
 
 
 def read_control_command(last_text: str | None):
@@ -672,21 +695,21 @@ def main():
             if command is not None:
                 if command == "standby":
                     mode = "standby"
-                    write_display(render_standby("Manual standby"), "control: standby")
+                    frame = write_display(render_standby("Manual standby"), "control: standby")
                     active_fp = None
                     active_render_key = None
                     log("CONTROL -> manual standby")
 
                 elif command == "black":
                     mode = "black"
-                    write_display(render_black(), "control: black")
+                    frame = write_display(render_black(), "control: black")
                     active_fp = None
                     active_render_key = None
                     log("CONTROL -> black screen")
 
                 elif command == "auto":
                     mode = "auto"
-                    write_display(render_standby("Waiting for fresh playback"), "control: auto")
+                    frame = write_display(render_standby("Waiting for fresh playback"), "control: auto")
                     active_fp = None
                     active_render_key = None
                     nonplaying_since = None
@@ -697,6 +720,8 @@ def main():
                         gate.arm(None)
 
                     log("CONTROL -> automatic mode re-armed")
+
+                write_command_ack(last_command_text, command, frame)
 
             if mode != "auto":
                 time.sleep(POLL_INTERVAL)

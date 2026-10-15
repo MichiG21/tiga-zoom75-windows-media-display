@@ -303,6 +303,24 @@ where
     }
 }
 
+/// The renderer re-rendered pixels identical to the last completed upload (Standby
+/// pressed twice in the same minute, say). Nothing is sent, but the new frame ID is
+/// recorded as delivered: the keyboard already shows exactly these bytes, and the
+/// control utility waits for its frame ID before shutting down (issue #7).
+fn note_already_displayed(stream_path: &Path, last_crc: &str, last_frame_id: &mut String) -> bool {
+    if last_crc.is_empty() {
+        return false;
+    }
+    let id = frame_id_for(stream_path, last_crc);
+    if id.starts_with("unknown(") || id == *last_frame_id {
+        return false;
+    }
+    log!("ALREADY DISPLAYED frame={id} crc32={last_crc} (identical to the last upload)");
+    record_delivery(stream_path, &id, last_crc, 0.0);
+    *last_frame_id = id;
+    true
+}
+
 async fn upload_stream<S>(
     peripheral: &btleplug::platform::Peripheral,
     control: &btleplug::api::Characteristic,
@@ -477,12 +495,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     log!("Connected once. Notifications active.");
 
     let mut last_uploaded: Option<Vec<u8>> = None;
+    let mut last_crc = String::new();
+    let mut last_frame_id = String::new();
 
     loop {
         let stream = fs::read(&stream_path)?;
         validate_stream(&stream, allow_single_frame)?;
 
         if last_uploaded.as_deref() == Some(stream.as_slice()) {
+            note_already_displayed(&stream_path, &last_crc, &mut last_frame_id);
             if once { break; }
             sleep(Duration::from_millis(250)).await;
             continue;
@@ -518,6 +539,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         record_delivery(&stream_path, &frame_id, &crc, elapsed);
 
         last_uploaded = Some(stream);
+        last_crc = crc;
+        last_frame_id = frame_id;
 
         if once {
             break;
@@ -571,6 +594,33 @@ mod tests {
         let delivered = fs::read_to_string(sidecar_path(&stream, ".delivered")).unwrap();
         assert_eq!(sidecar_value(&delivered, "frame_id"), Some("r-f0001"));
         assert_eq!(sidecar_value(&delivered, "elapsed_s"), Some("7.50"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn identical_rerender_is_recorded_once() {
+        let dir = std::env::temp_dir().join(format!("tiga_redisplay_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        let mut last_id = "r-f0001".to_string();
+
+        // Sidecar still names the uploaded frame: nothing to record.
+        fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0001\ncrc32=0badf00d\n").unwrap();
+        assert!(!note_already_displayed(&stream, "0badf00d", &mut last_id));
+
+        // Same bytes, new frame ID: recorded once.
+        fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0002\ncrc32=0badf00d\n").unwrap();
+        assert!(note_already_displayed(&stream, "0badf00d", &mut last_id));
+        assert!(!note_already_displayed(&stream, "0badf00d", &mut last_id));
+        let delivered = fs::read_to_string(sidecar_path(&stream, ".delivered")).unwrap();
+        assert_eq!(sidecar_value(&delivered, "frame_id"), Some("r-f0002"));
+
+        // Sidecar already describes a different (not yet uploaded) stream: not recorded.
+        fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0003\ncrc32=11111111\n").unwrap();
+        assert!(!note_already_displayed(&stream, "0badf00d", &mut last_id));
+
+        // Nothing uploaded yet: never recorded.
+        assert!(!note_already_displayed(&stream, "", &mut String::new()));
         fs::remove_dir_all(&dir).unwrap();
     }
 
