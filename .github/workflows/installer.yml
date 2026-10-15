@@ -90,6 +90,7 @@ jobs:
           Copy-Item -Force ".\extracted\session_01_bulk_stream.redgreen-backup.bin" (Join-Path $internal "extracted")
 
           Copy-Item -Force ".\installer\runtime\tiga_startup_supervisor.ps1" $stage
+          Copy-Item -Force ".\tiga_supervisor_common.ps1" $stage
           Copy-Item -Force ".\installer\runtime\START_STACK.ps1" $stage
           Copy-Item -Force ".\installer\runtime\STOP_STACK.ps1" $stage
           Copy-Item -Force ".\installer\runtime\STATUS_STACK.ps1" $stage
