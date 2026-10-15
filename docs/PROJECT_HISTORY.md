@@ -473,11 +473,13 @@ one exposes the media service (issue #14). Every connection attempt that evening
 | 21:35:54 | `07:01:88:B3:66:1B` | upload completed in 8.42 s |
 
 Every `control char missing` was `1B:A3:A9:10:13:5D`; every upload was `07:01:88:B3:66:1B`.
-Both addresses were stable across two keyboard power cycles. **What `1B:A3:A9:10:13:5D`
-actually is remains unknown.** It connects and has no media service; the fix on
-`fix/device-selection` logs the services it does expose, so the next run against it should
-say more. Fixed on that branch by qualifying a device by service rather than name; not yet
-run on hardware.
+Both addresses were stable across two keyboard power cycles. **Identified later that
+evening:** `1B:A3:A9:10:13:5D` advertises as `"Zoom75 Tiga BT1"`, the display as
+`"Zoom75 Tiga"` (§7.1, second part). BT1 is almost certainly the keyboard's Bluetooth
+*typing* connection, pairing slot 1. What services it exposes is still not logged: on the
+one run that probed it, the connect failed. Fixed on `fix/device-selection` by qualifying
+a device by service rather than name, and by trying the exact display name first; the
+service check ran on hardware 22:59–23:13 (§7.1).
 
 **Suspected but unproven.** These are concrete implementation limitations, but which one
 causes any given field failure was never established: the uploader selects only the first
@@ -503,7 +505,7 @@ handling → lock dependencies → then rendering defects (G).
 
 ### 7.1 First hardware session of the fixed build, 2026-10-15
 
-Source: `logsle.log`, `renderer.log` and `startup_supervisor.log` from the
+Source: `logs\ble.log`, `renderer.log` and `startup_supervisor.log` from the
 `tiga-fresh-test` install (a clone of `main` after the bug A merge), 21:05–21:49 local
 time, plus Michi's observations at the keyboard. Times below are local (UTC+2).
 
@@ -543,10 +545,11 @@ was still in place when the logs were read.
 - **Second attempt: disconnecting the battery. That did reset it.** After it (supervisor
   start 21:15:10) uploads worked, though even then the first attempt hit the wrong device.
 
-So the recovery instruction now says: use the power switch, not USB; if the display stays
-stuck, disconnect the battery. Tonight's record does not say whether the power switch
-alone would have been enough after an interrupted transfer. Unplugging USB is ruled out;
-nothing else about "how deep a power cycle is needed" is established.
+**Correction (written later the same night): the TIGA has no power switch.** Commit
+`583faf9` told users to "use the power switch", and an earlier version of this paragraph
+asked whether the power switch alone would be enough. Neither makes sense: the only way to
+reset the keyboard is to open the case and disconnect the battery from the PCB. How long
+it must stay disconnected is recorded in the second part below.
 
 **Verified on hardware:**
 
@@ -572,6 +575,105 @@ nothing else about "how deep a power cycle is needed" is established.
   waited for the renderer's ack, got none, and asked. But the command never reached the
   renderer (#15), so the delivery-ack stage and the actual shutdown were never reached.
 - **#8 (bug E):** paths with spaces. Not tried.
+
+#### Second part: battery resets and `fix/device-selection` on hardware, 22:44–23:26
+
+Sources: `tiga-fresh-test\logs\` (the live install, `main`, 2500 ms block timeout) and
+`tiga-dev\logs\` (the scheduled task pointed at `fix/device-selection` from 22:59 to
+23:13), plus Michi's account of what he did at the keyboard. `ble.log` stamps events in
+UTC; times here are local (UTC+2).
+
+**The second "zoom75" device is identified.** At 23:06 the scan logged
+`CANDIDATE name="Zoom75 Tiga BT1" address=1B:A3:A9:10:13:5D` and
+`CANDIDATE name="Zoom75 Tiga" address=07:01:88:B3:66:1B`. BT1 is almost certainly the
+keyboard's own Bluetooth typing connection, pairing slot 1. The old "name contains
+zoom75" match caught both. **Hypothesis, unconfirmed:** this may explain the community
+tester's failures, since he used the TIGA as a Bluetooth keyboard and would therefore
+have had the BT1 device paired.
+
+**Device selection by service works on hardware (#14).**
+
+- *Rejection path, 23:06.* BT1 was seen first, the connect failed
+  (`REJECTED … connect failed: Not connected`) about 11 s later, then `07:01…` was
+  selected and the upload completed in 8.60 s. Because the connect failed, the
+  `exposes …` line that would list BT1's services was never produced.
+- *Address cache, 23:09.* The uploader tried `07:01…` first (`last device that
+  completed an upload`) and selected it with no detour.
+- *Since then:* candidates are ranked by name: cached address, then exactly
+  `Zoom75 Tiga`, then other zoom75 names, then `… BT<n>` last (not skipped; a firmware
+  variant might name things differently, and the service check stays the real test).
+  That removes the 11 s detour. Offline tests only.
+
+**The keyboard is invisible for a while after a stack restart (no battery reset).**
+Seen three times, each time with the scan finding no candidate at all (code 10) and the
+supervisor's retry recovering without a halt:
+
+| Stack start | Code-10 scans | Keyboard first seen | After start |
+|---|---|---|---|
+| 21:35:35 | 1 | 21:35:54 | ~19 s |
+| 23:09:12 | 2 | 23:09:50 (found within 1 s of that scan starting) | ~38 s |
+| 23:15:15 | 2 (this run's first scan began only at 23:15:41) | 23:16:22 | ~67 s |
+
+The most likely explanation is that the keyboard is still holding the previous
+connection (the uploader just killed by STOP_STACK) and isn't advertising until that link
+times out. **Unconfirmed.** For it: the three starts that followed a battery disconnect
+(22:44, 22:46, 22:49) all found the keyboard within 5 s. Against, or at least not
+explained: the 22:59 start, a few minutes after the live stack's last upload (22:57),
+found it within 2 s. When the live stack was stopped before 22:59 isn't logged.
+Since then, a scan that has seen nothing at all keeps going up to 15 s instead of 5 s.
+In all three cases above that would most likely have turned two code-10 failures into
+one, not zero; absorbing 23:09 or 23:15 completely would need a 30–60 s first scan.
+Polish only: the retry already recovers on its own.
+
+**There is no power switch, and the battery-disconnect duration matters.** The TIGA can
+only be reset by opening the case and disconnecting the battery from the PCB. One
+observation each:
+
+- a **10–15 s** disconnect before 22:44 did **not** clear the keyboard: 22:44 and 22:46
+  both stalled at block 11/53
+- a **30 s** disconnect before 22:49 did: 22:49 completed normally in 8.70 s
+- Michi's older notes say 30–60 s, pressing a few keys while disconnected to drain the
+  remaining charge
+
+So **30 s is a working minimum, not a proven threshold.** Every recovery instruction now
+says: disconnect the battery for at least 30 s, pressing a few keys.
+
+**Two failure signatures, both on the correct device (`07:01…`):**
+
+- **Slowing** — 22:44 and 22:46. Block 5 was ACKed at 2.35 s and 2.97 s (healthy: 0.7–1.6 s),
+  block 10 at 12.02 s and 11.58 s (healthy: 1.5–2.4 s), then no PROGRESS for block 11
+  within 2.5 s. The log prints only every fifth block, so "each ACK slower than the last"
+  can't be read directly; but each of blocks 6–10 had to arrive within the 2.5 s
+  timeout, and together they took about 9.6 s, so **at least four of those five took
+  roughly 1.8–2.5 s each** (healthy: ~0.15 s). Sustained slowness, not one hiccup.
+  **Block 11 both times, with different images** (CRC32 `b77aa6c0` at 22:44, `ae3a68d2` at
+  22:46), so it is not content-related. This followed the 10–15 s battery disconnect.
+- **Sudden** — 23:00 (first `tiga-dev` upload). A healthy pace to block 40 (6.12 s,
+  the fast first-on-connection pace), then nothing for block 41.
+
+**The block-timeout experiment — an unverified mitigation, not a fix.** At 23:03 the dev
+supervisor was edited by hand to pass `--block-timeout-ms 10000` (default then 2500).
+Reasoning: when one block's PROGRESS is late, the uploader abandons the transfer, and
+abandoning it is what leaves a half-finished session that needs the battery
+disconnected; if the keyboard is sometimes merely slow on one block, waiting longer
+avoids that. **Evidence: inconclusive.** All five interrupted transfers of the day (21:05,
+21:39, 22:44, 22:46, 23:00) ran with 2500 ms. The five uploads that ran with 10000 ms
+(23:06–23:13) all completed, but none came near either limit and they followed a 30 s
+battery reset; the live install then completed eight more after 23:15 with 2500 ms. The
+longer wait is now the uploader's own default (so the packaged supervisor gets it too),
+and `ble.log` prints the value in effect. Its cost is only that a truly stuck keyboard
+is detected about 7.5 s later. Open question it does not answer: in the slowing
+signature, blocks were taking ~2 s each; with 10 s the 22:44 transfer might have
+crawled to completion, or stalled anyway at block 11, only later.
+
+**Upload reliability on `fix/device-selection`:** one failure (23:00, the sudden
+signature, before a 30 s battery reset), then **five completed uploads in a row**,
+8.60–9.81 s, all at a healthy pace.
+
+**Verified on hardware in this part:** #14 (service check, BT1 rejected, address cache);
+the code-10 retry recovering from a temporarily invisible keyboard without a halt; bug
+A's halt (three more real code-20 halts, 22:44, 22:46 and 23:00, each recovered via
+START_STACK after a battery disconnect).
 
 ---
 
