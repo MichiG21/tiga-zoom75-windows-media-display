@@ -610,6 +610,10 @@ where
 
 const SERVICE_MEDIA: Uuid = Uuid::from_u128(0x1f40eaf8_aab4_14a3_f1ba_f61f35cddbaa);
 const SCAN_WINDOW: Duration = Duration::from_secs(5);
+/// If nothing at all has been seen when the window closes, keep scanning this long and
+/// try the first candidate that appears. Right after a stack restart on 2026-10-15 the
+/// keyboard stayed invisible for 20-38 s, so two 5 s scans failed with code 10.
+const NOTHING_SEEN_LIMIT: Duration = Duration::from_secs(15);
 const SCAN_POLL: Duration = Duration::from_millis(250);
 
 struct Seen<D> {
@@ -692,6 +696,7 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
     let mut tried: Vec<String> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut any_unreachable = false;
+    let mut extended = false;
     let mut round = 1;
 
     loop {
@@ -728,8 +733,20 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
         };
 
         let Some(s) = next else {
-            if window_closed {
-                if tried.is_empty() || round >= SCAN_ROUNDS {
+            if window_closed && tried.is_empty() {
+                if radio.elapsed() >= NOTHING_SEEN_LIMIT {
+                    break;
+                }
+                if !extended {
+                    extended = true;
+                    log!(
+                        "Nothing seen in {} s; scanning up to {} s (the keyboard can be invisible for a while after a restart)",
+                        SCAN_WINDOW.as_secs(),
+                        NOTHING_SEEN_LIMIT.as_secs()
+                    );
+                }
+            } else if window_closed {
+                if round >= SCAN_ROUNDS {
                     break;
                 }
                 round += 1;
@@ -771,7 +788,7 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
     if tried.is_empty() {
         return Err(Failed::new(
             Failure::Unreachable,
-            format!("{TARGET_NAME} not found (no candidate seen in a {} s scan)", SCAN_WINDOW.as_secs()),
+            format!("{TARGET_NAME} not found (no candidate seen in a {} s scan)", NOTHING_SEEN_LIMIT.as_secs()),
         ));
     }
     // 11 only when every candidate was reached and none had the service. If any could
@@ -1572,6 +1589,30 @@ mod tests {
         assert!(r.probed.is_empty());
         // Nothing to reject, so no rescan: the supervisor's retry covers this case.
         assert_eq!(r.rescans, 0);
+        // But it kept looking for the longer limit, not just one window.
+        assert!(r.clock >= NOTHING_SEEN_LIMIT, "{:?}", r.clock);
+        assert!(f.detail.contains("15 s scan"), "{}", f.detail);
+    }
+
+    #[test]
+    fn keyboard_appearing_late_is_found_in_the_first_scan() {
+        // After a restart the keyboard may take a while to advertise again.
+        let mut r = real_names(&[(9000, BAD), (9000, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!(r.probed, [GOOD]);
+        assert_eq!(r.rescans, 0);
+        assert!(r.clock < Duration::from_secs(11), "{:?}", r.clock);
+        // Same with the cache.
+        let mut r = real_names(&[(12_000, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, Some(GOOD)).unwrap(), GOOD);
+    }
+
+    #[test]
+    fn rejected_candidates_do_not_get_the_longer_wait() {
+        // One window, one rescan window, done: the extension is for "nothing seen" only.
+        let mut r = real_names(&[(0, BAD)], &[GOOD]);
+        let _ = select(&mut r, None).unwrap_err();
+        assert!(r.clock < Duration::from_secs(12), "{:?}", r.clock);
     }
 
     #[test]
