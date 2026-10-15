@@ -515,7 +515,8 @@ quoted that evening were 8.71 s and 9.85 s. The 8.71 s run was linear at about
 **0.154 s per block** (block 53 ACKed at 8.15 s), then ~0.56 s waiting for completion.
 The two fastest (8.71 s, 8.42 s) were each the first upload on a new connection; the
 other 17, later uploads on the same connection, took 9.49–10.01 s. That is two samples
-and may be coincidence; it is recorded, not explained.
+and may be coincidence; it is recorded, not explained. *(Later the same night: six of six
+first-on-connection uploads were the fast ones. See "Every upload of 2026-10-15" below.)*
 
 **Interrupted transfers, cause unknown.** Two, both PROGRESS timeouts after CONTROL2:
 
@@ -674,6 +675,127 @@ signature, before a 30 s battery reset), then **five completed uploads in a row*
 the code-10 retry recovering from a temporarily invisible keyboard without a halt; bug
 A's halt (three more real code-20 halts, 22:44, 22:46 and 23:00, each recovered via
 START_STACK after a battery disconnect).
+
+#### Every upload of 2026-10-15, side by side
+
+Every `UPLOAD START` in `tiga-fresh-test\logs\ble.log` ("live") and `tiga-dev\logs\ble.log`
+("dev"), read at 23:29. All 42 went to the correct device, `07:01:88:B3:66:1B`. "Conn."
+is whether the upload was the first on a new BLE connection (a new uploader process) or a
+later one on the same connection. Block columns are the `elapsed` seconds at which that
+block's PROGRESS arrived (the log prints every fifth block and the last). "Result" for a
+failure gives the block whose PROGRESS never came and the time from `UPLOAD START`. The
+"just before" column combines the logs with Michi's account.
+
+| # | Start | Install | Conn. | b5 | b10 | b25 | b40 | b50 | b53 | Result | Timeout | Just before |
+|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---|
+| 1 | 21:05:49 | live | 1st |  |  |  |  |  |  | **FAILED** at block 5 (3.68 s) | 2500 | First upload after stopping the old `tiga_ble_re_tools` stack. Keyboard state unknown |
+| 2 | 21:15:32 | live | 1st | 0.77 | 1.56 | 3.86 | 6.14 | 7.69 | 8.15 | 8.71 s | 2500 | Battery disconnect, duration unknown. Before it: halt, 5 s USB unplug (not a reset), three wrong-device runs |
+| 3 | 21:16:45 | live | later | 1.55 | 2.29 | 4.55 | 6.86 | 8.47 | 8.91 | 10.01 s | 2500 | Previous upload on this connection completed |
+| 4 | 21:16:55 | live | later | 1.49 | 2.20 | 4.45 | 6.71 | 8.23 | 8.64 | 9.59 s | 2500 | Previous upload on this connection completed |
+| 5 | 21:19:51 | live | later | 1.53 | 2.31 | 4.54 | 6.79 | 8.37 | 8.80 | 9.85 s | 2500 | Previous upload on this connection completed |
+| 6 | 21:20:30 | live | later | 1.46 | 2.27 | 4.59 | 6.83 | 8.36 | 8.83 | 9.90 s | 2500 | Previous upload on this connection completed |
+| 7 | 21:22:39 | live | later | 1.46 | 2.18 | 4.40 | 6.65 | 8.16 | 8.60 | 9.49 s | 2500 | Previous upload on this connection completed |
+| 8 | 21:25:27 | live | later | 1.56 | 2.31 | 4.58 | 6.90 | 8.42 | 8.87 | 9.81 s | 2500 | Previous upload on this connection completed |
+| 9 | 21:25:49 | live | later | 1.48 | 2.29 | 4.61 | 6.84 | 8.43 | 8.85 | 9.74 s | 2500 | Previous upload on this connection completed |
+| 10 | 21:25:59 | live | later | 1.41 | 2.22 | 4.44 | 6.72 | 8.29 | 8.73 | 9.60 s | 2500 | Previous upload on this connection completed |
+| 11 | 21:27:53 | live | later | 1.46 | 2.20 | 4.47 | 6.73 | 8.24 | 8.70 | 9.86 s | 2500 | Previous upload on this connection completed |
+| 12 | 21:30:31 | live | later | 1.45 | 2.18 | 4.44 | 6.71 | 8.24 | 8.70 | 9.56 s | 2500 | Previous upload on this connection completed |
+| 13 | 21:31:38 | live | later | 1.33 | 2.13 | 4.42 | 6.58 | 8.14 | 8.55 | 9.68 s | 2500 | Previous upload on this connection completed |
+| 14 | 21:32:21 | live | later | 1.44 | 2.19 | 4.50 | 6.80 | 8.37 | 8.83 | 9.88 s | 2500 | Previous upload on this connection completed |
+| 15 | 21:32:31 | live | later | 1.48 | 2.22 | 4.42 | 6.67 | 8.21 | 8.66 | 9.65 s | 2500 | Previous upload on this connection completed |
+| 16 | 21:33:04 | live | later | 1.51 | 2.30 | 4.52 | 6.76 | 8.31 | 8.75 | 9.71 s | 2500 | Previous upload on this connection completed |
+| 17 | 21:33:18 | live | later | 1.61 | 2.36 | 4.57 | 6.82 | 8.37 | 8.84 | 9.70 s | 2500 | Previous upload on this connection completed |
+| 18 | 21:34:28 | live | later | 1.48 | 2.28 | 4.52 | 6.74 | 8.28 | 8.72 | 9.55 s | 2500 | Previous upload on this connection completed |
+| 19 | 21:34:38 | live | later | 1.50 | 2.24 | 4.43 | 6.71 | 8.23 | 8.72 | 9.66 s | 2500 | Previous upload on this connection completed |
+| 20 | 21:35:57 | live | 1st | 0.71 | 1.45 | 3.69 | 5.89 | 7.40 | 7.85 | 8.42 s | 2500 | Stack restart 21:35:35 (no reset); one code-10 scan |
+| 21 | 21:39:48 | live | later |  |  |  |  |  |  | **FAILED** at block 3 (4.21 s) | 2500 | Upload 20 completed 3.7 min earlier on this connection |
+| 22 | 22:44:31 | live | 1st | 2.35 | 12.02 |  |  |  |  | **FAILED** at block 11 (14.95 s) | 2500 | Halted since 21:39, no reset; then a **10–15 s** battery disconnect |
+| 23 | 22:46:42 | live | 1st | 2.97 | 11.58 |  |  |  |  | **FAILED** at block 11 (14.49 s) | 2500 | Halt after 22:44, START_STACK; no further reset recorded |
+| 24 | 22:49:35 | live | 1st | 0.74 | 1.58 | 3.87 | 6.11 | 7.66 | 8.12 | 8.70 s | 2500 | A **30 s** battery disconnect |
+| 25 | 22:52:34 | live | later | 1.41 | 2.18 | 4.48 | 6.74 | 8.24 | 8.70 | 9.78 s | 2500 | Previous upload on this connection completed |
+| 26 | 22:55:04 | live | later | 1.42 | 2.16 | 4.45 | 6.67 | 8.16 | 8.58 | 9.50 s | 2500 | Previous upload on this connection completed |
+| 27 | 22:57:28 | live | later | 1.35 | 2.11 | 4.36 | 6.62 | 8.18 | 8.64 | 9.65 s | 2500 | Previous upload on this connection completed |
+| 28 | 22:59:54 | dev | 1st | 0.77 | 1.53 | 3.80 | 6.12 |  |  | **FAILED** at block 41 (9.04 s) | 2500 | Live stack stopped (last upload 22:57); task pointed at `tiga-dev`. Battery state unclear |
+| 29 | 23:06:33 | dev | 1st | 0.74 | 1.52 | 3.73 | 6.05 | 7.55 | 8.03 | 8.60 s | 10000 | Halt after 23:00; a 30 s battery reset; dev supervisor now passes 10000 ms |
+| 30 | 23:08:48 | dev | later | 1.46 | 2.21 | 4.46 | 6.66 | 8.23 | 8.68 | 9.81 s | 10000 | Previous upload on this connection completed |
+| 31 | 23:09:53 | dev | 1st | 0.71 | 1.46 | 3.69 | 5.95 | 7.57 | 8.03 | 8.61 s | 10000 | Stack restart 23:09:12 (no reset); two code-10 scans |
+| 32 | 23:10:02 | dev | later | 1.34 | 2.10 | 4.39 | 6.59 | 8.26 | 8.72 | 9.74 s | 10000 | Previous upload on this connection completed |
+| 33 | 23:13:15 | dev | later | 1.32 | 2.18 | 4.43 | 6.72 | 8.28 | 8.77 | 9.62 s | 10000 | Previous upload on this connection completed |
+| 34 | 23:16:25 | live | 1st | 0.83 | 1.61 | 3.83 | 6.13 | 7.63 | 8.10 | 8.69 s | 2500 | Task back on the live install, restart 23:15:15 (no reset); two code-10 scans |
+| 35 | 23:18:55 | live | later | 1.57 | 2.36 | 4.57 | 6.85 | 8.46 | 8.93 | 10.03 s | 2500 | Previous upload on this connection completed |
+| 36 | 23:21:40 | live | later | 2.04 | 2.80 | 5.04 | 7.29 | 8.79 | 9.25 | 9.93 s | 2500 | Previous upload on this connection completed |
+| 37 | 23:21:50 | live | later | 1.33 | 2.07 | 4.36 | 6.62 | 8.13 | 8.60 | 9.56 s | 2500 | Previous upload on this connection completed |
+| 38 | 23:23:54 | live | later | 1.63 | 2.38 | 4.63 | 6.87 | 8.46 | 8.92 | 10.08 s | 2500 | Previous upload on this connection completed |
+| 39 | 23:25:48 | live | later | 1.49 | 2.24 | 4.52 | 6.79 | 8.36 | 8.82 | 9.98 s | 2500 | Previous upload on this connection completed |
+| 40 | 23:25:58 | live | later | 1.47 | 2.23 | 4.44 | 6.73 | 8.28 | 8.72 | 9.68 s | 2500 | Previous upload on this connection completed |
+| 41 | 23:26:08 | live | later | 1.58 | 2.35 | 4.62 | 6.86 | 8.38 | 8.81 | 9.75 s | 2500 | Previous upload on this connection completed |
+| 42 | 23:28:59 | live | later | 1.46 | 2.27 | 4.54 | 6.83 | 8.41 | 8.89 | 10.03 s | 2500 | Previous upload on this connection completed |
+
+**Derived figures.**
+
+- **Pre-block overhead is ~0.42 s.** For the three failures with block data, the time to
+  failure equals the last ACKed block's `elapsed` + 2.5 s timeout + 0.41–0.43 s
+  (23:00: 9.04 = 6.12 + 2.5 + 0.42; 22:44: 14.95 = 12.02 + 2.5 + 0.43; 22:46: 14.49 =
+  11.58 + 2.5 + 0.41). That overhead is the stale-notification drain, CONTROL1/CONTROL2
+  and their ACKs. It lets the two failures *without* block data be placed:
+  - **21:05:** last ACKed block 4 at about 3.68 − 2.5 − 0.42 = **0.76 s**. The healthy
+    first-on-connection pace puts block 4 at about 0.6–0.7 s.
+  - **21:39:** last ACKed block 2 at about 4.21 − 2.5 − 0.42 = **1.29 s**.
+- **First-on-connection uploads are faster, now with six samples, not two.** All six that
+  completed (rows 2, 20, 24, 29, 31, 34) took 8.42–8.71 s, with block 5 at 0.71–0.83 s.
+  All 31 later uploads took 9.49–10.08 s, with block 5 at 1.32–2.04 s. The difference,
+  about 0.7 s, is already there by block 5 and stays constant to block 53: later uploads
+  lose about 0.7 s somewhere in their first five blocks and then run at the same
+  ~0.15 s per block. Where exactly in blocks 1–5 isn't visible at this granularity.
+- **Failures cluster at the start of a connection.** Of the five failures, four were the
+  first upload on a connection and one (21:39) the second. Of 32 later uploads, none
+  failed except that one. This is confounded: a first upload usually follows a restart,
+  and restarts followed failures and resets, so it says as much about the keyboard's state
+  at those moments as about the connection.
+
+**Questions (confidence in brackets).**
+
+1. **Do 21:05 and 21:39 look like the slowing signature or the sudden one?**
+   - **21:05: sudden** *(medium-high)*. Block 4 at ~0.76 s is at or near the healthy
+     first-on-connection pace, then block 5 never came. A slowing run is already well
+     behind by then (22:44 and 22:46 reached block 5 only at 2.35 and 2.97 s).
+   - **21:39: probably sudden** *(low-medium)*. Block 2 at ~1.29 s, then nothing for
+     block 3. A later upload normally reaches block 5 at 1.3–1.6 s, but because its
+     0.7 s penalty sits somewhere in blocks 1–5, a healthy block 2 could be anywhere from
+     about 0.5 to 1.3 s. 1.29 s is at the slow edge of healthy, not clearly slowing.
+2. **Do successful uploads drift slower over the evening ahead of a failure?** **No**
+   *(high, at 5-block granularity)*. Later uploads stay at 9.49–10.08 s, block 5 at
+   1.32–1.63 s, from 21:16 to 23:29, with one outlier that completed (23:21:40, block 5
+   at 2.04 s, total 9.93 s). The upload just before 21:39 was the fastest of the evening
+   (8.42 s); the three before the 23:00 failure were 9.50–9.78 s. Nothing in the
+   successful uploads warns of what's coming. Single slow blocks inside a five-block
+   span would not show.
+3. **Were 22:44 and 22:46 just the 21:39 state, never properly cleared?** **Can't tell;
+   possible** *(low)*. For: nothing reset the keyboard between 21:39 and the 10–15 s
+   disconnect, a 30 s disconnect cleared it, and both runs stalled at exactly block 11
+   with different images, which looks like a stable state on the keyboard's side.
+   Against: the signature changed, from a sudden stop at block 3 to a slowing run that
+   reached block 10. So at least the short disconnect changed *something*. The record
+   fits two stories equally well: the 21:39 state, only partly cleared by a too-short
+   disconnect; or a new bad state produced by the short disconnect itself (a brown-out
+   rather than a clean reset). Nobody has ever uploaded into a keyboard left *un*-reset
+   after a failure and seen the result: the 21:08–21:09 attempts went to the wrong
+   device. That missing comparison is what would separate the two.
+4. **Could the uploader spot trouble earlier?** *Proposal only, not implemented.* The
+   catch is that anything after CONTROL2 cannot avoid the problem: abandoning a transfer
+   is what leaves the partial session. So:
+   - **Log more, decide later.** Log every block's ACK latency (or per-upload min/median/
+     max), and the CONTROL1 and CONTROL2 ACK latencies. Cheap, no protocol change, and the
+     only way to answer the questions above with data rather than inference.
+   - **Look for a signal before CONTROL2.** If the CONTROL1 ACK is measurably slow when the
+     keyboard is in a bad state, the uploader could stop *before* CONTROL2, which is safe
+     (code 10/11 territory, no session opened), and ask for a battery reset without making
+     things worse. Whether such a signal exists is unknown until the latencies are logged.
+   - **Inside the transfer, don't abort early; warn.** In the slowing signature at least
+     four of blocks 6–10 took ~1.8–2.5 s against ~0.15 s healthy. A per-block latency over
+     ~1 s is a clean marker for a `SLOW` log line. Using it to abort sooner would only
+     produce the partial session sooner. A threshold on block 5's `elapsed` instead
+     would be marginal: 2.35 s in a failure against 2.04 s in a success.
 
 ---
 
