@@ -100,9 +100,14 @@ function Stop-LoggedProcess {
 # The uploader (windows_ble_probe/src/bin/tiga_stream_watch_flow.rs) exits with a
 # class code and keeps <stream>.session while a media session is open on the keyboard:
 #
-#   10 unreachable, 11 GATT          -> retry with backoff, then give up
+#   10 unreachable, 11 GATT          -> retry with backoff, then every 5 min, never halt
 #   20 interrupted, 21 no completion -> halt: the keyboard needs a power cycle
 #   30 bad arguments / stream        -> halt: configuration problem
+#   anything else, no marker         -> retry with backoff, then give up
+#
+# 10 and 11 never open a media session, so the keyboard is not in a bad state; it is
+# off, asleep or out of range (11: no candidate had the media service, issue #14).
+# Halting on those meant a dead display the next morning until START_STACK.ps1.
 #
 # A surviving session marker means "halt, power-cycle" whatever the exit code: a
 # killed or crashed uploader cannot report its own class.
@@ -111,8 +116,9 @@ function Stop-LoggedProcess {
 # START_STACK.ps1 deletes the halt file (and the marker); a running supervisor notices
 # and starts the uploader again. Nothing clears it on a timer.
 
-$BleRetryDelays       = @(8, 16, 32, 60)  # seconds before retries 1..4; the 5th failure gives up
-$BleGattRetryCap      = 2                 # code 11 gives up after this many retries
+$BleRetryDelays       = @(8, 16, 32, 60)  # seconds before retries 1..4
+$BleSlowRetryDelay    = 300               # 10 and 11 after the backoff: every 5 min, indefinitely
+$BleSlowRetryCodes    = @(10, 11)
 $RendererRestartDelay = 8
 
 $UploaderExitMeanings = @{
@@ -172,8 +178,11 @@ function Get-UploaderDecision {
             "Check logs\ble_error.log for the cause and fix it, then run START_STACK.ps1. The keyboard was not touched."
     }
 
-    $cap = if ($ExitCode -eq 11) { $BleGattRetryCap } else { $BleRetryDelays.Count }
-    if ($ExitCode -ne 0 -and $Attempt -gt $cap) {
+    if ($ExitCode -ne 0 -and $Attempt -gt $BleRetryDelays.Count) {
+        if ($BleSlowRetryCodes -contains $ExitCode) {
+            return New-UploaderDecision retry "slow-retry" $false $BleSlowRetryDelay `
+                "code ${ExitCode}: $meaning; still not reachable after $Attempt attempts, retrying every $BleSlowRetryDelay s" ""
+        }
         return New-UploaderDecision halt "gave-up" $false 0 `
             "gave up after $Attempt failed attempts; last was code ${ExitCode}: $meaning" `
             "Check that Bluetooth is on and the keyboard is awake and in range, then run START_STACK.ps1. No media session was opened."
@@ -241,7 +250,8 @@ function Resolve-UploaderExit {
         Write-SupervisorLog "BLE uploader HALTED ($($d.Class)): $($d.Reason). $($d.Instruction) The renderer keeps running."
     } else {
         $State.NextUploaderStart = (Get-Date).AddSeconds($d.Delay)
-        Write-SupervisorLog "Restarting BLE uploader in $($d.Delay)s (consecutive failures: $($State.Attempts))."
+        $slow = if ($d.Class -eq "slow-retry") { " Keyboard still not reachable; retrying every $($d.Delay)s until it is (no halt)." } else { "" }
+        Write-SupervisorLog "Restarting BLE uploader in $($d.Delay)s (consecutive failures: $($State.Attempts)).$slow"
     }
 }
 

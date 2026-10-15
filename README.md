@@ -272,7 +272,7 @@ To recover:
 1. Power-cycle the keyboard. If the display stays white or frozen, do a full battery power-cycle.
 2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have power-cycled it": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
 
-The uploader also halts, without needing a power cycle, if it cannot reach the keyboard after several attempts (8, 16, 32 and 60 seconds apart). Check that Bluetooth is on and the keyboard is awake, then run **Start Display**.
+If the uploader cannot reach the keyboard (switched off, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No power cycle and no **Start Display** needed; turning the keyboard on is enough, within about 5 minutes.
 
 Stopping the stack (or shutting Windows down) in the middle of an upload counts as an interruption too. The next start will report it as halted.
 

@@ -35,9 +35,15 @@ function Decide { param($Code, $Attempt, $Session = $null) Get-UploaderDecision 
 
 $delays = 1..4 | ForEach-Object { (Decide 10 $_).Delay }
 Assert-True (($delays -join ",") -eq "8,16,32,60") "code 10 backs off 8,16,32,60 ($($delays -join ','))"
-Assert-True ((Decide 10 5).Action -eq "halt" -and (Decide 10 5).Class -eq "gave-up") "code 10 gives up on the 5th failure"
-Assert-True (-not (Decide 10 5).NeedsPowerCycle) "giving up does not ask for a power cycle"
-Assert-True ((Decide 11 2).Action -eq "retry" -and (Decide 11 3).Class -eq "gave-up") "code 11 has a lower cap ($BleGattRetryCap retries)"
+foreach ($c in 10, 11) {
+    $early = 1..4 | ForEach-Object { (Decide $c $_).Delay }
+    Assert-True (($early -join ",") -eq "8,16,32,60") "code $c backs off 8,16,32,60"
+    $late = 5, 6, 50 | ForEach-Object { Decide $c $_ }
+    Assert-True (@($late | Where-Object { $_.Action -eq "retry" -and $_.Class -eq "slow-retry" -and $_.Delay -eq 300 }).Count -eq 3) "code $c never halts: every 300 s from the 5th failure on"
+    Assert-True (-not ($late | Where-Object NeedsPowerCycle)) "code $c slow retry does not ask for a power cycle"
+}
+Assert-True ((Decide 1 4).Action -eq "retry" -and (Decide 1 5).Class -eq "gave-up") "an unexplained exit with no marker still gives up on the 5th failure"
+Assert-True (-not (Decide 1 5).NeedsPowerCycle) "giving up does not ask for a power cycle"
 foreach ($c in 20, 21) {
     $d = Decide $c 1
     Assert-True ($d.Action -eq "halt" -and $d.NeedsPowerCycle -and $d.Instruction -match "START_STACK") "code $c halts and asks for a power cycle"
@@ -78,6 +84,7 @@ Set-Content -LiteralPath $sleeper -Encoding ASCII -Value 'import time; time.slee
 
 # Fast schedule so the test takes seconds, not minutes.
 $BleRetryDelays = @(0.3, 0.6, 1.2, 2.4)
+$BleSlowRetryDelay = 3
 $RendererRestartDelay = 0.2
 
 function Invoke-Scenario {
@@ -115,14 +122,23 @@ function Invoke-Scenario {
 
 function Read-Halt { if (Test-Path $haltFile) { Get-Content -Raw $haltFile | ConvertFrom-Json } }
 
-# 1. Retryable failures back off, then give up.
-$s = Invoke-Scenario "code 10 every time" -Plan @(, @(10)) -Iterations 90
-$gaps = @(); for ($i = 1; $i -lt $s.Starts.Count; $i++) { $gaps += ($s.Starts[$i] - $s.Starts[$i - 1]).TotalSeconds }
-Assert-True ($s.UploaderStarts -eq 5) "uploader started 5 times (1 + 4 retries), got $($s.UploaderStarts)"
-Assert-True ($gaps.Count -eq 4 -and $gaps[1] -gt $gaps[0] -and $gaps[2] -gt $gaps[1] -and $gaps[3] -gt $gaps[2]) "gaps grow: $(($gaps | ForEach-Object { '{0:n2}' -f $_ }) -join ', ')s"
+# 1. Unreachable / no qualifying device: back off, then keep retrying slowly, never halt.
+foreach ($c in 10, 11) {
+    $s = Invoke-Scenario "code $c every time" -Plan @(, @($c)) -Iterations 110
+    $gaps = @(); for ($i = 1; $i -lt $s.Starts.Count; $i++) { $gaps += ($s.Starts[$i] - $s.Starts[$i - 1]).TotalSeconds }
+    $shown = ($gaps | ForEach-Object { '{0:n2}' -f $_ }) -join ', '
+    Assert-True ($s.UploaderStarts -ge 6) "code ${c}: uploader still restarted after the backoff (starts: $($s.UploaderStarts))"
+    Assert-True ($gaps[1] -gt $gaps[0] -and $gaps[2] -gt $gaps[1] -and $gaps[3] -gt $gaps[2] -and $gaps[4] -gt $gaps[3]) "code ${c}: gaps grow, then the slow interval: ${shown}s"
+    Assert-True (-not $s.Halted -and $null -eq (Read-Halt)) "code ${c}: never halted, no halt file"
+    Assert-True ((Get-Content -Raw $SupervisorLog) -match "retrying every") "code ${c}: slow retry is logged"
+    Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "code ${c}: renderer untouched"
+}
+
+# 1b. Any other exit without a marker still gives up.
+$s = Invoke-Scenario "code 1 (no marker) every time" -Plan @(, @(1)) -Iterations 90
 $h = Read-Halt
-Assert-True ($s.Halted -and $h.class -eq "gave-up" -and $h.exit_code -eq 10 -and -not $h.needs_power_cycle) "halted as gave-up, no power cycle"
-Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer untouched"
+Assert-True ($s.UploaderStarts -eq 5) "uploader started 5 times (1 + 4 retries), got $($s.UploaderStarts)"
+Assert-True ($s.Halted -and $h.class -eq "gave-up" -and $h.exit_code -eq 1 -and -not $h.needs_power_cycle) "halted as gave-up, no power cycle"
 
 # 2. Interrupted transfer: no restart, renderer keeps running, halt file complete.
 $s = Invoke-Scenario "code 20 with marker and exit record" -Plan @(, @(20, "marker", "record")) -Iterations 25
@@ -151,7 +167,8 @@ $s = Invoke-Scenario "code 21" -Plan @(, @(21)) -Iterations 20
 Assert-True ($s.UploaderStarts -eq 1 -and (Read-Halt).needs_power_cycle) "code 21 halts and asks for a power cycle"
 
 # 6. A successful upload resets the counter: fail, fail, (deliver then fail), then fail x4.
-$s = Invoke-Scenario "delivery resets the counter" -Plan @(@(10), @(10), @(10, "deliver"), @(10)) -Iterations 140
+#    (Code 1, because 10 and 11 no longer give up at all.)
+$s = Invoke-Scenario "delivery resets the counter" -Plan @(@(1), @(1), @(1, "deliver"), @(1)) -Iterations 140
 Assert-True ($s.UploaderStarts -eq 7) "3 runs, reset, then 1 + 3 retries before giving up (starts: $($s.UploaderStarts))"
 Assert-True ((Get-Content -Raw $SupervisorLog) -match "retry counter reset") "reset is logged"
 Assert-True ((Read-Halt).attempts -eq 5) "gave up at 5 consecutive failures after the reset"

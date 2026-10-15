@@ -1,7 +1,9 @@
 # Uploader failure classes and recovery (issue #4)
 
-**Status:** implemented on `fix/a-retry-recovery` and tested offline only. The hardware
-plan below has **not** been run.
+**Status:** implemented on `fix/a-retry-recovery` and merged. The interrupted-transfer
+halt (step 2's outcome, from a real PROGRESS timeout rather than a kill) was seen on
+hardware on 2026-10-15; the rest of the plan below has not been run. The slow retry for
+10 and 11 (below) was added on `fix/device-selection` and is tested offline only.
 
 ## The rule
 
@@ -18,8 +20,8 @@ have gone out anyway.
 | Code | Class | Supervisor |
 |---:|---|---|
 | 0 | success (only with `--once`; watch mode normally never exits) | restart |
-| 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff |
-| 11 | connected, GATT service missing or unusable | retry with backoff, low cap |
+| 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff, then every 5 min; **never halts** |
+| 11 | connected, but the media service was missing or unusable: every candidate was reached and none qualified (issue #14), or subscribing to its notifications failed | retry with backoff, then every 5 min; **never halts** |
 | 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | **halt, power-cycle** |
 | 21 | every block ACKed, COMPLETE never arrived | **halt, power-cycle** |
 | 30 | bad arguments, missing or invalid stream, internal error | halt, no power cycle |
@@ -44,10 +46,17 @@ shut down mid-transfer.
 
 ## Supervisor policy (`tiga_supervisor_common.ps1`, used by both supervisors)
 
-- **Retryable** (10, 11, or an unexplained exit with no marker): restart after 8, 16,
-  32, 60 s. The 5th consecutive failure gives up (code 11: the 3rd). A frame delivered
-  during a run resets the count.
-- **Halt** (marker present, 20, 21, 30, or retries exhausted): the uploader is not
+- **Slow retry** (10, 11): restart after 8, 16, 32, 60 s, then every 300 s for as long
+  as it keeps failing. Neither code opens a media session, so the keyboard is not in a
+  bad state; it is off, asleep or out of range. Halting here used to mean a dead display
+  the next morning until someone ran `START_STACK.ps1`. Code 11 used to give up after
+  three attempts, which is what stranded the display on 2026-10-15 when the uploader
+  kept picking the wrong device (#14). The supervisor log says
+  `retrying every 300s until it is (no halt)` once the slow interval starts.
+- **Retryable, then give up** (an unexplained exit with no marker): restart after 8, 16,
+  32, 60 s; the 5th consecutive failure halts as `gave-up`, no power cycle needed.
+- A frame delivered during a run resets the count.
+- **Halt** (marker present, 20, 21, 30, or an unexplained exit's retries exhausted): the uploader is not
   restarted. `logs\uploader_halted.json` records the time, code, meaning, class,
   frame ID, last ACKed block, the uploader's detail line, and an instruction. The
   renderer keeps running.
@@ -133,12 +142,13 @@ branch, point the task at the repo, and restore it at the end (step 6).
 1. Stack running, with OK status. Switch the keyboard's Bluetooth off, or turn the keyboard off.
 2. Change track, so an upload is needed.
 3. Expect `EXIT code=10 (keyboard not reachable …)`, then `Restarting BLE uploader in 8s`,
-   then 16s, 32s, 60s, then `HALTED (gave-up)`. That's about 2.5 minutes including the
-   scans. The halt file has `needs_power_cycle: false`, and there is no marker.
+   then 16s, 32s, 60s, then `Restarting BLE uploader in 300s … (no halt)`, repeating.
+   **No halt file**, no marker.
    - The first failure may appear only when the next upload is attempted: the uploader
      does not notice a dropped link while idle (§7 "suspected but unproven").
    - If the link drops *during* an upload, after CONTROL2, that is a step-2 case and must halt with session-open.
-4. Turn the keyboard back on and run `.\START_STACK.ps1`. It should recover **without** a power cycle.
+4. Turn the keyboard back on and **don't** run anything. Within 5 minutes the next retry
+   should connect and upload the current track, with no power cycle and no START_STACK.
 
 ### 5. Code 21 (not induced)
 
