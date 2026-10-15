@@ -40,6 +40,11 @@ foreach ($supervisor in @("tiga_startup_supervisor.ps1", "installer\runtime\tiga
     $Utf8NoBom     = New-Object System.Text.UTF8Encoding $false
     . ([scriptblock]::Create((Import-SupervisorHelpers (Join-Path $RepoRoot $supervisor)) -join "`n"))
 
+    # Issue #8: the old dev supervisor passed the script path unquoted, so a checkout
+    # under e.g. "C:\My Projects\" launched Python with a truncated path.
+    $line = Get-LoggedCommandLine "C:\Program Files\Py\py.exe" @("-u", "C:\My Projects\tiga\renderer.py") "C:\l o g\out.log" "C:\l o g\err.log"
+    Assert-True ($line -eq '"C:\Program Files\Py\py.exe" "-u" "C:\My Projects\tiga\renderer.py" >> "C:\l o g\out.log" 2>> "C:\l o g\err.log"') "command line quotes every path"
+
     $child = Join-Path $work "child script.py"
     Set-Content -LiteralPath $child -Encoding ASCII -Value @(
         'import os, sys',
