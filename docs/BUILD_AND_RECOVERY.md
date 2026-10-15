@@ -18,7 +18,7 @@ cl /std:c++20 /EHsc /DUNICODE /D_UNICODE .\tiga_display_control.cpp /Fe:tiga_dis
 
 ```powershell
 cd .\windows_ble_probe
-cargo build --release --bin tiga_stream_watch_flow
+cargo build --release --locked --bin tiga_stream_watch_flow
 ```
 
 ## Runtime files created automatically

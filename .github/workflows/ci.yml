@@ -46,8 +46,8 @@ jobs:
 
       - name: Build BLE uploader
         working-directory: windows_ble_probe
-        run: cargo build --release --bin tiga_stream_watch_flow
+        run: cargo build --release --locked --bin tiga_stream_watch_flow
 
       - name: Offline BLE uploader tests
         working-directory: windows_ble_probe
-        run: cargo test --release --bin tiga_stream_watch_flow
+        run: cargo test --release --locked --bin tiga_stream_watch_flow
