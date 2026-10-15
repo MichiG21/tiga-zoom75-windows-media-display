@@ -252,6 +252,10 @@ Wait for the current upload to finish first.
 
 If the custom frame never appears, use the installed **Status** shortcut and inspect the local logs in the installation directory.
 
+**Status** reports the last frame rendered and the last frame actually delivered to the keyboard (`OK`, `PENDING` or `STALLED`), not just whether the processes are running.
+
+Logs in `logs\` are appended across restarts and rotated at 5 MB (`renderer.log.1` ... `.3`). Every process start is stamped with a run ID, and every frame has a frame ID (for example `renderer-20261015-091500-a1b2c3-f0004`) that appears in `renderer.log` when it is rendered and in `ble.log` at `UPLOAD START`, `UPLOAD COMPLETE` or `UPLOAD FAILED`, so the two logs can be matched up.
+
 ### BLE upload was interrupted
 
 If an upload is stopped halfway through and later uploads time out, fully power-cycle the keyboard before trying again.

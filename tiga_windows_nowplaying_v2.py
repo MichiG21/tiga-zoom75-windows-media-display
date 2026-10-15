@@ -6,7 +6,9 @@ import io
 import json
 import os
 import subprocess
+import sys
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +41,28 @@ IDLE_TO_STANDBY_SECONDS = 60.0
 FRESH_POSITION_ADVANCE_MS = 1500
 COMMAND_FILE = HERE / "tiga_display_command.txt"
 COVER_SIZE = 122
+
+# Frame correlation (issue #9). The sidecar is written before the stream is replaced,
+# so the uploader always finds a sidecar at least as new as the stream it reads. The
+# CRC-32 of the full stream is the join key between renderer.log and ble.log.
+FRAME_SIDECAR = ACTIVE_STREAM.with_name(ACTIVE_STREAM.name + ".frame")
+RUN_ID = os.environ.get("TIGA_RUN_ID") or f"renderer-{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}"
+_frame_seq = 0
+
+
+def log(message: str):
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"{stamp} {message}", flush=True)
+
+
+def stream_crc32(data: bytes) -> str:
+    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
+
+
+def next_frame_id() -> str:
+    global _frame_seq
+    _frame_seq += 1
+    return f"{RUN_ID}-f{_frame_seq:04d}"
 
 
 def find_font(size: int, bold: bool = False):
@@ -254,10 +278,14 @@ def media_fingerprint(media: dict) -> str:
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
 
-def write_display(img: Image.Image, preview: bool = True):
+def write_display(img: Image.Image, reason: str, preview: bool = True) -> str:
+    frame_id = next_frame_id()
+    log(f"FRAME {frame_id} rendered ({reason})")
     if preview:
         img.save(PREVIEW)
-    install_image(img)
+    crc = install_image(img, frame_id, reason)
+    log(f"FRAME {frame_id} installed crc32={crc}")
+    return frame_id
 
 
 def read_control_command(last_text: str | None):
@@ -356,7 +384,19 @@ def render_media(media: dict) -> Image.Image:
     return canvas
 
 
-def install_image(img: Image.Image):
+def write_frame_sidecar(frame_id: str, crc: str, reason: str):
+    text = (
+        f"frame_id={frame_id}\n"
+        f"crc32={crc}\n"
+        f"rendered_at={datetime.now().astimezone().isoformat(timespec='seconds')}\n"
+        f"reason={reason}\n"
+    )
+    tmp = FRAME_SIDECAR.with_suffix(".frame.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, FRAME_SIDECAR)
+
+
+def install_image(img: Image.Image, frame_id: str, reason: str) -> str:
     if not BACKUP_STREAM.exists():
         raise RuntimeError(f"Known-good stream backup missing: {BACKUP_STREAM}")
 
@@ -372,9 +412,13 @@ def install_image(img: Image.Image):
 
     OUTPUT_STREAM.write_bytes(modified)
 
+    crc = stream_crc32(modified)
+    write_frame_sidecar(frame_id, crc, reason)
+
     tmp = ACTIVE_STREAM.with_suffix(".bin.tmp")
     tmp.write_bytes(modified)
     os.replace(tmp, ACTIVE_STREAM)
+    return crc
 
 
 def snapshot() -> dict:
@@ -420,7 +464,19 @@ def media_key(media: dict) -> str:
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
 
+def configure_output():
+    # Redirected output defaults to the ANSI code page and block buffering; a title the
+    # code page cannot encode would crash the renderer, and an abrupt exit would lose
+    # the tail of the log.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    configure_output()
     print()
     print("=" * 72)
     print("TIGA - WINDOWS NOW PLAYING RENDERER + STANDBY")
@@ -431,11 +487,12 @@ def main():
     print(f"Control file: {COMMAND_FILE}")
     print(f"Preview     : {PREVIEW}")
     print(f"Stream      : {ACTIVE_STREAM}")
+    print(f"Run ID      : {RUN_ID}")
     print("Ctrl+C to stop.")
     print()
 
-    write_display(render_standby("Waiting for fresh playback"))
-    print("STARTUP -> standby rendered + installed")
+    write_display(render_standby("Waiting for fresh playback"), "startup standby")
+    log("STARTUP -> standby rendered + installed")
 
     startup_fp = None
     startup_position = None
@@ -448,7 +505,7 @@ def main():
             startup_position = int(startup_media.get("position_ms", 0) or 0)
             startup_state = str(startup_media.get("state", ""))
     except Exception as exc:
-        print(f"Initial media query warning: {exc}")
+        log(f"Initial media query warning: {exc}")
 
     mode = "auto"
 
@@ -474,21 +531,21 @@ def main():
             if command is not None:
                 if command == "standby":
                     mode = "standby"
-                    write_display(render_standby("Manual standby"))
+                    write_display(render_standby("Manual standby"), "control: standby")
                     active_fp = None
                     active_render_key = None
-                    print("\nCONTROL -> manual standby")
+                    log("CONTROL -> manual standby")
 
                 elif command == "black":
                     mode = "black"
-                    write_display(render_black())
+                    write_display(render_black(), "control: black")
                     active_fp = None
                     active_render_key = None
-                    print("\nCONTROL -> black screen")
+                    log("CONTROL -> black screen")
 
                 elif command == "auto":
                     mode = "auto"
-                    write_display(render_standby("Waiting for fresh playback"))
+                    write_display(render_standby("Waiting for fresh playback"), "control: auto")
                     active_fp = None
                     active_render_key = None
                     nonplaying_since = None
@@ -508,7 +565,7 @@ def main():
                         gate_position = None
                         gate_state = None
 
-                    print("\nCONTROL -> automatic mode re-armed")
+                    log("CONTROL -> automatic mode re-armed")
 
             if mode != "auto":
                 time.sleep(POLL_INTERVAL)
@@ -517,7 +574,7 @@ def main():
             try:
                 media = snapshot()
             except Exception as exc:
-                print(f"\nWindows media query/render warning: {exc}")
+                log(f"Windows media query/render warning: {exc}")
                 time.sleep(POLL_INTERVAL)
                 continue
 
@@ -528,8 +585,8 @@ def main():
                     if nonplaying_since is None:
                         nonplaying_since = now_mono
                     elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("No media playing"))
-                        print("\nIDLE -> standby rendered + installed")
+                        write_display(render_standby("No media playing"), "idle: no media")
+                        log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
                         gate_fp = None
@@ -547,8 +604,8 @@ def main():
                     if nonplaying_since is None:
                         nonplaying_since = now_mono
                     elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("Playback stopped"))
-                        print("\nIDLE -> standby rendered + installed")
+                        write_display(render_standby("Playback stopped"), "idle: playback stopped")
+                        log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
                         gate_fp = fp
@@ -568,10 +625,9 @@ def main():
                 key = media_key(media)
                 if key != active_render_key:
                     img = render_media(media)
-                    write_display(img)
+                    write_display(img, "media changed")
 
-                    print()
-                    print("NEW WINDOWS MEDIA -> rendered + installed")
+                    log("NEW WINDOWS MEDIA -> rendered + installed")
                     print(f"Source   : {source_name(media.get('source', ''))}")
                     print(f"Title    : {media.get('title') or '(empty)'}")
                     print(f"Artist   : {media.get('artist') or '(empty)'}")
@@ -603,12 +659,11 @@ def main():
 
             if fresh:
                 img = render_media(media)
-                write_display(img)
+                write_display(img, f"fresh playback: {fresh_reason}")
                 active_fp = fp
                 active_render_key = media_key(media)
 
-                print()
-                print(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
+                log(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
                 print(f"Source   : {source_name(media.get('source', ''))}")
                 print(f"Title    : {media.get('title') or '(empty)'}")
                 print(f"Artist   : {media.get('artist') or '(empty)'}")

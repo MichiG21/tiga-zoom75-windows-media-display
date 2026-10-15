@@ -23,6 +23,8 @@ logs/*
 windows_media_thumbnail.bin
 windows_nowplaying_preview.png
 tiga_display_command.txt
+extracted/*.bin.frame
+extracted/*.bin.delivered
 *.tmp
 
 # IDE / OS
