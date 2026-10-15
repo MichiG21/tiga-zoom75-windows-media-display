@@ -84,30 +84,51 @@ def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lin
     if not words:
         return [""]
 
+    def width(s: str) -> int:
+        return draw.textbbox((0, 0), s, font=font)[2]
+
+    # A word wider than the box (a long unbroken title, or CJK text without spaces)
+    # is broken between characters; otherwise it was drawn as one over-wide line.
+    tokens = []
+    for word in words:
+        if width(word) <= max_width:
+            tokens.append(word)
+            continue
+        piece = ""
+        for ch in word:
+            if piece and width(piece + ch) > max_width:
+                tokens.append(piece)
+                piece = ch
+            else:
+                piece += ch
+        tokens.append(piece)
+
     lines = []
     current = ""
+    truncated = False
 
-    for word in words:
-        test = word if not current else current + " " + word
-        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
+    for token in tokens:
+        test = token if not current else current + " " + token
+        if width(test) <= max_width:
             current = test
-        else:
-            if current:
-                lines.append(current)
-            current = word
-            if len(lines) >= max_lines:
-                break
-
-    if len(lines) < max_lines and current:
+            continue
         lines.append(current)
+        current = token
+        if len(lines) >= max_lines:
+            truncated = True
+            current = ""
+            break
 
-    lines = lines[:max_lines]
-    shown = " ".join(lines)
+    if current:
+        if len(lines) < max_lines:
+            lines.append(current)
+        else:
+            truncated = True
 
-    if shown != text and lines:
+    if truncated:
         last = lines[-1]
         ell = "…"
-        while last and draw.textbbox((0, 0), last + ell, font=font)[2] > max_width:
+        while last and width(last + ell) > max_width:
             last = last[:-1]
         lines[-1] = last.rstrip() + ell
 

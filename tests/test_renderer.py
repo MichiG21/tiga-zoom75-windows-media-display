@@ -99,6 +99,50 @@ class ControlCommandTests(SandboxedRenderer):
         self.assertIsNone(cmd)
 
 
+class TextLayoutTests(unittest.TestCase):
+    """Issue #10: text must stay inside its box."""
+
+    MAX_W = 174
+
+    def setUp(self):
+        from PIL import Image, ImageDraw
+
+        self.r = load_renderer()
+        self.draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        self.font = self.r.find_font(18, bold=True)
+
+    def fit(self, text, lines=3):
+        out = self.r.fit_text(self.draw, text, self.font, self.MAX_W, lines)
+        for line in out:
+            self.assertLessEqual(self.draw.textbbox((0, 0), line, font=self.font)[2], self.MAX_W, line)
+        self.assertLessEqual(len(out), lines)
+        return out
+
+    def test_long_unbroken_title_is_wrapped(self):
+        out = self.fit("A" * 60)
+        self.assertEqual(len(out), 3)
+        self.assertTrue(out[-1].endswith("…"))
+
+    def test_cjk_title_without_spaces_is_wrapped(self):
+        self.fit("日本語のとても長いタイトルがここにありますよ本当に長いです")
+
+    def test_long_word_that_fits_in_lines_has_no_ellipsis(self):
+        out = self.fit("Supercalifragilisticexpialidocious")
+        self.assertEqual("".join(out), "Supercalifragilisticexpialidocious")
+
+    def test_short_title_unchanged(self):
+        self.assertEqual(self.fit("Short title"), ["Short title"])
+
+    def test_many_words_truncated_with_ellipsis(self):
+        out = self.fit("Word " * 20)
+        self.assertEqual(len(out), 3)
+        self.assertTrue(out[-1].endswith("…"))
+
+    def test_exactly_fitting_text_has_no_ellipsis(self):
+        out = self.fit("one two", lines=1)
+        self.assertEqual(out, ["one two"])
+
+
 def media(state="Playing", position=30_000, title="Song", **extra):
     m = {
         "present": True,
