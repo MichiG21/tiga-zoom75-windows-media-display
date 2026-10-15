@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import hashlib
 import io
 import json
@@ -13,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+import tiga_dlx
 
 WIDTH = 320
 HEIGHT = 172
@@ -44,6 +47,12 @@ FRESH_POSITION_ADVANCE_MS = 1500
 STEADY_PLAYING_RELEASE_SECONDS = 15.0
 COMMAND_FILE = HERE / "tiga_display_command.txt"
 COVER_SIZE = 122
+
+# Experimental (PROJECT_HISTORY.md section 3.4): a single-frame DLX container instead
+# of the captured 2-frame one. Never sent to a keyboard yet; enable only with
+# --dlx-frames 1, and the uploader must also be given --allow-single-frame.
+DLX_FRAMES = 2
+DLX_LAYOUT = "index"
 
 # Frame correlation (issue #9). The sidecar is written before the stream is replaced,
 # so the uploader always finds a sidecar at least as new as the stream it reads. The
@@ -528,11 +537,14 @@ def install_image(img: Image.Image, frame_id: str, reason: str) -> str:
     validate_stream(base)
 
     frame = rgb565_be_bytes(img)
-    modified = bytearray(base)
-    modified[FRAME1_START:FRAME1_START + FRAME_BYTES] = frame
-    modified[FRAME2_START:FRAME2_START + FRAME_BYTES] = frame
-    modified = bytes(modified)
-    validate_stream(modified)
+    if DLX_FRAMES == 2:
+        modified = bytearray(base)
+        modified[FRAME1_START:FRAME1_START + FRAME_BYTES] = frame
+        modified[FRAME2_START:FRAME2_START + FRAME_BYTES] = frame
+        modified = bytes(modified)
+        validate_stream(modified)
+    else:
+        modified = tiga_dlx.build_stream(base, [frame], DLX_LAYOUT)
 
     OUTPUT_STREAM.write_bytes(modified)
 
@@ -624,6 +636,8 @@ def main():
     print(f"Preview     : {PREVIEW}")
     print(f"Stream      : {ACTIVE_STREAM}")
     print(f"Run ID      : {RUN_ID}")
+    if DLX_FRAMES != 2:
+        print(f"DLX         : EXPERIMENTAL {DLX_FRAMES}-frame container, layout={DLX_LAYOUT}")
     print("Ctrl+C to stop.")
     print()
 
@@ -782,5 +796,22 @@ def main():
         print("\nStopped Windows Now Playing renderer.")
 
 
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="TIGA Windows Now Playing renderer")
+    parser.add_argument(
+        "--dlx-frames", type=int, choices=(1, 2), default=2,
+        help="frames per DLX container (default 2, the captured layout; 1 is experimental "
+             "and needs the uploader's --allow-single-frame)",
+    )
+    parser.add_argument(
+        "--dlx-layout", choices=tiga_dlx.LAYOUTS, default="index",
+        help="frame-index interpretation for --dlx-frames 1 (see docs/DLX_FORMAT.md)",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    _args = parse_args(sys.argv[1:])
+    DLX_FRAMES = _args.dlx_frames
+    DLX_LAYOUT = _args.dlx_layout
     main()
