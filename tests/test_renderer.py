@@ -38,6 +38,7 @@ class SandboxedRenderer(unittest.TestCase):
         self.r.FRAME_SIDECAR = self.tmp / "session_01_bulk_stream.bin.frame"
         self.r.PREVIEW = self.tmp / "preview.png"
         self.r.COMMAND_FILE = self.tmp / "tiga_display_command.txt"
+        self.r.COMMAND_ACK_FILE = self.tmp / "tiga_display_command.ack"
         self.r.RUN_ID = "renderer-test"
 
 
@@ -49,19 +50,20 @@ class FrameCorrelationTests(SandboxedRenderer):
         return dict(line.split("=", 1) for line in lines)
 
     def test_sidecar_matches_installed_stream(self):
-        frame_id = self.r.write_display(self.r.render_black(), "test")
+        frame_id, crc = self.r.write_display(self.r.render_black(), "test")
         stream = self.r.ACTIVE_STREAM.read_bytes()
         sidecar = self.read_sidecar()
 
         self.assertEqual(frame_id, "renderer-test-f0001")
         self.assertEqual(sidecar["frame_id"], frame_id)
         self.assertEqual(sidecar["crc32"], f"{zlib.crc32(stream) & 0xFFFFFFFF:08x}")
+        self.assertEqual(sidecar["crc32"], crc)
         self.assertEqual(sidecar["reason"], "test")
         self.r.validate_stream(stream)
 
     def test_frame_ids_increase(self):
-        first = self.r.write_display(self.r.render_black(), "a")
-        second = self.r.write_display(self.r.render_standby("x"), "b")
+        first, _ = self.r.write_display(self.r.render_black(), "a")
+        second, _ = self.r.write_display(self.r.render_standby("x"), "b")
         self.assertNotEqual(first, second)
         self.assertEqual(self.read_sidecar()["frame_id"], second)
 
@@ -298,7 +300,7 @@ class _StopLoop(Exception):
 class MainLoopGateTests(SandboxedRenderer):
     """Drives main() with a fake clock and fake snapshots to check the gate wiring."""
 
-    def run_main(self, snapshots, max_polls):
+    def run_main(self, snapshots, max_polls, on_poll=None):
         clock = {"t": 0.0, "polls": 0}
         rendered = []
         snaps = iter(snapshots)
@@ -316,11 +318,18 @@ class MainLoopGateTests(SandboxedRenderer):
         def fake_sleep(seconds):
             clock["t"] += seconds
             clock["polls"] += 1
+            if on_poll:
+                on_poll(clock["polls"])
             if clock["polls"] >= max_polls:
                 raise _StopLoop
 
         self.r.snapshot = fake_snapshot
-        self.r.write_display = lambda img, reason, preview=True: rendered.append(reason)
+
+        def fake_write_display(img, reason, preview=True):
+            rendered.append(reason)
+            return f"f{len(rendered)}", f"{len(rendered):08x}"
+
+        self.r.write_display = fake_write_display
         self.r.time.sleep = fake_sleep
         self.r.time.monotonic = lambda: clock["t"]
         self.addCleanup(setattr, self.r.time, "sleep", __import__("time").sleep)
@@ -334,6 +343,23 @@ class MainLoopGateTests(SandboxedRenderer):
         rendered = self.run_main([frozen] * 40, max_polls=40)
         self.assertEqual(rendered[0], "startup standby")
         self.assertIn("fresh playback: steady playback", rendered)
+
+    def test_command_is_acknowledged_with_its_frame(self):
+        # Issue #7: the control utility matches the ack to its own command text.
+        def send(poll):
+            if poll == 3:
+                self.r.COMMAND_FILE.write_text("standby 99-1-1\n", encoding="utf-8")
+
+        self.r.COMMAND_FILE.write_text("auto 1-1-1\n", encoding="utf-8")  # left from last session
+        rendered = self.run_main([media(state="Paused")] * 10, max_polls=6, on_poll=send)
+        self.assertEqual(rendered, ["startup standby", "control: standby"])
+        ack = dict(
+            line.split("=", 1)
+            for line in self.r.COMMAND_ACK_FILE.read_text(encoding="utf-8").splitlines()
+        )
+        self.assertEqual(ack["command_text"], "standby 99-1-1")
+        self.assertEqual(ack["command"], "standby")
+        self.assertEqual((ack["frame_id"], ack["crc32"]), ("f2", "00000002"))
 
     def test_persistent_query_failure_falls_back_to_standby(self):
         # Issue #10: playing, then the media query starts failing for good.
