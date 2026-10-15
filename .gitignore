@@ -28,6 +28,7 @@ extracted/*.bin.frame
 # extracted/session_01_bulk_stream.redgreen-backup.bin when missing.
 extracted/session_01_bulk_stream.bin
 extracted/session_01_bulk_stream.windows_nowplaying.bin
+extracted/session_01_bulk_stream.diagnostic.bin
 extracted/*.bin.delivered
 *.tmp
 

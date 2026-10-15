@@ -69,11 +69,12 @@ def main():
     parser.add_argument("--restore", action="store_true",
                         help="Restore the exact captured red/green stream from the backup.")
     parser.add_argument("--stream", type=Path, default=None,
-                        help="Path to session_01_bulk_stream.bin. Default: ../extracted/session_01_bulk_stream.bin relative to this script.")
+                        help="Path to session_01_bulk_stream.bin. Default: extracted/session_01_bulk_stream.bin at the repository root.")
     args = parser.parse_args()
 
-    here = Path(__file__).resolve().parent
-    stream = args.stream or (here / "extracted" / "session_01_bulk_stream.bin")
+    # This script lives in reference/diagnostics; the stream is in <repo>/extracted.
+    repo_root = Path(__file__).resolve().parents[2]
+    stream = args.stream or (repo_root / "extracted" / "session_01_bulk_stream.bin")
     backup = stream.with_name("session_01_bulk_stream.redgreen-backup.bin")
     generated = stream.with_name("session_01_bulk_stream.diagnostic.bin")
 
