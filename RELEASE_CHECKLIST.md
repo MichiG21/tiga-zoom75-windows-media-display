@@ -194,8 +194,10 @@ that matters:
 - [ ] `.\STATUS_STACK.ps1` shows the halt, with frame and block number
 - [ ] `logs\uploader_halted.json` exists with those fields
 - [ ] Note what the LCD shows — **don't touch the keyboard yet**
-- [ ] Power-cycle the keyboard with its power switch (full battery disconnect if it's stuck).
-      **Unplugging USB is not a power cycle**: the TIGA has a battery.
+- [ ] Reset the keyboard. **The TIGA has no power switch, and unplugging USB doesn't
+      reset it** — it has a battery. Open the case, disconnect the battery from the PCB,
+      and wait at least 30 seconds, pressing a few keys while it's disconnected.
+      Reconnect. A 10–15 second disconnect was not enough in testing.
 - [ ] `.\START_STACK.ps1` → clears the halt → display recovers
 
 **This is the whole point of bug A.** Before tonight it would have retried every 8
@@ -280,9 +282,11 @@ powershell -File .\install_tiga_startup.ps1
 
 If that folder is itself damaged, restore the zip from Phase 0.
 
-If the keyboard is stuck: full battery power-cycle — open the case, disconnect the
-battery, 30–60 seconds, press a few keys while it's dead, reconnect. See
-`docs/PROJECT_HISTORY.md` §2.4.
+If the keyboard is stuck: the TIGA has no power switch, and unplugging USB doesn't
+reset it — it has a battery. Open the case, disconnect the battery from the PCB, and
+wait at least 30 seconds (30–60 s in older notes), pressing a few keys while it's
+disconnected. Reconnect, then run `START_STACK.ps1`. A 10–15 second disconnect was not
+enough in testing. See `docs/PROJECT_HISTORY.md` §7.1.
 
 ---
 

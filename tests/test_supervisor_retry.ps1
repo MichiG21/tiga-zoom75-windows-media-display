@@ -148,7 +148,7 @@ Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer still runn
 Assert-True ($null -ne $h) "halt file written"
 Assert-True ($h.exit_code -eq 20 -and $h.class -eq "session-open" -and $h.needs_power_cycle) "halt: code 20, session-open, needs power cycle"
 Assert-True ($h.frame_id -eq "r-f0042" -and $h.last_acked_block -eq 17 -and $h.total_blocks -eq 53) "halt: frame r-f0042, block 17/53"
-Assert-True ($h.detail -match "PROGRESS timeout" -and $h.halted_at -and $h.instruction -match "Power-cycle the keyboard") "halt: detail, time and plain-English instruction"
+Assert-True ($h.detail -match "PROGRESS timeout" -and $h.halted_at -and $h.instruction -match "Disconnect the keyboard's battery for at least 30 s" -and $h.instruction -notmatch "power switch \(") "halt: detail, time and plain-English instruction"
 Assert-True ((Get-Content -Raw $SupervisorLog) -match "HALTED \(session-open\)") "supervisor log says HALTED"
 
 # 3. Uploader killed mid-transfer: the exit code is meaningless (1) but the marker survives.
@@ -217,7 +217,7 @@ $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
 Assert-True ($out -match "Status\s+: HALTED") "status verdict is HALTED"
 Assert-True ($out -match "exit code 20") "status shows the exit code"
 Assert-True ($out -match "r-f0042; last ACKed block 17/53") "status shows frame and block"
-Assert-True ($out -match "Action\s+: Power-cycle the keyboard.*START_STACK\.ps1") "status gives the power-cycle instruction"
+Assert-True ($out -match "Action\s+: Disconnect the keyboard's battery.*START_STACK\.ps1") "status gives the power-cycle instruction"
 Remove-Item (Join-Path $root "logs\uploader_halted.json")
 Set-Content -LiteralPath "$fakeStream.session" -Encoding ASCII -Value "frame_id=r-f0042", "last_acked_block=5", "total_blocks=53"
 $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)

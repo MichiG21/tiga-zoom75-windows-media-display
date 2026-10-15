@@ -123,7 +123,7 @@ branch, point the task at the repo, and restore it at the end (step 6).
    - `startup_supervisor.log`: `BLE uploader exited with code <N> (unexpected exit (crashed or killed))`.
      N is whatever a forced kill produces through the `cmd.exe` wrapper (1 or -1); any
      code not in the table is treated the same. Then
-     `BLE uploader HALTED (session-open): uploader exited (code N: …) while a media session was open on the keyboard. Power-cycle the keyboard with its power switch …`
+     `BLE uploader HALTED (session-open): uploader exited (code N: …) while a media session was open on the keyboard. Disconnect the keyboard's battery for at least 30 s …`
    - **No** `Started ble run=…` after it. The uploader is not restarted.
    - `logs\uploader_halted.json` exists, with `class: session-open`,
      `needs_power_cycle: true`, the frame ID from `UPLOAD START`, and a `last_acked_block`
@@ -134,10 +134,10 @@ branch, point the task at the repo, and restore it at the end (step 6).
    white, previous image, or recovered by itself? This is new information. The history
    only says retrying is harmful, not what the idle state looks like.
 5. Wait two minutes. The supervisor log must show nothing new about the uploader.
-6. Recover: power-cycle the keyboard **with its power switch**. Unplugging USB is not a
-   power cycle: the TIGA has a battery, and on 2026-10-15 a 5-second USB unplug did not
-   reset it. If the LCD stays white, frozen, or stuck on the roar, **disconnect the
-   battery** (PROJECT_HISTORY §7.1). Then
+6. Recover. **The TIGA has no power switch, and unplugging USB doesn't reset it** — it
+   has a battery. Open the case, disconnect the battery from the PCB, and wait at least
+   30 seconds, pressing a few keys while it's disconnected. A 10–15 second disconnect
+   was not enough in testing (PROJECT_HISTORY §7.1). Reconnect, then
    run `.\START_STACK.ps1`. Expect it to print the halt reason and `removed …session` /
    `removed …uploader_halted.json`, then a new `Started ble run=…` in the supervisor
    log, then a successful upload of the current track.
@@ -182,8 +182,8 @@ Then check `(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.A
 
 | Symptom | Meaning | Do |
 |---|---|---|
-| A `Started ble run=…` appears after an exit while the marker existed | the halt did not engage: **the bug this branch fixes** | `STOP_STACK.ps1` immediately, power-cycle (power switch or battery, not USB), keep all logs |
+| A `Started ble run=…` appears after an exit while the marker existed | the halt did not engage: **the bug this branch fixes** | `STOP_STACK.ps1` immediately, disconnect the battery for at least 30 s (not USB), keep all logs |
 | No halt file, no marker after killing mid-upload | the kill landed before CONTROL2 (too early) or after COMPLETE (too late) | check `ble.log` for where it was; retry with a different delay |
 | Halt file present but STATUS doesn't show HALTED | status script reading the wrong root (dev vs packaged) | compare `$Stream` and `$Logs` in `STATUS_STACK.ps1` with where the files are |
 | START_STACK clears but the uploader doesn't start | supervisor not running, or task still pointing at `tiga_ble_re_tools` | check the task action (step 6) and `startup_supervisor.log` |
-| LCD broken after recovery | partial session survived a power-switch cycle (or only USB was unplugged, which is not a power cycle) | disconnect the battery; do not upload again until the screen is normal |
+| LCD broken after recovery | the battery disconnect was too short (10–15 s was not enough on 2026-10-15), or only USB was unplugged, which is not a reset | disconnect the battery again for at least 30 s, pressing a few keys; do not upload again until the screen is normal |
