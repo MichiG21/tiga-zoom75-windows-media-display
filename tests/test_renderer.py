@@ -375,5 +375,60 @@ class MainLoopGateTests(SandboxedRenderer):
         self.assertEqual(rendered, ["startup standby"])
 
 
+FONTS = Path(__import__("os").environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+
+@unittest.skipUnless((FONTS / "segoeuib.ttf").exists(), "needs Windows fonts")
+class FontFallbackTests(unittest.TestCase):
+    """CJK titles rendered as empty boxes on hardware; so did the no-artwork "♪"."""
+
+    def setUp(self):
+        from PIL import Image, ImageDraw
+
+        self.Image, self.ImageDraw = Image, ImageDraw
+        self.r = load_renderer()
+        self.chain = self.r.find_text_font(18, bold=True)
+
+    def test_primary_font_lacks_cjk_so_the_test_means_something(self):
+        self.assertFalse(self.r.has_glyph(self.chain.primary, "ト"))
+        self.assertTrue(self.r.has_glyph(self.chain.primary, "A"))
+
+    @unittest.skipUnless(any((FONTS / f).exists() for f in ("YuGothB.ttc", "meiryob.ttc", "msyhbd.ttc")), "no CJK font")
+    def test_japanese_title_gets_a_font_for_every_character(self):
+        title = "トーキョーレギー 東京"
+        for ch in title:
+            self.assertTrue(self.r.has_glyph(self.chain.font_for(ch), ch), ch)
+        self.assertGreater(len(self.chain.runs("Takanaka トーキョー")), 1)
+
+    @unittest.skipUnless((FONTS / "malgunbd.ttf").exists(), "no Korean font")
+    def test_hangul_gets_a_font(self):
+        self.assertTrue(self.r.has_glyph(self.chain.font_for("한"), "한"))
+
+    def test_note_symbol_is_not_a_box(self):
+        font = self.r.find_text_font(42, bold=True).font_for("♪")
+        self.assertTrue(self.r.has_glyph(font, "♪"))
+
+    def test_latin_text_draws_exactly_as_before(self):
+        def render(draw_fn):
+            img = self.Image.new("RGB", (200, 30))
+            draw_fn(self.ImageDraw.Draw(img))
+            return img.tobytes()
+
+        text = "Supercalifragilistic"
+        old = render(lambda d: d.text((2, 3), text, font=self.chain.primary, fill=(255, 255, 255)))
+        new = render(lambda d: self.r.draw_text(d, (2, 3), text, self.chain, (255, 255, 255)))
+        self.assertEqual(old, new)
+
+    def test_mixed_title_wraps_inside_the_box(self):
+        draw = self.ImageDraw.Draw(self.Image.new("RGB", (8, 8)))
+        lines = self.r.fit_text(draw, "高中正義 Masayoshi Takanaka 渚・モデラート", self.chain, 174, 3)
+        for line in lines:
+            self.assertLessEqual(self.r.text_width(draw, line, self.chain), 174, line)
+
+    def test_media_render_with_cjk_does_not_crash(self):
+        img = self.r.render_media({"title": "トーキョーレギー", "artist": "高中正義", "album": "한국어", "thumbnail": False})
+        self.assertEqual(img.size, (self.r.WIDTH, self.r.HEIGHT))
+
+
 if __name__ == "__main__":
     unittest.main()
