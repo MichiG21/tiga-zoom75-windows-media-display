@@ -88,5 +88,14 @@ $lastFailure = Get-ChildItem -Path $Logs -Filter "ble.log*" -ErrorAction Silentl
     Select-String -Pattern "UPLOAD FAILED" -ErrorAction SilentlyContinue |
     Select-Object -Last 1
 if ($lastFailure) {
-    Write-Host "Last failure  : $($lastFailure.Line)"
+    # The log keeps history, so this can be days old. Say so when a delivery since
+    # then shows it has been recovered from.
+    $failedAt = ConvertTo-LocalTime (($lastFailure.Line -split " ", 2)[0])
+    $deliveredAt = if ($delivered) { ConvertTo-LocalTime $delivered.delivered_at } else { $null }
+    if ($failedAt -and $deliveredAt -and ($deliveredAt -gt $failedAt)) {
+        Write-Host ("Past failure  : {0:yyyy-MM-dd HH:mm:ss} (historical; uploads have succeeded since)" -f $failedAt) -ForegroundColor DarkGray
+        Write-Host "                $($lastFailure.Line)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "Last failure  : $($lastFailure.Line)"
+    }
 }

@@ -222,6 +222,16 @@ Remove-Item (Join-Path $root "logs\uploader_halted.json")
 Set-Content -LiteralPath "$fakeStream.session" -Encoding ASCII -Value "frame_id=r-f0042", "last_acked_block=5", "total_blocks=53"
 $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
 Assert-True ($out -notmatch "HALTED" -and $out -match "media session open: frame r-f0042, block 5/53") "an in-progress upload is shown, not as halted"
+Remove-Item -LiteralPath "$fakeStream.session"
+
+# "Last failure" must not read as current once an upload has succeeded since.
+Set-Content -LiteralPath (Join-Path $root "logs\ble.log") -Encoding ASCII -Value "2026-10-15T19:39:53Z UPLOAD FAILED frame=r-f0041 crc32=1 after 4.21s: timed out"
+Set-Content -LiteralPath "$fakeStream.delivered" -Encoding ASCII -Value "frame_id=r-f0042", "crc32=aaaa0042", "delivered_at=2026-10-15T20:05:00Z", "elapsed_s=8.4"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Past failure\s+: .*historical" -and $out -notmatch "Last failure") "an old failure is labelled historical after a later delivery"
+Set-Content -LiteralPath "$fakeStream.delivered" -Encoding ASCII -Value "frame_id=r-f0040", "crc32=aaaa0040", "delivered_at=2026-10-15T19:00:00Z", "elapsed_s=8.4"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Last failure\s+: 2026-10-15T19:39:53Z UPLOAD FAILED") "a failure newer than the last delivery is shown as the last failure"
 
 # START_STACK.ps1 (dev and packaged) must clear the halt before starting the task.
 # (Running it here would start the real scheduled task, so its text is checked instead.)

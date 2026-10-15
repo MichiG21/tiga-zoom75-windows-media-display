@@ -342,6 +342,43 @@ From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_s
 .\target\release\tiga_stream_watch_flow.exe --stream "..\extracted\session_01_bulk_stream.bin" --intra-block-ms 0 --confirm-flow-watch
 ```
 
+Leave out `--confirm-flow-watch` for a dry run: it validates the stream and opens no Bluetooth connection.
+
+### Installing from source: troubleshooting
+
+Problems hit on a from-scratch install. None of them means the project is broken.
+
+**PowerShell refuses to run the scripts** (`UnauthorizedAccess`, "running scripts is disabled on this system").
+Windows blocks `.ps1` files by default. Allow them for your user once (no admin needed):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+or prefix each call with `powershell -ExecutionPolicy Bypass -File`.
+
+**"… is not digitally signed"**, even after that.
+Files extracted from a downloaded ZIP carry Windows' mark-of-the-web. Unblock them from the repository folder:
+
+```powershell
+Get-ChildItem -Recurse -File | Unblock-File
+```
+
+A `git clone` doesn't have this problem.
+
+**A freshly built `.exe` seems to do nothing, or its files never appear.**
+Antivirus software (Norton CyberCapture, for example) may hold or sandbox an executable it hasn't seen before, so its writes don't reach the folder. The Display Control utility now says so if the renderer never confirms a command ([#15](https://github.com/MichiG21/tiga-zoom75-windows-media-display/issues/15)). Wait for the scan to finish, or allow the program in your antivirus.
+
+**`tiga_stream_watch_flow.exe` "is not recognized"** after `cargo test`.
+`cargo test` builds a separate test binary. Build the real one with `cargo build --release` in `windows_ble_probe`.
+
+**Manual dry run fails with `EXIT code=30 … cannot find the file specified`.**
+A fresh clone has no `extracted\session_01_bulk_stream.bin`; it is generated at runtime. The supervisors seed it automatically, but a manual run needs it copied first:
+
+```powershell
+Copy-Item .\extracted\session_01_bulk_stream.redgreen-backup.bin .\extracted\session_01_bulk_stream.bin
+```
+
 ---
 
 ## Repository layout
