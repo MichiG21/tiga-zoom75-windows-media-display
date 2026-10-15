@@ -650,6 +650,7 @@ def main():
     active_fp = None
     active_render_key = None
     nonplaying_since = None
+    query_error = None
 
     try:
         while True:
@@ -689,10 +690,17 @@ def main():
 
             try:
                 media = snapshot()
+                if query_error is not None:
+                    log("Windows media query recovered")
+                    query_error = None
             except Exception as exc:
-                log(f"Windows media query/render warning: {exc}")
-                time.sleep(POLL_INTERVAL)
-                continue
+                # Treat a failed query like "no media" so idle handling still applies;
+                # it used to `continue` here and leave the last track up forever
+                # (issue #10). Log each distinct error once, not every second.
+                if str(exc) != query_error:
+                    log(f"Windows media query/render warning: {exc}")
+                    query_error = str(exc)
+                media = {"present": False}
 
             now_mono = time.monotonic()
 

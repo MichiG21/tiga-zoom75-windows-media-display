@@ -309,6 +309,8 @@ class MainLoopGateTests(SandboxedRenderer):
                 last["snap"] = next(snaps)
             except StopIteration:
                 pass
+            if isinstance(last["snap"], Exception):
+                raise last["snap"]
             return last["snap"]
 
         def fake_sleep(seconds):
@@ -332,6 +334,14 @@ class MainLoopGateTests(SandboxedRenderer):
         rendered = self.run_main([frozen] * 40, max_polls=40)
         self.assertEqual(rendered[0], "startup standby")
         self.assertIn("fresh playback: steady playback", rendered)
+
+    def test_persistent_query_failure_falls_back_to_standby(self):
+        # Issue #10: playing, then the media query starts failing for good.
+        playing = [{"present": False}] + [media(title="New")] * 3  # first one arms the gate
+        idle = int(self.r.IDLE_TO_STANDBY_SECONDS)
+        rendered = self.run_main(playing + [RuntimeError("helper crashed")] * (idle + 10), max_polls=idle + 20)
+        self.assertIn("fresh playback: new media", rendered)
+        self.assertEqual(rendered[-1], "idle: no media")
 
     def test_stale_paused_session_never_leaves_standby(self):
         stale = media(state="Paused", position=95_000)
