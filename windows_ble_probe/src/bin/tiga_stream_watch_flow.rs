@@ -600,7 +600,9 @@ where
 //
 // Order: the device that last completed an upload (cached in `<stream>.device`) is
 // tried as soon as the scan sees it. Everything else waits until the scan window has
-// closed, so every candidate is logged, and is then tried in discovery order.
+// closed, so every candidate is logged, and is then tried by name: exactly
+// "Zoom75 Tiga" first, other "zoom75" names next, "... BT<n>" names (the keyboard's
+// typing connections) last; discovery order within each group.
 //
 // If every candidate seen was rejected, the scan runs one more window in case the
 // keyboard was slow to advertise; it is still rejected-for-this-run devices only that
@@ -660,6 +662,31 @@ fn is_candidate(name: &str, address: &str, cached: Option<&str>) -> bool {
         || cached.is_some_and(|c| same_address(c, address))
 }
 
+/// `"Zoom75 Tiga BT1"`, `"... BT2"`, ...: the keyboard's Bluetooth typing connections
+/// (pairing slots), seen on hardware 2026-10-15. Still candidates, in case a firmware
+/// variant names things differently, but tried last.
+fn is_typing_slot_name(name: &str) -> bool {
+    let Some((_, suffix)) = name.rsplit_once(' ') else { return false };
+    let suffix = suffix.as_bytes();
+    suffix.len() > 2
+        && suffix[..2].eq_ignore_ascii_case(b"BT")
+        && suffix[2..].iter().all(u8::is_ascii_digit)
+}
+
+/// Lower is tried first: the cached device, then the exact display name, then any
+/// other "zoom75" name, then the typing slots.
+fn candidate_tier(name: &str, address: &str, cached: Option<&str>) -> u8 {
+    if cached.is_some_and(|c| same_address(c, address)) {
+        0
+    } else if name == TARGET_NAME {
+        1
+    } else if is_typing_slot_name(name) {
+        3
+    } else {
+        2
+    }
+}
+
 async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<Chosen<R::Dev, R::Link>, Failed> {
     let mut known: Vec<String> = Vec::new(); // candidate addresses in the order first seen
     let mut tried: Vec<String> = Vec::new();
@@ -691,9 +718,8 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
 
         let window_closed = radio.elapsed() >= SCAN_WINDOW;
         let rank = |s: &Seen<R::Dev>| {
-            let cached_first = !cached.is_some_and(|c| same_address(c, &s.address));
             let order = known.iter().position(|k| same_address(k, &s.address));
-            (cached_first, order)
+            (candidate_tier(&s.name, &s.address, cached), order)
         };
         untried.sort_by_key(rank);
         let next = match untried.into_iter().next() {
@@ -762,7 +788,8 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
 }
 
 /// Every service a device exposes, with its characteristics, for the rejection log.
-/// Nobody knows what the second "zoom75" device is; this is the only clue it gives.
+/// The second "zoom75" device on the test PC is "Zoom75 Tiga BT1", the typing connection;
+/// on 2026-10-15 it failed to connect, so what it exposes has still not been logged.
 fn describe_services(services: &std::collections::BTreeSet<btleplug::api::Service>) -> String {
     if services.is_empty() {
         return "exposes no services".into();
@@ -1402,6 +1429,16 @@ mod tests {
         }
     }
 
+    /// The names seen on hardware 2026-10-15: GOOD is the display, BAD the BT1 typing slot.
+    fn real_names(devices: &[(u64, &'static str)], qualified: &[&'static str]) -> FakeRadio {
+        let mut r = FakeRadio::new(&[], qualified);
+        for &(ms, a) in devices {
+            let name = if a == BAD { "Zoom75 Tiga BT1" } else { "Zoom75 Tiga" };
+            r.devices.push((Duration::from_millis(ms), a, name));
+        }
+        r
+    }
+
     fn select(radio: &mut FakeRadio, cached: Option<&str>) -> Result<String, Failed> {
         futures::executor::block_on(select_device(radio, cached)).map(|c| c.address)
     }
@@ -1413,6 +1450,53 @@ mod tests {
         assert_eq!(r.probed, [BAD, GOOD]);
         // Nothing is tried before the window closes, so every candidate gets logged.
         assert!(r.clock >= SCAN_WINDOW);
+    }
+
+    #[test]
+    fn typing_slot_names() {
+        for n in ["Zoom75 Tiga BT1", "Zoom75 Tiga BT2", "Zoom75 Tiga bt12"] {
+            assert!(is_typing_slot_name(n), "{n}");
+        }
+        for n in ["Zoom75 Tiga", "Zoom75 Tiga BT", "Zoom75 Tiga BTx", "BT1", "Zoom75 Tiga 2.4G", ""] {
+            assert!(!is_typing_slot_name(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn exact_name_beats_typing_slot_seen_first() {
+        // 23:06 on hardware: BT1 seen first cost an 11 s failed connect.
+        let mut r = real_names(&[(0, BAD), (1000, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!(r.probed, [GOOD]);
+        // If the display name does not qualify, the typing slot is still tried, second.
+        let mut r = real_names(&[(0, BAD), (1000, GOOD)], &[BAD]);
+        assert_eq!(select(&mut r, None).unwrap(), BAD);
+        assert_eq!(r.probed, [GOOD, BAD]);
+    }
+
+    #[test]
+    fn other_zoom75_name_comes_between() {
+        let odd = "AA:BB:CC:DD:EE:FF";
+        let mut r = real_names(&[(0, BAD), (100, GOOD)], &[]);
+        r.devices.push((Duration::from_millis(50), odd, "ZOOM75 TIGA-EU"));
+        let _ = select(&mut r, None).unwrap_err();
+        assert_eq!(r.probed, [GOOD, odd, BAD]);
+    }
+
+    #[test]
+    fn only_a_typing_slot_is_still_probed() {
+        let mut r = real_names(&[(0, BAD)], &[BAD]);
+        assert_eq!(select(&mut r, None).unwrap(), BAD);
+        assert_eq!(r.probed, [BAD]);
+    }
+
+    #[test]
+    fn cache_beats_the_exact_name() {
+        // Even a cached typing slot is tried before the display name.
+        let mut r = real_names(&[(0, GOOD), (300, BAD)], &[BAD]);
+        assert_eq!(select(&mut r, Some(BAD)).unwrap(), BAD);
+        assert_eq!(r.probed, [BAD]);
+        assert!(r.clock < SCAN_WINDOW);
     }
 
     #[test]
