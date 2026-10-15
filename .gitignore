@@ -33,6 +33,7 @@ extracted/session_01_bulk_stream.diagnostic.bin
 extracted/*.bin.delivered
 extracted/*.bin.session
 extracted/*.bin.exit
+extracted/*.bin.device
 *.tmp
 
 # IDE / OS

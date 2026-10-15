@@ -590,6 +590,257 @@ where
     Ok(())
 }
 
+// ---- Device selection (issue #14) -------------------------------------------------
+//
+// Two peripherals near this keyboard advertise a name containing "zoom75"; only one
+// exposes the media service. A name match therefore only makes a device a candidate.
+// A candidate qualifies once it is connected and shows the media service with all four
+// 1f4000xx characteristics. One that does not is disconnected and skipped for the rest
+// of the run.
+//
+// Order: the device that last completed an upload (cached in `<stream>.device`) is
+// tried as soon as the scan sees it. Everything else waits until the scan window has
+// closed, so every candidate is logged, and is then tried in discovery order.
+
+const SERVICE_MEDIA: Uuid = Uuid::from_u128(0x1f40eaf8_aab4_14a3_f1ba_f61f35cddbaa);
+const SCAN_WINDOW: Duration = Duration::from_secs(5);
+const SCAN_POLL: Duration = Duration::from_millis(250);
+
+struct Seen<D> {
+    address: String,
+    name: String,
+    rssi: Option<i16>,
+    dev: D,
+}
+
+enum Probe<L> {
+    /// Connected and has the media service; `L` is what the upload needs from it.
+    Qualified(L),
+    /// Could not connect. The device may still be the right one.
+    Unreachable(String),
+    /// Connected, but it is not the keyboard's media endpoint. Disconnected again.
+    Unqualified(String),
+}
+
+/// What device selection needs from Bluetooth. Faked in the tests.
+trait Radio {
+    type Dev;
+    type Link;
+    /// Every peripheral the running scan has seen so far.
+    async fn visible(&mut self) -> Result<Vec<Seen<Self::Dev>>, String>;
+    async fn probe(&mut self, dev: &Self::Dev) -> Probe<Self::Link>;
+    /// Time since the scan started.
+    fn elapsed(&self) -> Duration;
+    async fn pause(&mut self, d: Duration);
+}
+
+struct Chosen<D, L> {
+    address: String,
+    name: String,
+    dev: D,
+    link: L,
+}
+
+fn same_address(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+fn is_candidate(name: &str, address: &str, cached: Option<&str>) -> bool {
+    name == TARGET_NAME
+        || name.to_ascii_lowercase().contains("zoom75")
+        // The cached device qualifies to be tried even before its name has been seen.
+        || cached.is_some_and(|c| same_address(c, address))
+}
+
+async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<Chosen<R::Dev, R::Link>, Failed> {
+    let mut known: Vec<String> = Vec::new(); // candidate addresses in the order first seen
+    let mut tried: Vec<String> = Vec::new();
+    let mut outcomes: Vec<String> = Vec::new();
+    let mut any_unreachable = false;
+
+    loop {
+        let mut untried = Vec::new();
+        for s in radio.visible().await.class(Failure::Unreachable)? {
+            if !is_candidate(&s.name, &s.address, cached) {
+                continue;
+            }
+            if !known.iter().any(|k| same_address(k, &s.address)) {
+                let is_cached = cached.is_some_and(|c| same_address(c, &s.address));
+                log!(
+                    "CANDIDATE name={:?} address={} rssi={}{}",
+                    s.name,
+                    s.address,
+                    s.rssi.map(|r| r.to_string()).unwrap_or_else(|| "?".into()),
+                    if is_cached { " (last device that completed an upload)" } else { "" }
+                );
+                known.push(s.address.clone());
+            }
+            if !tried.iter().any(|t| same_address(t, &s.address)) {
+                untried.push(s);
+            }
+        }
+
+        let window_closed = radio.elapsed() >= SCAN_WINDOW;
+        let rank = |s: &Seen<R::Dev>| {
+            let cached_first = !cached.is_some_and(|c| same_address(c, &s.address));
+            let order = known.iter().position(|k| same_address(k, &s.address));
+            (cached_first, order)
+        };
+        untried.sort_by_key(rank);
+        let next = match untried.into_iter().next() {
+            Some(s) if window_closed || cached.is_some_and(|c| same_address(c, &s.address)) => Some(s),
+            _ => None,
+        };
+
+        let Some(s) = next else {
+            if window_closed {
+                break;
+            }
+            radio.pause(SCAN_POLL).await;
+            continue;
+        };
+
+        tried.push(s.address.clone());
+        match radio.probe(&s.dev).await {
+            Probe::Qualified(link) => {
+                log!(
+                    "SELECTED {} ({:?}) after trying {} candidate(s)",
+                    s.address,
+                    s.name,
+                    tried.len()
+                );
+                return Ok(Chosen { address: s.address, name: s.name, dev: s.dev, link });
+            }
+            Probe::Unreachable(why) => {
+                log!("REJECTED {} for this run: {why}", s.address);
+                outcomes.push(format!("{} {why}", s.address));
+                any_unreachable = true;
+            }
+            Probe::Unqualified(why) => {
+                log!("REJECTED {} for this run: {why}", s.address);
+                outcomes.push(format!("{} {why}", s.address));
+            }
+        }
+    }
+
+    if tried.is_empty() {
+        return Err(Failed::new(
+            Failure::Unreachable,
+            format!("{TARGET_NAME} not found (no candidate seen in a {} s scan)", SCAN_WINDOW.as_secs()),
+        ));
+    }
+    // 11 only when every candidate was reached and none had the service. If any could
+    // not be reached, that one may have been the keyboard.
+    let kind = if any_unreachable { Failure::Unreachable } else { Failure::Gatt };
+    Err(Failed::new(
+        kind,
+        format!(
+            "tried {} candidate(s), none qualified: {}",
+            tried.len(),
+            outcomes.join("; ")
+        ),
+    ))
+}
+
+/// The four characteristics of the media service, or why this device lacks them.
+fn media_link(services: &std::collections::BTreeSet<btleplug::api::Service>) -> Result<GattLink, String> {
+    let Some(service) = services.iter().find(|s| s.uuid == SERVICE_MEDIA) else {
+        return Err(format!(
+            "connected, but no media service {SERVICE_MEDIA} ({} other service(s))",
+            services.len()
+        ));
+    };
+    let find = |uuid: Uuid| service.characteristics.iter().find(|c| c.uuid == uuid).cloned();
+    match (find(CHAR_CONTROL), find(CHAR_NOTIFY), find(CHAR_BULK), find(CHAR_NOTIFY2)) {
+        (Some(control), Some(notify1), Some(bulk), Some(notify2)) => Ok(GattLink { control, notify1, bulk, notify2 }),
+        _ => {
+            let missing: Vec<String> = [CHAR_CONTROL, CHAR_NOTIFY, CHAR_BULK, CHAR_NOTIFY2]
+                .iter()
+                .filter(|u| find(**u).is_none())
+                .map(|u| u.to_string()[..8].to_string())
+                .collect();
+            Err(format!("connected, media service present but missing {}", missing.join(", ")))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GattLink {
+    control: btleplug::api::Characteristic,
+    notify1: btleplug::api::Characteristic,
+    bulk: btleplug::api::Characteristic,
+    notify2: btleplug::api::Characteristic,
+}
+
+struct BleRadio<'a> {
+    adapter: &'a btleplug::platform::Adapter,
+    started: Instant,
+}
+
+impl Radio for BleRadio<'_> {
+    type Dev = btleplug::platform::Peripheral;
+    type Link = GattLink;
+
+    async fn visible(&mut self) -> Result<Vec<Seen<Self::Dev>>, String> {
+        let mut seen = Vec::new();
+        for p in self.adapter.peripherals().await.map_err(|e| e.to_string())? {
+            // One peripheral whose properties cannot be read is not a reason to stop.
+            let Ok(props) = p.properties().await else { continue };
+            let props = props.unwrap_or_default();
+            seen.push(Seen {
+                address: p.address().to_string(),
+                name: props.local_name.unwrap_or_default(),
+                rssi: props.rssi,
+                dev: p,
+            });
+        }
+        Ok(seen)
+    }
+
+    async fn probe(&mut self, p: &Self::Dev) -> Probe<GattLink> {
+        if !p.is_connected().await.unwrap_or(false) {
+            if let Err(e) = p.connect().await {
+                return Probe::Unreachable(format!("connect failed: {e}"));
+            }
+        }
+        let verdict = match p.discover_services().await {
+            Ok(()) => media_link(&p.services()),
+            Err(e) => Err(format!("connected, but service discovery failed: {e}")),
+        };
+        match verdict {
+            Ok(link) => Probe::Qualified(link),
+            Err(why) => {
+                if let Err(e) = p.disconnect().await {
+                    log!("warning: could not disconnect from {}: {e}", p.address());
+                }
+                Probe::Unqualified(why)
+            }
+        }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    async fn pause(&mut self, d: Duration) {
+        sleep(d).await;
+    }
+}
+
+/// Address of the device that last completed an upload, from `<stream>.device`.
+fn read_cached_device(stream_path: &Path) -> Option<String> {
+    let text = fs::read_to_string(sidecar_path(stream_path, ".device")).ok()?;
+    sidecar_value(&text, "address").filter(|a| !a.is_empty()).map(str::to_string)
+}
+
+fn write_cached_device(stream_path: &Path, address: &str, name: &str) {
+    write_sidecar(
+        stream_path,
+        ".device",
+        &format!("address={address}\nname={name}\nlast_completed_at={}\nrun_id={}\n", utc_now(), run_id()),
+    );
+}
+
 struct Opts {
     stream_path: PathBuf,
     intra_block_ms: u64,
@@ -721,35 +972,17 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         adapter.adapter_info().await.unwrap_or_else(|e| format!("(info unavailable: {e})"))
     );
 
-    log!("Scanning for {TARGET_NAME}...");
+    let cached = read_cached_device(stream_path);
+    match &cached {
+        Some(a) => log!("Scanning for {TARGET_NAME} (trying {a} first: it completed the last upload)..."),
+        None => log!("Scanning for {TARGET_NAME}..."),
+    }
     adapter.start_scan(ScanFilter::default()).await.class(Failure::Unreachable)?;
-    sleep(Duration::from_secs(5)).await;
-
-    let mut target = None;
-    for p in adapter.peripherals().await.class(Failure::Unreachable)? {
-        let props = p.properties().await.class(Failure::Unreachable)?;
-        let name = props.as_ref().and_then(|p| p.local_name.as_deref()).unwrap_or("");
-        if name == TARGET_NAME || name.to_ascii_lowercase().contains("zoom75") {
-            target = Some(p);
-            break;
-        }
-    }
-    let peripheral = target.ok_or("Zoom75 Tiga not found").class(Failure::Unreachable)?;
-    log!("Found keyboard at {}", peripheral.address());
-
-    if !peripheral.is_connected().await.class(Failure::Unreachable)? {
-        peripheral.connect().await.class(Failure::Unreachable)?;
-    }
-    peripheral.discover_services().await.class(Failure::Gatt)?;
-
-    let chars = peripheral.characteristics();
-    let find = |uuid: Uuid, what: &str| {
-        chars.iter().find(|c| c.uuid == uuid).cloned().ok_or(format!("{what} missing")).class(Failure::Gatt)
-    };
-    let control = find(CHAR_CONTROL, "control char")?;
-    let notify1 = find(CHAR_NOTIFY, "notify 0002")?;
-    let bulk = find(CHAR_BULK, "bulk 0003")?;
-    let notify2 = find(CHAR_NOTIFY2, "notify 0004")?;
+    let mut radio = BleRadio { adapter, started: Instant::now() };
+    // The scan is left running, as it always has been during uploads.
+    let Chosen { address, name, dev: peripheral, link } = select_device(&mut radio, cached.as_deref()).await?;
+    let GattLink { control, notify1, bulk, notify2 } = link;
+    log!("Found keyboard at {address}");
 
     let mut notifications = peripheral.notifications().await.class(Failure::Gatt)?;
     peripheral.subscribe(&notify1).await.class(Failure::Gatt)?;
@@ -759,6 +992,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut last_uploaded: Option<Vec<u8>> = None;
     let mut last_crc = String::new();
     let mut last_frame_id = String::new();
+    let mut device_recorded = false;
 
     loop {
         let stream = fs::read(stream_path).class(Failure::Fatal)?;
@@ -802,6 +1036,10 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         let elapsed = started.elapsed().as_secs_f64();
         log!("UPLOAD COMPLETE frame={frame_id} crc32={crc} in {elapsed:.2}s");
         record_delivery(stream_path, &frame_id, &crc, elapsed);
+        if !device_recorded {
+            write_cached_device(stream_path, &address, &name);
+            device_recorded = true;
+        }
 
         last_uploaded = Some(stream);
         last_crc = crc;
@@ -1047,6 +1285,195 @@ mod tests {
                 &control1_for(s.len())[18..21]
             );
         }
+    }
+
+    // ---- Device selection (issue #14) ----
+
+    const GOOD: &str = "07:01:88:B3:66:1B";
+    const BAD: &str = "1B:A3:A9:10:13:5D";
+
+    /// A scan on a virtual clock. Each device appears at a given time; probing takes 1 s.
+    struct FakeRadio {
+        devices: Vec<(Duration, &'static str, &'static str)>, // appears_at, address, name
+        qualified: Vec<&'static str>,
+        unreachable: Vec<&'static str>,
+        clock: Duration,
+        probed: Vec<String>,
+    }
+
+    impl FakeRadio {
+        fn new(devices: &[(u64, &'static str)], qualified: &[&'static str]) -> Self {
+            FakeRadio {
+                devices: devices.iter().map(|&(ms, a)| (Duration::from_millis(ms), a, "Zoom75 Tiga")).collect(),
+                qualified: qualified.to_vec(),
+                unreachable: Vec::new(),
+                clock: Duration::ZERO,
+                probed: Vec::new(),
+            }
+        }
+    }
+
+    impl Radio for FakeRadio {
+        type Dev = &'static str;
+        type Link = ();
+
+        async fn visible(&mut self) -> Result<Vec<Seen<&'static str>>, String> {
+            Ok(self
+                .devices
+                .iter()
+                .filter(|d| d.0 <= self.clock)
+                .map(|&(_, address, name)| Seen { address: address.into(), name: name.into(), rssi: Some(-60), dev: address })
+                .collect())
+        }
+
+        async fn probe(&mut self, dev: &&'static str) -> Probe<()> {
+            self.probed.push(dev.to_string());
+            self.clock += Duration::from_secs(1);
+            if self.unreachable.contains(dev) {
+                Probe::Unreachable("connect failed".into())
+            } else if self.qualified.contains(dev) {
+                Probe::Qualified(())
+            } else {
+                Probe::Unqualified("connected, but no media service".into())
+            }
+        }
+
+        fn elapsed(&self) -> Duration {
+            self.clock
+        }
+
+        async fn pause(&mut self, d: Duration) {
+            self.clock += d;
+        }
+    }
+
+    fn select(radio: &mut FakeRadio, cached: Option<&str>) -> Result<String, Failed> {
+        futures::executor::block_on(select_device(radio, cached)).map(|c| c.address)
+    }
+
+    #[test]
+    fn wrong_device_first_is_skipped() {
+        let mut r = FakeRadio::new(&[(0, BAD), (300, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!(r.probed, [BAD, GOOD]);
+        // Nothing is tried before the window closes, so every candidate gets logged.
+        assert!(r.clock >= SCAN_WINDOW);
+    }
+
+    #[test]
+    fn only_the_wrong_device_gives_11() {
+        let mut r = FakeRadio::new(&[(0, BAD)], &[GOOD]);
+        let f = select(&mut r, None).unwrap_err();
+        assert_eq!(f.kind, Failure::Gatt);
+        assert!(f.detail.contains("tried 1 candidate(s)"), "{}", f.detail);
+        assert!(f.detail.contains(BAD), "{}", f.detail);
+        assert_eq!(r.probed, [BAD]); // tried once, not again on later polls
+    }
+
+    #[test]
+    fn neither_of_two_qualifies() {
+        let other = "AA:BB:CC:DD:EE:FF";
+        let mut r = FakeRadio::new(&[(0, BAD), (1000, other)], &[]);
+        let f = select(&mut r, None).unwrap_err();
+        assert_eq!(f.kind, Failure::Gatt);
+        assert!(f.detail.contains("tried 2 candidate(s)"), "{}", f.detail);
+        assert_eq!(r.probed, [BAD, other]);
+    }
+
+    #[test]
+    fn cached_device_is_tried_first_without_waiting() {
+        let mut r = FakeRadio::new(&[(0, BAD), (500, GOOD)], &[GOOD]);
+        // Cached address in a different case still matches.
+        assert_eq!(select(&mut r, Some(&GOOD.to_ascii_lowercase())).unwrap(), GOOD);
+        assert_eq!(r.probed, [GOOD]);
+        assert!(r.clock < SCAN_WINDOW, "waited for the whole window: {:?}", r.clock);
+    }
+
+    #[test]
+    fn cached_device_gone_falls_back_to_full_scan() {
+        let gone = "11:22:33:44:55:66";
+        let mut r = FakeRadio::new(&[(0, BAD), (200, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, Some(gone)).unwrap(), GOOD);
+        assert_eq!(r.probed, [BAD, GOOD]);
+    }
+
+    #[test]
+    fn cached_device_no_longer_qualifying_falls_back() {
+        let mut r = FakeRadio::new(&[(0, BAD), (200, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, Some(BAD)).unwrap(), GOOD);
+        assert_eq!(r.probed, [BAD, GOOD]);
+    }
+
+    #[test]
+    fn cached_device_counts_even_without_a_name() {
+        let mut r = FakeRadio::new(&[], &[GOOD]);
+        r.devices.push((Duration::ZERO, GOOD, ""));
+        r.devices.push((Duration::ZERO, "99:99:99:99:99:99", "Some Mouse"));
+        assert_eq!(select(&mut r, Some(GOOD)).unwrap(), GOOD);
+        assert_eq!(r.probed, [GOOD]);
+    }
+
+    #[test]
+    fn nothing_found_is_10() {
+        let mut r = FakeRadio::new(&[], &[]);
+        r.devices.push((Duration::ZERO, "99:99:99:99:99:99", "Some Mouse"));
+        let f = select(&mut r, None).unwrap_err();
+        assert_eq!(f.kind, Failure::Unreachable);
+        assert!(f.detail.contains("not found"), "{}", f.detail);
+        assert!(r.probed.is_empty());
+    }
+
+    #[test]
+    fn unreachable_candidate_makes_it_10_not_11() {
+        let mut r = FakeRadio::new(&[(0, BAD), (0, GOOD)], &[GOOD]);
+        r.unreachable.push(GOOD);
+        let f = select(&mut r, None).unwrap_err();
+        assert_eq!(f.kind, Failure::Unreachable);
+        assert!(f.detail.contains("tried 2 candidate(s)"), "{}", f.detail);
+    }
+
+    #[test]
+    fn media_link_requires_service_and_all_four() {
+        use btleplug::api::{CharPropFlags, Characteristic, Service};
+        use std::collections::BTreeSet;
+        let chr = |uuid| Characteristic {
+            uuid,
+            service_uuid: SERVICE_MEDIA,
+            properties: CharPropFlags::empty(),
+            descriptors: BTreeSet::new(),
+        };
+        let service = |uuid, chars: &[Uuid]| Service {
+            uuid,
+            primary: true,
+            characteristics: chars.iter().map(|&u| chr(u)).collect(),
+        };
+        let all = [CHAR_CONTROL, CHAR_NOTIFY, CHAR_BULK, CHAR_NOTIFY2];
+
+        let ok: BTreeSet<_> = [service(SERVICE_MEDIA, &all)].into();
+        assert!(media_link(&ok).is_ok());
+
+        let none: BTreeSet<Service> = BTreeSet::new();
+        assert!(media_link(&none).unwrap_err().contains("no media service"));
+
+        // The four characteristics under some other service do not count.
+        let elsewhere: BTreeSet<_> = [service(Uuid::from_u128(0x180a), &all)].into();
+        assert!(media_link(&elsewhere).unwrap_err().contains("no media service"));
+
+        let partial: BTreeSet<_> = [service(SERVICE_MEDIA, &all[1..])].into();
+        assert!(media_link(&partial).unwrap_err().contains("missing 1f400001"));
+    }
+
+    #[test]
+    fn device_cache_round_trip() {
+        let dir = std::env::temp_dir().join(format!("tiga_device_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        assert_eq!(read_cached_device(&stream), None);
+        write_cached_device(&stream, GOOD, "Zoom75 Tiga");
+        assert_eq!(read_cached_device(&stream).as_deref(), Some(GOOD));
+        fs::write(sidecar_path(&stream, ".device"), "address=\n").unwrap();
+        assert_eq!(read_cached_device(&stream), None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

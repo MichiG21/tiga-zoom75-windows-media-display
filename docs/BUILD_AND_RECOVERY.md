@@ -31,6 +31,7 @@ cargo build --release --locked --bin tiga_stream_watch_flow
 - `extracted\session_01_bulk_stream.windows_nowplaying.bin`
 - `extracted\session_01_bulk_stream.bin.frame` (ID of the last rendered frame)
 - `extracted\session_01_bulk_stream.bin.delivered` (last frame the keyboard confirmed)
+- `extracted\session_01_bulk_stream.bin.device` (address of the keyboard that completed the last upload; the uploader tries it first. Delete it to force a full scan)
 
 ## Full stack stop
 
