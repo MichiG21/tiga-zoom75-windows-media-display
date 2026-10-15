@@ -215,6 +215,8 @@ To avoid showing an old track immediately at login, the renderer:
 
 Fresh playback can be detected through a new media item, a playback-state transition, or an advancing timeline when the source provides one.
 
+Some sources report "Playing" but never advance their position. If the same media item, with a title, reports "Playing" continuously for 15 seconds, that also counts as fresh. A remembered session that reports Paused or Stopped still stays on standby.
+
 ---
 
 ## BLE uploader

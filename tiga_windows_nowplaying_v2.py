@@ -39,6 +39,9 @@ THUMBNAIL_FILE = HERE / "windows_media_thumbnail.bin"
 POLL_INTERVAL = 1.0
 IDLE_TO_STANDBY_SECONDS = 60.0
 FRESH_POSITION_ADVANCE_MS = 1500
+# Some providers report Playing with a position that never moves. Without this escape,
+# media that was already playing at startup stayed on standby indefinitely (issue #5).
+STEADY_PLAYING_RELEASE_SECONDS = 15.0
 COMMAND_FILE = HERE / "tiga_display_command.txt"
 COVER_SIZE = 122
 
@@ -278,6 +281,79 @@ def media_fingerprint(media: dict) -> str:
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
 
 
+class FreshnessGate:
+    """Holds standby until playback is proven fresh.
+
+    Windows keeps remembered media sessions around after playback stops or across a
+    reboot. The gate records what was there when standby was entered and releases
+    only on evidence of real playback:
+
+    - a different media item,
+    - a transition from a non-playing state to Playing,
+    - the timeline advancing by FRESH_POSITION_ADVANCE_MS, or
+    - the same valid media reporting Playing continuously for
+      STEADY_PLAYING_RELEASE_SECONDS (for providers whose position never moves).
+
+    A remembered session that reports Paused/Stopped, or Playing without a title,
+    stays on standby.
+    """
+
+    def __init__(self, media: dict | None = None):
+        self.arm(media)
+
+    def arm(self, media: dict | None):
+        if media and media.get("present"):
+            self.fp = media_fingerprint(media)
+            self.position = int(media.get("position_ms", 0) or 0)
+            self.state = str(media.get("state", ""))
+        else:
+            self.fp = None
+            self.position = None
+            self.state = None
+        self.interrupt()
+
+    def interrupt(self):
+        self.steady_fp = None
+        self.steady_since = None
+
+    def observe(self, media: dict, now: float) -> str | None:
+        """Feed one snapshot taken while on standby; returns a release reason or None."""
+        state = str(media.get("state", ""))
+        fp = media_fingerprint(media)
+        position = int(media.get("position_ms", 0) or 0)
+
+        if state != "Playing":
+            self.fp = fp
+            self.position = position
+            self.state = state
+            self.interrupt()
+            return None
+
+        if self.fp is None or fp != self.fp:
+            return "new media"
+
+        if self.state is not None and self.state != "Playing":
+            return "playback started"
+
+        if self.position is not None and position > 0:
+            if position - int(self.position or 0) >= FRESH_POSITION_ADVANCE_MS:
+                return "timeline advancing"
+
+        if (media.get("title") or "").strip():
+            if self.steady_fp != fp:
+                self.steady_fp = fp
+                self.steady_since = now
+            elif now - self.steady_since >= STEADY_PLAYING_RELEASE_SECONDS:
+                return "steady playback"
+        else:
+            self.interrupt()
+
+        if self.position is None:
+            self.position = position
+        self.state = state
+        return None
+
+
 def write_display(img: Image.Image, reason: str, preview: bool = True) -> str:
     frame_id = next_frame_id()
     log(f"FRAME {frame_id} rendered ({reason})")
@@ -494,16 +570,10 @@ def main():
     write_display(render_standby("Waiting for fresh playback"), "startup standby")
     log("STARTUP -> standby rendered + installed")
 
-    startup_fp = None
-    startup_position = None
-    startup_state = None
+    gate = FreshnessGate()
 
     try:
-        startup_media = snapshot()
-        if startup_media.get("present"):
-            startup_fp = media_fingerprint(startup_media)
-            startup_position = int(startup_media.get("position_ms", 0) or 0)
-            startup_state = str(startup_media.get("state", ""))
+        gate.arm(snapshot())
     except Exception as exc:
         log(f"Initial media query warning: {exc}")
 
@@ -520,10 +590,6 @@ def main():
     active_fp = None
     active_render_key = None
     nonplaying_since = None
-
-    gate_fp = startup_fp
-    gate_position = startup_position
-    gate_state = startup_state
 
     try:
         while True:
@@ -551,19 +617,9 @@ def main():
                     nonplaying_since = None
 
                     try:
-                        current = snapshot()
-                        if current.get("present"):
-                            gate_fp = media_fingerprint(current)
-                            gate_position = int(current.get("position_ms", 0) or 0)
-                            gate_state = str(current.get("state", ""))
-                        else:
-                            gate_fp = None
-                            gate_position = None
-                            gate_state = None
+                        gate.arm(snapshot())
                     except Exception:
-                        gate_fp = None
-                        gate_position = None
-                        gate_state = None
+                        gate.arm(None)
 
                     log("CONTROL -> automatic mode re-armed")
 
@@ -589,15 +645,14 @@ def main():
                         log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
-                        gate_fp = None
-                        gate_position = None
-                        gate_state = None
+                        gate.arm(None)
+                else:
+                    gate.interrupt()
                 time.sleep(POLL_INTERVAL)
                 continue
 
             state = str(media.get("state", ""))
             fp = media_fingerprint(media)
-            position = int(media.get("position_ms", 0) or 0)
 
             if state != "Playing":
                 if active_fp is not None:
@@ -608,13 +663,9 @@ def main():
                         log("IDLE -> standby rendered + installed")
                         active_fp = None
                         active_render_key = None
-                        gate_fp = fp
-                        gate_position = position
-                        gate_state = state
+                        gate.arm(media)
                 else:
-                    gate_fp = fp
-                    gate_position = position
-                    gate_state = state
+                    gate.observe(media, now_mono)
 
                 time.sleep(POLL_INTERVAL)
                 continue
@@ -641,23 +692,9 @@ def main():
                 time.sleep(POLL_INTERVAL)
                 continue
 
-            fresh = False
-            fresh_reason = ""
+            fresh_reason = gate.observe(media, now_mono)
 
-            if gate_fp is None or fp != gate_fp:
-                fresh = True
-                fresh_reason = "new media"
-
-            elif gate_state is not None and gate_state != "Playing":
-                fresh = True
-                fresh_reason = "playback started"
-
-            elif gate_position is not None and position > 0:
-                if position - int(gate_position or 0) >= FRESH_POSITION_ADVANCE_MS:
-                    fresh = True
-                    fresh_reason = "timeline advancing"
-
-            if fresh:
+            if fresh_reason:
                 img = render_media(media)
                 write_display(img, f"fresh playback: {fresh_reason}")
                 active_fp = fp
@@ -670,10 +707,6 @@ def main():
                 print(f"Album    : {media.get('album') or '(empty)'}")
                 print(f"Duration : {format_duration_ms(media.get('duration_ms', 0)) or '(unknown)'}")
                 print(f"Thumbnail: {'YES' if media.get('thumbnail') else 'NO'}")
-            else:
-                if gate_position is None:
-                    gate_position = position
-                gate_state = state
 
             time.sleep(POLL_INTERVAL)
 

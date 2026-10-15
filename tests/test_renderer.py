@@ -66,5 +66,136 @@ class FrameCorrelationTests(SandboxedRenderer):
         self.assertEqual(self.read_sidecar()["frame_id"], second)
 
 
+def media(state="Playing", position=30_000, title="Song", **extra):
+    m = {
+        "present": True,
+        "source": "Spotify.exe",
+        "state": state,
+        "title": title,
+        "artist": "Artist",
+        "album": "Album",
+        "position_ms": position,
+        "duration_ms": 200_000,
+    }
+    m.update(extra)
+    return m
+
+
+class FreshnessGateTests(unittest.TestCase):
+    """Issue #5: the four cases from TASKS.md, plus the escape's own limits."""
+
+    def setUp(self):
+        self.r = load_renderer()
+
+    def run_polls(self, gate, snapshots, start=0.0, step=1.0):
+        """Feed snapshots one second apart; return (seconds_elapsed, reason) of the first release."""
+        for i, snap in enumerate(snapshots):
+            reason = gate.observe(snap, start + i * step)
+            if reason:
+                return i * step, reason
+        return None, None
+
+    def test_already_playing_frozen_timeline_releases_after_bound(self):
+        gate = self.r.FreshnessGate(media(position=30_000))
+        bound = self.r.STEADY_PLAYING_RELEASE_SECONDS
+        polls = [media(position=30_000)] * int(bound + 5)
+        elapsed, reason = self.run_polls(gate, polls)
+        self.assertEqual(reason, "steady playback")
+        self.assertEqual(elapsed, bound)
+
+    def test_already_playing_frozen_timeline_holds_before_bound(self):
+        gate = self.r.FreshnessGate(media(position=30_000))
+        polls = [media(position=30_000)] * int(self.r.STEADY_PLAYING_RELEASE_SECONDS)
+        self.assertEqual(self.run_polls(gate, polls), (None, None))
+
+    def test_already_playing_advancing_timeline_releases_quickly(self):
+        gate = self.r.FreshnessGate(media(position=30_000))
+        polls = [media(position=30_000 + i * 1000) for i in range(10)]
+        elapsed, reason = self.run_polls(gate, polls)
+        self.assertEqual(reason, "timeline advancing")
+        self.assertLessEqual(elapsed, 2.0)
+
+    def test_pause_then_resume_releases_immediately(self):
+        gate = self.r.FreshnessGate(media(position=30_000))
+        self.assertIsNone(gate.observe(media(state="Paused", position=30_000), 0.0))
+        self.assertEqual(gate.observe(media(position=30_000), 1.0), "playback started")
+
+    def test_genuine_stale_session_stays_on_standby(self):
+        # A remembered session after reboot/login: same item, not playing, never moves.
+        stale = media(state="Paused", position=95_000)
+        gate = self.r.FreshnessGate(stale)
+        self.assertEqual(self.run_polls(gate, [stale] * 600), (None, None))
+
+    def test_stale_playing_session_without_metadata_stays_on_standby(self):
+        stale = media(position=0, title="")
+        gate = self.r.FreshnessGate(stale)
+        self.assertEqual(self.run_polls(gate, [stale] * 600), (None, None))
+
+    def test_steady_clock_restarts_when_playback_is_interrupted(self):
+        gate = self.r.FreshnessGate(media(position=30_000))
+        bound = self.r.STEADY_PLAYING_RELEASE_SECONDS
+        self.assertIsNone(gate.observe(media(position=30_000), 0.0))
+        self.assertIsNone(gate.observe(media(position=30_000), bound - 1))
+        gate.interrupt()  # e.g. the session briefly disappeared
+        self.assertIsNone(gate.observe(media(position=30_000), bound + 1))
+        self.assertEqual(gate.observe(media(position=30_000), 2 * bound + 1), "steady playback")
+
+    def test_new_media_releases_immediately(self):
+        gate = self.r.FreshnessGate(media(title="Old"))
+        self.assertEqual(gate.observe(media(title="New"), 0.0), "new media")
+
+    def test_no_startup_media_releases_on_first_playing(self):
+        gate = self.r.FreshnessGate(None)
+        self.assertEqual(gate.observe(media(), 0.0), "new media")
+
+
+class _StopLoop(Exception):
+    pass
+
+
+class MainLoopGateTests(SandboxedRenderer):
+    """Drives main() with a fake clock and fake snapshots to check the gate wiring."""
+
+    def run_main(self, snapshots, max_polls):
+        clock = {"t": 0.0, "polls": 0}
+        rendered = []
+        snaps = iter(snapshots)
+        last = {"snap": None}
+
+        def fake_snapshot():
+            try:
+                last["snap"] = next(snaps)
+            except StopIteration:
+                pass
+            return last["snap"]
+
+        def fake_sleep(seconds):
+            clock["t"] += seconds
+            clock["polls"] += 1
+            if clock["polls"] >= max_polls:
+                raise _StopLoop
+
+        self.r.snapshot = fake_snapshot
+        self.r.write_display = lambda img, reason, preview=True: rendered.append(reason)
+        self.r.time.sleep = fake_sleep
+        self.r.time.monotonic = lambda: clock["t"]
+        self.addCleanup(setattr, self.r.time, "sleep", __import__("time").sleep)
+        self.addCleanup(setattr, self.r.time, "monotonic", __import__("time").monotonic)
+        with self.assertRaises(_StopLoop):
+            self.r.main()
+        return rendered
+
+    def test_already_playing_frozen_timeline_reaches_now_playing(self):
+        frozen = media(position=30_000)
+        rendered = self.run_main([frozen] * 40, max_polls=40)
+        self.assertEqual(rendered[0], "startup standby")
+        self.assertIn("fresh playback: steady playback", rendered)
+
+    def test_stale_paused_session_never_leaves_standby(self):
+        stale = media(state="Paused", position=95_000)
+        rendered = self.run_main([stale] * 120, max_polls=120)
+        self.assertEqual(rendered, ["startup standby"])
+
+
 if __name__ == "__main__":
     unittest.main()
