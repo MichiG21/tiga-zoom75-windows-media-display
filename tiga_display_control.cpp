@@ -34,10 +34,24 @@ static std::wstring new_command_id() {
     return std::to_wstring(ticks) + L"-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++counter);
 }
 
-// Writes "<command> <id>" and returns that exact text, or an empty string on failure.
-static std::wstring write_command_text(std::wstring const& command) {
+struct WriteResult {
+    std::wstring text;   // exactly what was written; empty on failure
+    std::wstring error;  // why it failed
+};
+
+// True only if the command file holds exactly `text`.
+static bool command_file_holds(std::filesystem::path const& path, std::wstring const& text) {
+    std::wifstream f(path);
+    std::wstring line;
+    if (!f || !std::getline(f, line)) return false;
+    if (!line.empty() && line.back() == L'\r') line.pop_back();
+    return line == text;
+}
+
+// Writes "<command> <id>", reads it back, and returns that exact text.
+static WriteResult write_command_text(std::wstring const& command) {
     auto path = command_path();
-    if (path.empty()) return {};
+    if (path.empty()) return { {}, L"could not determine this program's folder" };
 
     auto tmp = path;
     tmp += L".tmp";
@@ -45,9 +59,9 @@ static std::wstring write_command_text(std::wstring const& command) {
     std::wstring text = command + L" " + new_command_id();
     {
         std::wofstream f(tmp, std::ios::trunc);
-        if (!f) return {};
+        if (!f) return { {}, L"could not create " + tmp.wstring() };
         f << text << L"\n";
-        if (!f) return {};
+        if (!f) return { {}, L"could not write " + tmp.wstring() };
     }
 
     std::error_code ec;
@@ -56,13 +70,31 @@ static std::wstring write_command_text(std::wstring const& command) {
     std::filesystem::rename(tmp, path, ec);
     if (ec) {
         std::filesystem::remove(tmp, ec);
-        return {};
+        return { {}, L"could not move the new file into place" };
     }
-    return text;
+    if (!command_file_holds(path, text)) {
+        return { {}, L"the file did not contain the command when read back" };
+    }
+    return { text, {} };
 }
 
-static bool write_command(std::wstring const& command) {
-    return !write_command_text(command).empty();
+static std::wstring write_failure_message(std::wstring const& what, std::wstring const& error) {
+    return L"The " + what + L" command was NOT sent: " + error + L".\n\nCommand file:\n" +
+           command_path().wstring() +
+           L"\n\nIf that folder is writable, antivirus software may be blocking or sandboxing "
+           L"this program (Norton CyberCapture, for example, can hold a newly built .exe). "
+           L"Try again in a minute, or allow the program in your antivirus.";
+}
+
+// A read-back cannot catch everything: a sandboxed program reads back its own
+// redirected copy. Only the renderer's acknowledgement proves the command arrived.
+static std::wstring renderer_silent_message() {
+    return L"The display renderer did not confirm the command.\n\nCommand file:\n" +
+           command_path().wstring() +
+           L"\n\nEither the display stack is not running (check Status Display, or run Start "
+           L"Display), or this program's writes are not reaching that folder. If the file is "
+           L"not there, antivirus software may be sandboxing this program (Norton "
+           L"CyberCapture, for example, can hold a newly built .exe).";
 }
 
 // ---- Shutdown acknowledgement (issue #7) ---------------------------------------
@@ -138,17 +170,20 @@ static DWORD WINAPI safe_shutdown_thread(LPVOID param) {
         return DWORD{0};
     };
 
-    std::wstring sent = write_command_text(L"standby");
-    if (sent.empty()) {
-        return cancel(L"Could not request standby; shutdown cancelled.");
+    WriteResult sent = write_command_text(L"standby");
+    if (sent.text.empty()) {
+        cancel(L"Standby was not sent; shutdown cancelled.");
+        MessageBoxW(hwnd, write_failure_message(L"standby", sent.error).c_str(), L"TIGA Display Control",
+                    MB_OK | MB_ICONERROR);
+        return 0;
     }
-    std::string sent_text = narrow_ascii(sent);  // the renderer lower-cases; ours is already
+    std::string sent_text = narrow_ascii(sent.text);  // the renderer lower-cases; ours is already
 
     auto ack_path = exe_dir() / L"tiga_display_command.ack";
     auto delivered_path = exe_dir() / L"extracted" / L"session_01_bulk_stream.bin.delivered";
 
     // 1. The renderer installed a standby frame for *this* command.
-    SetWindowTextW(GetDlgItem(hwnd, 2001), L"Standby requested. Waiting for the renderer...");
+    SetWindowTextW(GetDlgItem(hwnd, 2001), L"Standby written. Waiting for the renderer...");
     std::string frame_id, crc;
     bool acked = wait_until(ACK_TIMEOUT_MS, [&] {
         auto ack = read_key_values(ack_path);
@@ -160,10 +195,11 @@ static DWORD WINAPI safe_shutdown_thread(LPVOID param) {
 
     bool delivered = false;
     if (!acked) {
-        if (!ask_shutdown_anyway(hwnd, L"The display renderer did not confirm standby. "
-                                       L"The TIGA display stack may not be running.")) {
-            return cancel(L"Shutdown cancelled: renderer did not confirm standby.");
-        }
+        // No shutdown prompt from here: without the renderer's ack, a stopped stack and
+        // a command that never arrived look the same.
+        cancel(L"Shutdown cancelled: the renderer did not confirm standby.");
+        MessageBoxW(hwnd, renderer_silent_message().c_str(), L"TIGA Display Control", MB_OK | MB_ICONWARNING);
+        return 0;
     } else {
         // 2. The keyboard confirmed that exact frame. Match the frame ID, not only the
         //    CRC: an identical standby frame delivered earlier must not count while a
@@ -186,6 +222,53 @@ static DWORD WINAPI safe_shutdown_thread(LPVOID param) {
                              : L"Shutting down Windows without confirmation...");
     ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/s /t 0", nullptr, SW_HIDE);
     return 0;
+}
+
+// ---- The other buttons --------------------------------------------------------------
+//
+// The status says "written" until the renderer acknowledges the exact command text,
+// and says so plainly if it never does.
+
+constexpr UINT_PTR ACK_TIMER             = 1;
+constexpr DWORD    BUTTON_ACK_TIMEOUT_MS = 10'000;
+
+static std::string  g_pending;       // command text awaiting the renderer's ack
+static std::wstring g_pending_done;  // status to show once acknowledged
+static ULONGLONG    g_pending_deadline = 0;
+
+static void send_command(HWND hwnd, wchar_t const* command, wchar_t const* label, wchar_t const* done) {
+    KillTimer(hwnd, ACK_TIMER);
+    g_pending.clear();
+
+    WriteResult r = write_command_text(command);
+    if (r.text.empty()) {
+        set_status(hwnd, L"Not sent: could not write the control file.");
+        MessageBoxW(hwnd, write_failure_message(label, r.error).c_str(), L"TIGA Display Control",
+                    MB_OK | MB_ICONERROR);
+        return;
+    }
+    g_pending = narrow_ascii(r.text);
+    g_pending_done = done;
+    g_pending_deadline = GetTickCount64() + BUTTON_ACK_TIMEOUT_MS;
+    set_status(hwnd, (std::wstring(L"Written. Waiting for the renderer to confirm ") + label + L"...").c_str());
+    SetTimer(hwnd, ACK_TIMER, POLL_MS, nullptr);
+}
+
+static void check_pending_ack(HWND hwnd) {
+    if (g_pending.empty()) {
+        KillTimer(hwnd, ACK_TIMER);
+        return;
+    }
+    if (read_key_values(exe_dir() / L"tiga_display_command.ack")["command_text"] == g_pending) {
+        KillTimer(hwnd, ACK_TIMER);
+        g_pending.clear();
+        set_status(hwnd, g_pending_done.c_str());
+    } else if (GetTickCount64() >= g_pending_deadline) {
+        KillTimer(hwnd, ACK_TIMER);  // before the message box, whose loop would keep it firing
+        g_pending.clear();
+        set_status(hwnd, L"The renderer did not confirm the command.");
+        MessageBoxW(hwnd, renderer_silent_message().c_str(), L"TIGA Display Control", MB_OK | MB_ICONWARNING);
+    }
 }
 
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -230,21 +313,17 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_STANDBY:
-            set_status(hwnd, write_command(L"standby")
-                ? L"Standby requested."
-                : L"Could not write control file.");
+            send_command(hwnd, L"standby", L"standby",
+                         L"Standby confirmed by the renderer; uploading to the keyboard.");
             return 0;
 
         case ID_BLACK:
-            set_status(hwnd, write_command(L"black")
-                ? L"Black screen requested."
-                : L"Could not write control file.");
+            send_command(hwnd, L"black", L"black screen",
+                         L"Black screen confirmed by the renderer; uploading to the keyboard.");
             return 0;
 
         case ID_AUTO:
-            set_status(hwnd, write_command(L"auto")
-                ? L"Automatic media mode requested."
-                : L"Could not write control file.");
+            send_command(hwnd, L"auto", L"automatic mode", L"Automatic mode confirmed by the renderer.");
             return 0;
 
         case ID_SAFE_SHUTDOWN: {
@@ -268,7 +347,15 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         }
         break;
 
+    case WM_TIMER:
+        if (wParam == ACK_TIMER) {
+            check_pending_ack(hwnd);
+            return 0;
+        }
+        break;
+
     case WM_DESTROY:
+        KillTimer(hwnd, ACK_TIMER);
         PostQuitMessage(0);
         return 0;
     }

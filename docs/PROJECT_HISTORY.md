@@ -548,7 +548,7 @@ finding.** It is unproven either way.
 - **#6 (bug C):** repeated identical commands are acted on. Verified by writing the
   command file by hand (`standby test1`, then `standby test2`; renderer log 21:30:31 and
   21:31:38). The GUI path was blocked: the display-control utility reported the request
-  but no command file appeared (see the issue filed for it).
+  but no command file appeared (#15).
 - **#9 (bug F):** logs keep history across restarts, with run and frame IDs.
 - **#10 (bug G):** a 34-character unbroken title wraps instead of running off the screen.
 - **The Unicode crash fix:** a Japanese title (`トーキョーレギー`) rendered, as empty
