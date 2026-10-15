@@ -365,6 +365,12 @@ def write_display(img: Image.Image, reason: str, preview: bool = True) -> str:
 
 
 def read_control_command(last_text: str | None):
+    """Return (command, text_to_remember).
+
+    The control utility writes "<command> <unique id>", so pressing the same button
+    twice still changes the file (issue #6). The bare form "<command>" written by older
+    builds is still accepted, with its old limitation.
+    """
     try:
         raw = COMMAND_FILE.read_text(encoding="utf-8").strip().lower()
     except FileNotFoundError:
@@ -375,8 +381,9 @@ def read_control_command(last_text: str | None):
     if not raw or raw == last_text:
         return None, last_text
 
-    if raw in {"auto", "standby", "black"}:
-        return raw, raw
+    command = raw.split()[0]
+    if command in {"auto", "standby", "black"}:
+        return command, raw
 
     return None, raw
 

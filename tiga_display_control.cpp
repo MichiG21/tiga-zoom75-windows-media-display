@@ -23,6 +23,16 @@ static std::filesystem::path command_path() {
     return std::filesystem::path(exe_path).parent_path() / L"tiga_display_command.txt";
 }
 
+// Each write carries a unique ID so the renderer sees a repeated command (Standby
+// clicked twice) as new; it used to compare the bare text and ignore it (issue #6).
+static std::wstring new_command_id() {
+    static unsigned counter = 0;
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    unsigned long long ticks = (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    return std::to_wstring(ticks) + L"-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++counter);
+}
+
 static bool write_command(std::wstring const& command) {
     auto path = command_path();
     if (path.empty()) return false;
@@ -33,7 +43,7 @@ static bool write_command(std::wstring const& command) {
     {
         std::wofstream f(tmp, std::ios::trunc);
         if (!f) return false;
-        f << command << L"\n";
+        f << command << L" " << new_command_id() << L"\n";
         if (!f) return false;
     }
 

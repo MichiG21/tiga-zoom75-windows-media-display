@@ -66,6 +66,39 @@ class FrameCorrelationTests(SandboxedRenderer):
         self.assertEqual(self.read_sidecar()["frame_id"], second)
 
 
+class ControlCommandTests(SandboxedRenderer):
+    """Issue #6: a repeated command must register as new."""
+
+    def send(self, text, last):
+        self.r.COMMAND_FILE.write_text(text + "\n", encoding="utf-8")
+        return self.r.read_control_command(last)
+
+    def test_same_command_twice_with_new_ids_registers_twice(self):
+        cmd, last = self.send("standby 133700000000000000-42-1", None)
+        self.assertEqual(cmd, "standby")
+        cmd, last = self.send("standby 133700000000000001-42-2", last)
+        self.assertEqual(cmd, "standby")
+
+    def test_unchanged_file_is_not_reprocessed(self):
+        cmd, last = self.send("black 1-1-1", None)
+        self.assertEqual(cmd, "black")
+        self.assertEqual(self.r.read_control_command(last), (None, last))
+
+    def test_command_left_from_previous_session_is_ignored(self):
+        # main() records the file's text at startup as already handled.
+        self.r.COMMAND_FILE.write_text("standby 1-1-1\n", encoding="utf-8")
+        startup_text = self.r.COMMAND_FILE.read_text(encoding="utf-8").strip().lower()
+        self.assertEqual(self.r.read_control_command(startup_text), (None, startup_text))
+
+    def test_legacy_bare_command_still_works(self):
+        cmd, last = self.send("auto", None)
+        self.assertEqual((cmd, last), ("auto", "auto"))
+
+    def test_unknown_command_ignored(self):
+        cmd, _ = self.send("reboot 1-1-1", None)
+        self.assertIsNone(cmd)
+
+
 def media(state="Playing", position=30_000, title="Song", **extra):
     m = {
         "present": True,
