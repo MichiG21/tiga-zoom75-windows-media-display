@@ -57,8 +57,7 @@ In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keybo
    hardware test (`docs/design/CLEAN_STOP.md`). Release without it and say so under
    "Known problems".
 
-Already fine: CI is green on `main` up to #18 (the run for #22 was still in progress when
-this was updated), `Cargo.lock` is committed and every build uses
+Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and every build uses
 `--locked`, the installer workflow builds on a `v*` tag push, and the stale text fixed on
 2026-10-16 (codes 10/11 never halt; Phase 5 decided; test counts) is in the checklist.
 

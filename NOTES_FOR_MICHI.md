@@ -1348,3 +1348,71 @@ If only #18 is merged, there are no TIMING lines; the 2500 ms header is the only
 `tiga-dev` is left on `docs/issue-triage` with a clean tree (the triage file is ignored).
 Its uploader binary was last built from `feature/clean-stop`, so it has Task 3. Rebuild
 it before using `tiga-dev` for anything else.
+
+---
+
+# Follow-up to run E, 2026-10-16 evening: `docs/issue-triage` brought up to date
+
+**#21 is ready for you to merge; I left it open.** Nothing was posted on any issue.
+
+## Checked first
+
+After `git fetch`, `origin/main` (`56c3825`) contains #18 (`019da37`, with `25c8708`) and
+both timing commits, `5daaa13` and `75c312d`. They came in through #19 (merged into
+`docs/restart-2026-10-16`) and then #22. So the plan went ahead.
+
+## Done, on `docs/issue-triage`
+
+| Commit | What |
+|---|---|
+| `4e192f9` | Merged `origin/main`. The `NOTES_FOR_MICHI.md` conflict is resolved by keeping both sections: the 2026-10-16 restart section first, then run E. Nothing else conflicted. |
+| `393a75c` | `docs/TRIAGE_2026-10-16.md`, the triage draft renamed from `docs/ISSUE_TRIAGE_2026-10-16.md` so `.gitignore` no longer catches it. One added line notes that #18 and #22 merged since and belong to no open issue, so no proposal changes. |
+| `03c4f80` | Release draft: blocker 1 (merge #18/#19) is now done. What's left of it is hardware: pull #22 into the live install and look for a `TIMING` line. The keyboard-off blocker is marked done, the CHANGELOG blocker is narrowed to #11–#16, the triage path is updated, and the "(if #18/#19 is merged)" conditionals are gone from the release text. "The new per-block timing lines" is added to "not yet verified on the keyboard". |
+| `5a7543e` | The three "turn the keyboard off" spots, worded as you said (below). Also the checklist's Phase 5 cross-reference to that step, and its expected test count (40 Rust now). |
+| (with these notes) | Release draft: CI on `main` is green after #22. |
+
+### The keyboard-off wording
+
+All three now say that the TIGA has no power switch, so "off" means the battery
+disconnected from the PCB. Do it only while no upload is running: **Status** says OK, or
+`ble.log` ends in `UPLOAD COMPLETE`, because a disconnect mid-upload halts.
+
+- **README** (the paragraph after the halt recovery steps): the uploader retries and
+  picks the keyboard up within about 5 minutes with no Start Display. A new paragraph
+  explains "off", the no-upload-running check, and that this is not the halt recovery
+  (that needs ≥ 30 s and Start Display).
+- **RETRY_RECOVERY §4** ("Retryable: keyboard unreachable"): opens with "not a halt test,
+  not the halt recovery of 2.6". Step 1 is the no-upload check, and then the battery
+  disconnect. Step 2 is: change track, keep it disconnected 1–2 minutes for a few code-10
+  retries. Step 4 is: reconnect, expect an upload within 5 minutes with no START_STACK. It
+  also says the 30 s rule (§7.1) is for halt recovery only. I removed the old "switch the
+  keyboard's Bluetooth off" alternative, because you defined "off" as the battery.
+- **RELEASE_CHECKLIST Phase 4:** the last step is rewritten the same way, labelled "a
+  separate test, not halt recovery".
+
+**Not changed, a fourth spot with the same wording:** `docs/design/SHUTDOWN_ACK.md:108`,
+"Keyboard switched off: expect the delivery-timeout dialog at about 90 s". You asked for
+three, so I left it. The same definition would apply, with one difference: that test
+*wants* the standby upload to fail, so the disconnect has to happen before pressing
+Standby + Shut Down. Say if you want it changed.
+
+## Tests (all on this branch after the merge)
+
+68 Python (`py -m unittest discover -s tests`), 40 Rust (`cargo test --release --locked
+--bin tiga_stream_watch_flow`), `test_supervisor_logging.ps1` and
+`test_supervisor_retry.ps1`: all passed. I read both PowerShell suites first: they use
+dummy children killed by PID, and they read START/STATUS_STACK as text or from a temp
+copy. Release build plus dry run: `Block timeout   : 2500 ms`. `tiga-dev`'s uploader
+binary is now built from this branch (timing code in, no clean-stop code).
+
+## Still open for you
+
+- **Merge #21.**
+- **Pull #22 into the live install and rebuild its uploader.** It's at `019da37` (#18
+  only): `ble.log` already shows `Block timeout   : 2500 ms`, but no `TIMING` lines yet.
+  The steps are the deploy steps in the run E section; the battery disconnect is optional
+  this time, since the stack runs healthily.
+- #20 (clean stop): its base is still `feature/block-diagnostics`. Retarget it to `main`.
+  Leave it open until its hardware test.
+- The rest of the list in run E's "What needs you or the keyboard" still holds, except
+  steps 1, 3 (the triage file is now committed; posting comments is still yours) and 5.
