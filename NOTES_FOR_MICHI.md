@@ -1006,3 +1006,21 @@ nothing in the dependencies or the installer build changes. The one open choice 
 Morse album line (Task 5, (a) or (b)), and it can follow after a merge. Not verified
 anywhere: how a CI `windows-latest` image's font set affects the CJK tests. They're
 written to skip, not fail, if the fonts are missing.
+
+## Follow-up: Morse album line, option (a) (2026-10-16)
+
+Done in `61e4ffc`, as you chose. A field that has room for **one** line and decodes now
+shows only the decoded text. Under the band's title and artist, the album is now
+`LETITGO` in blue instead of a truncated Morse line. An album that doesn't decode, or
+the subtitle turned off (`--no-morse-subtitle`), behaves as before. Two new tests (68
+Python tests, all passing). Only `morse-subtitle-logged.png` changed; every other preview
+is byte-identical. PROJECT_HISTORY §7.2 has one sentence on it.
+
+**Corrects hardware step 5 above:** expect Morse title + `LETITGO`, Morse artist +
+`ERASED`, then **`LETITGO` again** (the album) instead of a truncated Morse line.
+
+One thing to judge on the keyboard: `ERASED` and the album's `LETITGO` sit directly under
+each other in the same blue, so they read a little like one block. If that's confusing,
+the album's decoded line could use the album grey instead.
+
+PR into `main`, not merged: see the link in the run summary.
