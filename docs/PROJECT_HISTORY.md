@@ -666,6 +666,9 @@ and `ble.log` prints the value in effect. Its cost is only that a truly stuck ke
 is detected about 7.5 s later. Open question it does not answer: in the slowing
 signature, blocks were taking ~2 s each; with 10 s the 22:44 transfer might have
 crawled to completion, or stalled anyway at block 11, only later.
+*Update 2026-10-16:* answered by the third part below. A slowing run under 10000 ms
+stalled anyway, at block 41 after 78 s, and none of 27 completed uploads at 10000 ms
+needed more than 2.5 s for any block. The longer wait has rescued nothing so far.
 
 **Upload reliability on `fix/device-selection`:** one failure (23:00, the sudden
 signature, before a 30 s battery reset), then **five completed uploads in a row**,
@@ -796,6 +799,89 @@ failure gives the block whose PROGRESS never came and the time from `UPLOAD STAR
      ~1 s is a clean marker for a `SLOW` log line. Using it to abort sooner would only
      produce the partial session sooner. A threshold on block 5's `elapsed` instead
      would be marginal: 2.35 s in a failure against 2.04 s in a success.
+
+#### Third part: the 2026-10-16 restart, 18:48–18:55
+
+Source: `tiga-fresh-test\logs\` (`startup_supervisor.log`, `ble.log`, `renderer.log`) and
+`git reflog`, plus Michi's account of the battery disconnect. The live install was pulled
+to `e8f7211` (the font-fallback merge, #17) at 18:48:32. Its uploader binary dates from
+2026-10-15 23:51 and prints `Block timeout   : 10000 ms`, so **this is the first failure
+with the 10000 ms timeout.**
+
+Before it: the stack started at 17:52 completed **22 uploads in a row** (9.31–10.35 s),
+the last at 18:46:00 (`ee1eead6`). The stack was then stopped for the pull. No upload was
+running at the time, and there had been no failure or reset since the previous night.
+
+| Time | What happened |
+|---|---|
+| 18:48:44 | Supervisor launched (restart after the pull, no battery reset) |
+| 18:48:45 | Uploader scans, `Nothing seen in 5 s; scanning up to 15 s` |
+| 18:49:00 | **Code 10**: `no candidate seen in a 15 s scan`. Retry in 8 s, no halt |
+| 18:49:12 | Second scan sees `Zoom75 Tiga` (cached address) after 3 s, so the keyboard was invisible for about 28 s after the restart |
+| 18:49:14 | `UPLOAD START` frame `0714ef6a` (the Morse band, first frame with the Morse subtitle) |
+| 18:50:32 | **Code 20** after **77.83 s**: no PROGRESS for block 41/53 (last ACKed 40) |
+| 18:50:34 | Halt (`session-open`) |
+| (between) | **40 s battery disconnect** (Michi) |
+| 18:54:07 | START_STACK |
+| 18:54:18 | **The same frame `0714ef6a` completes in 9.06 s**, block 5 at 0.85 s |
+| 18:55:08 | Next frame (`4bf3daed`, Takanaka) completes in 9.52 s |
+
+**The failed upload, block by block** (`elapsed` at each logged block; per-block figure =
+average over that five-block span; healthy ~0.15 s):
+
+| b5 | b10 | b15 | b20 | b25 | b30 | b35 | b40 | b41 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 2.42 | 11.51 | 20.43 | 28.80 | 40.21 | 49.11 | 61.36 | 67.39 | never (failed at 77.83) |
+| | 1.82/blk | 1.78 | 1.67 | 2.28 | 1.78 | 2.45 | 1.21 | > 10 s |
+
+- **The slowing signature** of 22:44/22:46, but this time the 10 s timeout let it run on:
+  35 blocks at roughly 1.2–2.5 s each, never recovering towards 0.15 s, then a **complete
+  stall**. Time to failure = 67.39 + 10.0 + 0.44 s, consistent with the ~0.42 s pre-block
+  overhead derived above.
+- **Not content-related, now shown directly:** the identical frame (same CRC32) completed
+  at a healthy pace after the reset. This also confirms that a 40 s disconnect clears the
+  state, in line with the 30 s minimum.
+- **Block 5 at 2.42 s** on a first-on-connection upload. The healthy first-on-connection
+  range so far is 0.71–0.85 s (now including 9.06 s at 0.85 s and 17:52's 0.82 s); all three
+  slowing runs were at 2.35–2.97 s. For first uploads that's a clean separation, unlike the
+  2.04 s later-upload outlier mentioned in question 4 above. It is still after CONTROL2,
+  so it can only warn, not prevent.
+- **Code 10 after the restart, again.** A fourth case of the keyboard being invisible for a while after
+  a restart (about 28 s, against ~19, ~38 and ~67 s on 2026-10-15). The 15 s scan did not
+  absorb it, as predicted; the supervisor's 8 s retry did, with no halt.
+
+**Failures follow stack restarts.** Counting every uploader start on 2026-10-15/16 by
+what preceded it (`ble.log`, both installs):
+
+| Before the first upload | First upload failed | Completed |
+|---|---:|---:|
+| Restart, no reset, last upload had completed (21:05\*, 21:35, 22:59, 23:09, 23:15, 23:46, 23:51, 17:52, 18:48) | **3** (21:05, 22:59, 18:49) | 6 |
+| Battery disconnect ≥ 30 s (22:49, 23:06, 18:54; 21:15 duration unknown) | 0 | 4 |
+| Battery disconnect 10–15 s, or START_STACK after a halt with no reset (22:44, 22:46) | 2 | 0 |
+| Later upload on an open connection | 1 (21:39) | 62 |
+
+\* 21:05 followed stopping the old `tiga_ble_re_tools` stack; what it had last done isn't in these logs.
+
+Small numbers, but it sharpens "failures cluster at connection start". The risky moment
+seems to be the **first upload after a restart that did not reset the keyboard**.
+`STOP_STACK.ps1` ends the uploader with `Stop-Process -Force`, so every restart drops a
+live BLE connection without a clean disconnect. That might also be why the keyboard is
+invisible for 20–70 s afterwards (a keyboard still holding a connection doesn't
+advertise). **Hypothesis only; nothing above tests it.** The test would be a clean
+disconnect before exit, then compare first-upload failures after restarts.
+
+**Block-timeout verdict, updated.** With 10000 ms: 27 completed uploads (5 on 2026-10-15
+in `tiga-dev`, 22 on 2026-10-16 live), **none with any block anywhere near 2.5 s**. After
+block 5, the slowest five-block span averaged 0.21 s per block, so no single block in it
+took more than ~1.05 s. Up to block 5 the largest `elapsed` was 1.65 s. **Every one of them
+would also have completed with 2500 ms.** The one slowing run under 10000 ms did not
+recover. It crawled to block 40, stalled completely, and ended exactly like the 2500 ms
+failures: code 20 and a battery disconnect. It just took 78 s instead of failing at the
+first block over 2.5 s. When that would have been can't be placed at five-block
+granularity: the 20→25 and 30→35 spans averaged 2.28 and 2.45 s per block, so probably
+by block 25–35, possibly earlier. **The longer wait has not rescued a single upload, and
+in its one test it only delayed the halt.** One slowing run is n = 1, but it answers
+the open question above: with 10 s, the transfer stalled anyway, only later.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
