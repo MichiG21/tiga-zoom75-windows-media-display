@@ -1416,3 +1416,71 @@ binary is now built from this branch (timing code in, no clean-stop code).
   Leave it open until its hardware test.
 - The rest of the list in run E's "What needs you or the keyboard" still holds, except
   steps 1, 3 (the triage file is now committed; posting comments is still yours) and 5.
+
+---
+
+# The 2026-10-16 20:45–20:56 session in PROJECT_HISTORY (§7.1, fourth part)
+
+Branch `docs/session-2026-10-16-evening`, off `origin/main` (`5ca54b3`, after #21). Docs
+only. The PR into `main` is open and **not merged**. Everything is read from
+`tiga-fresh-test\logs\`, the `.ack` and `.delivered` files and `git reflog`; nothing was
+run against the keyboard and no issue was touched.
+
+## What's in it
+
+- **#22 deploy:** pulled 20:49:06, uploader rebuilt 20:49:26, started 20:51:27.
+  `Block timeout   : 2500 ms`. The first upload took 9.17 s: `median=158ms p90=180ms
+  max=210ms control1_ack=18ms control2_ack=76ms`, block 5 at 0.90 s.
+- **Code 11 after the battery reconnect:** the first one from the real keyboard (all four
+  earlier ones, 2026-10-15, were BT1). The media service `1f40eaf8…` was present with no
+  characteristics. The retry 8 s later qualified it. **Detail you didn't mention:** the
+  scan saw the cached address with an **empty name** (`CANDIDATE name=""`). Only the
+  address cache made it a candidate at all.
+- **Display Control:** Lock Standby, Lock Standby again and Resume Automatic. Each was
+  acted on by the renderer within a second and uploaded (11.38 / 10.68 / 9.97 s). The
+  surviving ack matches the third command, written 0.9 s after the command file. That is
+  recorded as verifying #15 and #6's GUI path. Standby + Shut Down (#7) wasn't pressed.
+- **TIMING finding**, with a table of all seven uploads in §7.1. The median stays at
+  150–158 ms. Later uploads have one slow block among blocks 1–3, and §7.1 now says this
+  answers its own question about *where* later uploads lose ~0.7 s.
+
+## Where I wrote it differently from your summary
+
+1. **control1_ack doesn't grow steadily.** It was 18 ms on the first upload, then 166,
+   577, **653**, then back down to 178, 170 and 357 ms. "18 → ~650 ms" is the range, not a
+   trend, and §7.1 says so.
+2. **"One or two slow early blocks" can't be read from the data.** TIMING gives only the
+   slowest block. §7.1 says "at least one", and notes that a p90 of 172–195 ms allows at
+   most five blocks over ~0.2 s.
+3. **0.7–1.1 s holds for five of the six later uploads.** The sixth (20:55:28) had its
+   slowest block at 0.42 s (block 3).
+
+## Also found in the same logs
+
+- **20:46:17, before the deploy (#18 only, no TIMING yet): a 20.01 s upload that
+  completed.** It's the slowest completed upload on record. Block 5 was at 3.90 s, then
+  every five-block span took 0.9–2.3 s, slow throughout with no recovery, but no block
+  reached 2.5 s. The same image (`525691c8`) took 9.17 s after the deploy. It's in §7.1
+  as "uniformly slow but finished".
+- **20:54:26 reached block 5 at 2.39 s and completed fine** (one slow block 2 at 1079 ms,
+  then a normal pace). 2.39 s is inside the slowing failures' 2.35–2.97 s range, so it
+  shows why the early warning is limited to first-on-connection uploads.
+- **A freshly built uploader starts ~25 s late on its first run** (20:20:54 → first line
+  20:21:20; 20:51:27 → 20:51:52). The code-11 retry with the same binary started at once.
+  That fits antivirus inspecting a new exe (#15's theory). Harmless.
+- **The #18 start at 20:20:54** logged another code 10 after a restart (the fifth such
+  case). Its retry found the keyboard immediately.
+
+## Triage
+
+`docs/TRIAGE_2026-10-16.md`: **#15 is now proposed for closing**, with a new hardware
+paragraph and a new ready-to-paste comment. #6's hardware line and comment now include
+the GUI test. "What would close the rest" is down to #7 alone (one Standby + Shut Down).
+Nothing was posted.
+
+## Not changed, but now stale
+
+`docs/RELEASE_NOTES_v0.3.0-beta.1.md` still lists Display Control's "did it arrive" check
+under "not yet verified on the keyboard", and its Part 1 blocker 4 still asks for the
+GUI session. Both are now verified except for Standby + Shut Down. It's a small edit if
+you want it.
