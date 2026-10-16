@@ -79,7 +79,7 @@ cd C:\Users\Regal\source\tiga-fresh-test
 powershell -ExecutionPolicy Bypass -File .\tests\test_supervisor_retry.ps1
 ```
 
-Expect roughly (`main`, 2026-10-16): 68 Python cases, 35 Rust tests, and the two
+Expect roughly (`main`, 2026-10-16): 68 Python cases, 40 Rust tests, and the two
 PowerShell suites all green.
 
 **STOP if any genuinely fail.** A fresh clone failing tests that passed locally means
@@ -204,9 +204,14 @@ that matters:
 **This is the whole point of bug A.** Before tonight it would have retried every 8
 seconds against a keyboard mid-transfer.
 
-- [ ] Keyboard off, change track → expect retries at 8/16/32/60 s, then every 5 minutes.
-      Codes 10 and 11 never halt (since `dc30996`). Turn it on: the next retry recovers
-      it within about 5 minutes, with no `START_STACK.ps1` needed.
+- [ ] **Unreachable keyboard. A separate test, not halt recovery.** The TIGA has no power
+      switch, so "off" means disconnecting the battery from the PCB. Do it only while no
+      upload is running: `.\STATUS_STACK.ps1` says OK, and the last line of
+      `logs\ble.log` is `UPLOAD COMPLETE`. A disconnect mid-upload halts. Disconnect,
+      change track, and keep it disconnected for **1–2 minutes** → expect code-10
+      retries at 8/16/32/60 s, then every 5 minutes, and never a halt (since `dc30996`).
+      Reconnect → expect an upload within 5 minutes, with no `START_STACK.ps1`. The
+      at-least-30-s rule above is for halt recovery only (§7.1).
 
 ---
 
@@ -215,7 +220,7 @@ seconds against a keyboard mid-transfer.
 Decided on 2026-10-15 and on `main` since #16 (`dc30996`): an unreachable keyboard
 (codes 10 and 11) is retried after 8, 16, 32 and 60 s, then every 5 minutes, and never
 halts. Halting is reserved for an interrupted transfer (20, 21, or a session marker) and
-for configuration errors (30). Nothing to do here; the Phase 4 "keyboard off" step checks it.
+for configuration errors (30). Nothing to do here; the Phase 4 "unreachable keyboard" step checks it.
 
 ---
 

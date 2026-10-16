@@ -178,16 +178,26 @@ branch, point the task at the repo, and restore it at the end (step 6).
 
 ### 4. Retryable: keyboard unreachable
 
-1. Stack running, with OK status. Switch the keyboard's Bluetooth off, or turn the keyboard off.
-2. Change track, so an upload is needed.
+This is not a halt test, and not the halt recovery of 2.6. Nothing is interrupted, so
+nothing needs a reset afterwards.
+
+1. Stack running, and **no upload in progress**: `STATUS_STACK.ps1` says OK (not `PENDING`
+   with a media session open), and the last line of `logs\ble.log` is `UPLOAD COMPLETE`
+   (or `ALREADY DISPLAYED`), not a `block NN/53` line. Disconnecting during an upload is
+   a step-2 case and halts. Then make the keyboard unreachable. The TIGA has no power
+   switch, so "off" means disconnecting the battery from the PCB.
+2. Change track, so an upload is needed. Keep the battery disconnected for **1–2 minutes**,
+   so the uploader logs a few code-10 retries.
 3. Expect `EXIT code=10 (keyboard not reachable …)`, then `Restarting BLE uploader in 8s`,
    then 16s, 32s, 60s, then `Restarting BLE uploader in 300s … (no halt)`, repeating.
    **No halt file**, no marker.
    - The first failure may appear only when the next upload is attempted: the uploader
      does not notice a dropped link while idle (§7 "suspected but unproven").
    - If the link drops *during* an upload, after CONTROL2, that is a step-2 case and must halt with session-open.
-4. Turn the keyboard back on and **don't** run anything. Within 5 minutes the next retry
-   should connect and upload the current track, with no power cycle and no START_STACK.
+4. Reconnect the battery and **don't** run anything. Within 5 minutes the next retry
+   should connect and upload the current track, with no START_STACK. Here 1–2 minutes is
+   only so the retries show up in the log; the at-least-30-s rule (PROJECT_HISTORY §7.1)
+   is for recovering a halt, not for this test.
 
 ### 5. Code 21 (not induced)
 

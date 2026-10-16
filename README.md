@@ -272,7 +272,9 @@ To recover:
 1. **The TIGA has no power switch, and unplugging USB doesn't reset it** — it has a battery. Open the case, disconnect the battery from the PCB, and wait **at least 30 seconds**, pressing a few keys while it's disconnected. Reconnect. A 10–15 second disconnect was not enough in testing.
 2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have reset the keyboard": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
 
-If the uploader cannot reach the keyboard (switched off, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No power cycle and no **Start Display** needed; turning the keyboard on is enough, within about 5 minutes.
+If the uploader cannot reach the keyboard (battery disconnected, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No **Start Display** is needed: once the keyboard is reachable again, the next retry picks it up, within about 5 minutes.
+
+The TIGA has no power switch, so "off" means the battery disconnected from the PCB. If you do that on purpose, do it only while no upload is running: check that **Status** says `OK`, or that the last line in `logs\ble.log` is `UPLOAD COMPLETE`. A disconnect in the middle of an upload interrupts it, and the uploader halts. This is not the halt recovery above: that one needs the battery disconnected for at least 30 seconds and then **Start Display**.
 
 Stopping the stack (or shutting Windows down) in the middle of an upload counts as an interruption too. The next start will report it as halted.
 
