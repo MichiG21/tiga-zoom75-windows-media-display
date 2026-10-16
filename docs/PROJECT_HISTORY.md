@@ -564,7 +564,7 @@ it must stay disconnected is recorded in the second part below.
 - **#9 (bug F):** logs keep history across restarts, with run and frame IDs.
 - **#10 (bug G):** a 34-character unbroken title wraps instead of running off the screen.
 - **The Unicode crash fix:** a Japanese title (`トーキョーレギー`) rendered, as empty
-  boxes, without crashing the renderer. The boxes are a font-fallback gap, not a crash.
+  boxes, without crashing the renderer. The boxes are a font-fallback gap, not a crash (fixed later that night, §7.2).
 
 **Not verified on hardware:**
 
@@ -796,6 +796,45 @@ failure gives the block whose PROGRESS never came and the time from `UPLOAD STAR
      ~1 s is a clean marker for a `SLOW` log line. Using it to abort sooner would only
      produce the partial session sooner. A threshold on block 5's `elapsed` instead
      would be marginal: 2.35 s in a failure against 2.04 s in a success.
+
+### 7.2 Non-Latin titles: the crash fix, then the font fallback
+
+Two separate fixes, easy to conflate:
+
+1. **The Unicode crash fix** (bug F work, on `main` before 2026-10-15) stopped a title the
+   console code page can't encode from **crashing** the renderer. It did nothing for the
+   display. On hardware that evening, `トーキョーレギー` rendered as empty boxes.
+2. **The font fallback** (`7c93850`, #10, merged with `fix/device-selection`) is what makes
+   the characters **display**. Segoe UI has no kana, Han, Hangul or `♪`, and Pillow does no
+   font fallback of its own. Metadata text is now drawn character by character from a
+   chain: Segoe UI, then Yu Gothic, Meiryo, Microsoft YaHei, Microsoft JhengHei, Malgun
+   Gothic, Segoe UI Symbol, whichever are installed. All runs share Segoe UI's baseline.
+   Confirmed on hardware 2026-10-15 23:52: the Morse band and Takanaka both displayed.
+
+**What the "Morse band" actually sends** (`renderer.log`): dot U+FF65 HALFWIDTH KATAKANA
+MIDDLE DOT, dash U+FF0D FULLWIDTH HYPHEN-MINUS, letters separated by single ASCII spaces,
+no word separator. Segoe UI has neither character; Yu Gothic has both.
+
+**Decisions (feature/font-fallback, 2026-10-16):**
+
+- **No fontTools.** Whether a font has a glyph is decided by drawing the character and
+  comparing it with the font's own missing-glyph box, cached per (font, character). It is
+  indirect, but it worked on hardware and needs nothing beyond Pillow, so the PyInstaller
+  build and `requirements.txt` stay unchanged. Revisit only if a concrete misclassified
+  character turns up.
+- **CJK line breaks.** A line may break between any two kana or Han characters, with a
+  minimal kinsoku rule (no line starts with `ー`, `・`, `、`, `。` or a small kana). Hangul
+  still breaks at spaces. U+FF65 is deliberately *not* a break-anywhere character, so a
+  Morse letter is never split across lines.
+- **Latin-only frames are pixel-identical** to `main` before the fallback (tested).
+- **Han unification is not handled.** Yu Gothic comes before YaHei, so a Chinese title is
+  drawn with Japanese glyph shapes. They are readable, but not the native forms. Picking a font per string by
+  language would need a language guess the metadata doesn't provide.
+- **Morse subtitle:** a field that is entirely Morse and decodes completely gets the
+  decoded text as a smaller line (`--no-morse-subtitle` turns it off). With single spaces
+  only, the band's title decodes as `LETITGO`; word gaps can't be recovered.
+  A field with room for one line only (in practice the album, under a Morse title and
+  artist) shows just the decoded text: a truncated Morse line said almost nothing.
 
 ---
 

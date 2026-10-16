@@ -6,9 +6,11 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import unicodedata
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -99,11 +101,14 @@ FALLBACK_FONT_FILES = [
     ("YuGothR.ttc", "YuGothB.ttc"),    # Japanese
     ("meiryo.ttc", "meiryob.ttc"),     # Japanese, older Windows
     ("msyh.ttc", "msyhbd.ttc"),        # Chinese (Microsoft YaHei)
+    ("msjh.ttc", "msjhbd.ttc"),        # Traditional Chinese (Microsoft JhengHei)
     ("malgun.ttf", "malgunbd.ttf"),    # Korean
     ("seguisym.ttf", "seguisym.ttf"),  # symbols, including ♪
 ]
 _NOTDEF_PROBE = "\U0010fffd"  # private use, plane 16: no font here maps it
 _glyph_cache: dict[tuple[int, str], bool] = {}
+_fonts_logged = False
+_missing_logged: set[str] = set()
 
 
 def _glyph_mask(font, ch: str) -> bytes:
@@ -138,6 +143,10 @@ class FontChain:
         for font in self.fonts:
             if has_glyph(font, ch):
                 return font
+        if ch not in _missing_logged:
+            _missing_logged.add(ch)
+            name = unicodedata.name(ch, "unnamed")
+            log(f"FONT no font has U+{ord(ch):04X} {name}; drawn as a box")
         return self.primary
 
     def runs(self, text: str) -> list[tuple[str, object]]:
@@ -157,19 +166,26 @@ _chains: dict[tuple[int, bool], FontChain] = {}
 
 def find_text_font(size: int, bold: bool = False) -> FontChain:
     """find_font() with fallbacks, for text that comes from media metadata."""
+    global _fonts_logged
     key = (size, bold)
     if key not in _chains:
         fonts = [find_font(size, bold)]
+        loaded, skipped = [], []
         folder = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
         for regular, bold_file in FALLBACK_FONT_FILES:
             p = folder / (bold_file if bold else regular)
             if not p.exists():
                 p = folder / regular
-            if p.exists():
-                try:
-                    fonts.append(ImageFont.truetype(str(p), size=size))
-                except OSError:
-                    pass
+            try:
+                # Index 0 of each .ttc is the non-UI family (Yu Gothic, not Yu Gothic UI).
+                fonts.append(ImageFont.truetype(str(p), size=size))
+                loaded.append(p.name)
+            except OSError:
+                skipped.append(p.name)
+        if not _fonts_logged:
+            _fonts_logged = True
+            log(f"FONT fallbacks: {', '.join(loaded) or 'none'}"
+                + (f"; not installed: {', '.join(skipped)}" if skipped else ""))
         _chains[key] = FontChain(fonts)
     return _chains[key]
 
@@ -200,6 +216,37 @@ def draw_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill):
         x += f.getlength(s)
 
 
+# Japanese and Chinese are written without spaces, so a line may break between any two
+# of these characters, not only at spaces. Hangul is left out: Korean uses spaces.
+_BREAK_ANYWHERE = (
+    (0x3040, 0x30FF),    # Hiragana, Katakana
+    (0x31F0, 0x31FF),    # Katakana phonetic extensions
+    (0x3400, 0x4DBF),    # CJK extension A
+    (0x4E00, 0x9FFF),    # CJK unified ideographs
+    (0xF900, 0xFAFF),    # CJK compatibility ideographs
+    (0xFF66, 0xFF9F),    # halfwidth Katakana (not U+FF65, a Morse dot in the wild)
+    (0x20000, 0x3FFFF),  # CJK extensions B and later
+)
+# Never start a line with these (a simple form of the Japanese kinsoku rule).
+_NO_LINE_START = set("ー々ゝゞヽヾ・、。，．！？：；）」』】〕〉》ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ")
+
+
+def _breaks_anywhere(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _BREAK_ANYWHERE)
+
+
+def _break_units(word: str) -> list[str]:
+    """Split one space-free word into the pieces a line may break between."""
+    units: list[str] = []
+    for ch in word:
+        if units and (ch in _NO_LINE_START or not (_breaks_anywhere(ch) or _breaks_anywhere(units[-1][-1]))):
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
+
+
 def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int):
     words = (text or "").split()
     if not words:
@@ -208,28 +255,34 @@ def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lin
     def width(s: str) -> int:
         return text_width(draw, s, font)
 
-    # A word wider than the box (a long unbroken title, or CJK text without spaces)
-    # is broken between characters; otherwise it was drawn as one over-wide line.
-    tokens = []
+    # (separator, piece): pieces of one word join with "", words with " ".
+    tokens: list[tuple[str, str]] = []
     for word in words:
-        if width(word) <= max_width:
-            tokens.append(word)
-            continue
-        piece = ""
-        for ch in word:
-            if piece and width(piece + ch) > max_width:
-                tokens.append(piece)
-                piece = ch
-            else:
-                piece += ch
-        tokens.append(piece)
+        sep = " "
+        for unit in _break_units(word):
+            # A piece wider than the box (a long unbroken title) is broken between
+            # characters; otherwise it was drawn as one over-wide line.
+            if width(unit) <= max_width:
+                tokens.append((sep, unit))
+                sep = ""
+                continue
+            piece = ""
+            for ch in unit:
+                if piece and width(piece + ch) > max_width:
+                    tokens.append((sep, piece))
+                    sep = ""
+                    piece = ch
+                else:
+                    piece += ch
+            tokens.append((sep, piece))
+            sep = ""
 
     lines = []
     current = ""
     truncated = False
 
-    for token in tokens:
-        test = token if not current else current + " " + token
+    for sep, token in tokens:
+        test = token if not current else current + sep + token
         if width(test) <= max_width:
             current = test
             continue
@@ -553,34 +606,90 @@ def read_control_command(last_text: str | None):
 
 DIVIDER_Y = 135
 TITLE_STEP, ARTIST_STEP, ALBUM_STEP = 20, 21, 17
+MORSE_STEP = 17
+MORSE_FILL = (120, 190, 255)
+
+# A field written entirely in Morse code also gets its decoded text as a smaller line
+# below it. A band writes its artist, album and track titles that way, with U+FF65 as
+# the dot and U+FF0D as the dash (renderer.log, 2026-10-15). Off: --no-morse-subtitle.
+MORSE_SUBTITLE = True
+MORSE_DOTS = set("\uff65.\u00b7\u2022\u2219")      # ･ . · • ∙
+MORSE_DASHES = set("\uff0d-_\u2212\u2013\u2014")  # － - _ − – —
+MORSE_CODE = {
+    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G",
+    "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N",
+    "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U",
+    "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z",
+    "-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
+    ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
+    ".-.-.-": ".", "--..--": ",", "..--..": "?", ".----.": "'", "-.-.--": "!",
+    "-..-.": "/", "-.--.": "(", "-.--.-": ")", ".-...": "&", "---...": ":",
+    "-.-.-.": ";", "-...-": "=", ".-.-.": "+", "-....-": "-", ".-..-.": '"', ".--.-.": "@",
+}
 
 
-def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w):
+def decode_morse(text: str) -> str | None:
+    """The text of a field written entirely in International Morse, else None.
+
+    Letters are separated by one space, words by "/" or a wider gap. Nothing is
+    returned unless every letter decodes and there are at least two of them, so
+    "..." or "-" alone, or a title that merely contains dashes, never counts.
+    """
+    text = (text or "").strip()
+    if not text or any(not (ch in MORSE_DOTS or ch in MORSE_DASHES or ch.isspace() or ch == "/") for ch in text):
+        return None
+    words = []
+    for word in re.split(r"\s*/\s*|\s{2,}", text):
+        letters = word.split()
+        if not letters:
+            return None
+        decoded = ""
+        for letter in letters:
+            key = "".join("." if ch in MORSE_DOTS else "-" for ch in letter)
+            if key not in MORSE_CODE:
+                return None
+            decoded += MORSE_CODE[key]
+        words.append((decoded, len(letters)))
+    if sum(n for _, n in words) < 2:
+        return None
+    return " ".join(w for w, _ in words)
+
+
+def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w,
+                      morse_font=None):
     """Return (y, text, font, fill) for the title/artist/album lines.
 
     The album starts below the last artist line and gets only the lines that fit
     above the divider. It used to be clamped to y=110, which drew it over a
-    two-line artist (issue #10).
+    two-line artist (issue #10). A field in Morse code gives up one of its lines
+    to the decoded text, drawn in `morse_font` (None: no decoded lines). With room
+    for one line only (the album, under a long title and artist), the decoded text
+    replaces the Morse: a truncated Morse line says almost nothing.
     """
     items = []
 
-    y = 9
-    for line in fit_text(draw, title, title_font, max_text_w, 3):
-        items.append((y, line, title_font, (242, 242, 245)))
-        y += TITLE_STEP
+    def field(y, text, font, fill, step, max_lines):
+        decoded = decode_morse(text) if morse_font is not None else None
+        if not decoded or max_lines > 1:
+            for line in fit_text(draw, text, font, max_text_w, max_lines - 1 if decoded else max_lines):
+                items.append((y, line, font, fill))
+                y += step
+        if decoded:
+            for line in fit_text(draw, decoded, morse_font, max_text_w, 1):
+                items.append((y, line, morse_font, MORSE_FILL))
+            y += MORSE_STEP
+        return y
+
+    y = field(9, title, title_font, (242, 242, 245), TITLE_STEP, 3)
 
     y = max(y + 4, 72)
-    for line in fit_text(draw, secondary, artist_font, max_text_w, 2):
-        items.append((y, line, artist_font, (224, 224, 230)))
-        y += ARTIST_STEP
+    y = field(y, secondary, artist_font, (224, 224, 230), ARTIST_STEP, 2)
 
     if tertiary:
         album_y = y + 1
         room = min(2, (DIVIDER_Y - album_y) // ALBUM_STEP)
         if room > 0:
-            for line in fit_text(draw, tertiary, album_font, max_text_w, room):
-                items.append((album_y, line, album_font, (180, 180, 188)))
-                album_y += ALBUM_STEP
+            field(album_y, tertiary, album_font, (180, 180, 188), ALBUM_STEP, room)
 
     return items
 
@@ -596,6 +705,7 @@ def render_media(media: dict) -> Image.Image:
     title_font = find_text_font(18, bold=True)
     artist_font = find_text_font(18, bold=False)
     album_font = find_text_font(16, bold=False)
+    morse_font = find_text_font(14, bold=True) if MORSE_SUBTITLE else None
     label_font = find_font(12, bold=True)
     duration_font = find_font(13, bold=True)
 
@@ -616,7 +726,7 @@ def render_media(media: dict) -> Image.Image:
     tertiary = media.get("album") or source_name(media.get("source", ""))
 
     for y, line, font, fill in layout_text_block(
-        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w
+        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w, morse_font
     ):
         draw_text(draw, (text_x, y), line, font, fill)
 
@@ -942,6 +1052,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--dlx-layout", choices=tiga_dlx.LAYOUTS, default="index",
         help="frame-index interpretation for --dlx-frames 1 (see docs/DLX_FORMAT.md)",
     )
+    parser.add_argument(
+        "--no-morse-subtitle", dest="morse_subtitle", action="store_false",
+        help="do not add a decoded line under titles written entirely in Morse code",
+    )
     return parser.parse_args(argv)
 
 
@@ -949,4 +1063,5 @@ if __name__ == "__main__":
     _args = parse_args(sys.argv[1:])
     DLX_FRAMES = _args.dlx_frames
     DLX_LAYOUT = _args.dlx_layout
+    MORSE_SUBTITLE = _args.morse_subtitle
     main()
