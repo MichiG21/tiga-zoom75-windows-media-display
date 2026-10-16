@@ -1024,3 +1024,239 @@ each other in the same blue, so they read a little like one block. If that's con
 the album's decoded line could use the album grey instead.
 
 PR into `main`, not merged: see the link in the run summary.
+
+
+---
+
+# Unattended run E (TASKS_E.md), 2026-10-16, about 19:20–20:30
+
+## Most important: nothing was merged
+
+**The merge of #18 was refused by Claude Code's permission system** (auto mode classifier:
+"Merge Without Review"), even though every check had passed and the PR was mergeable. I
+did not retry it or work around it. Following the plan's fallback, everything after it is
+stacked instead of merged:
+
+- **#18** (Task 1, 2500 ms): open, green, mergeable, **not merged**.
+- **#19** (Task 2, diagnostics): base `docs/restart-2026-10-16` so its diff is only
+  Task 2. Green. **Not merged** (the plan says: if Task 1 isn't merged, don't merge Task 2).
+- **#20** (Task 3, clean stop): base `feature/block-diagnostics`. **Never for merge**
+  before hardware.
+- `docs/issue-triage` (Tasks 4–5 and these notes): pushed; its PR is opened at the end
+  of this run, **not merged**, for the same reason.
+
+**What you need to do first:** merge #18 into `main`. Then change #19's base to `main`
+(GitHub: Edit → base) and merge it. After that, #20's base can go to `main` as well, but
+leave it open until its hardware test. If you want future unattended runs to be able to
+merge, that needs a Claude Code permission rule for `gh pr merge`; I didn't touch any
+settings.
+
+One oddity for future runs: right after that refusal, two harmless commands (creating
+a local branch, and a `grep`) were refused with the same reason. Repeating them
+separately worked. It looks like the classifier stays primed for a moment after a denial.
+
+## Tasks
+
+| Task | Result | Branch | Commits | PR | Merged |
+|---|---|---|---|---|---|
+| 1. Block timeout 2500 ms | done | `docs/restart-2026-10-16` | `25c8708` | [#18](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/18) | **no**, refused by the permission system |
+| 2. Per-block diagnostics | done | `feature/block-diagnostics` (from Task 1's branch) | `5daaa13`, `75c312d` | [#19](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/19) | no (Task 1 not merged) |
+| 3. Clean stop | done, prepared only | `feature/clean-stop` (from `feature/block-diagnostics`) | `c359c73`, `8037670`, `54f0fb8` | [#20](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/20) | no, by design |
+| 4. Issue triage | written, **not committed** (see below) | — | — | — | — |
+| 5. Release draft | done | `docs/issue-triage` (from `origin/main`) | `cce541b`, `d06b808` | see the run summary | no |
+| 6. CI fonts, old plans | done | — | — | — | — |
+
+### Task 1
+
+The default is `2_500`, with a new doc comment giving the reason. `--block-timeout-ms` and
+the `Block timeout   :` header line are unchanged. The test that asserted 10000 now
+asserts 2500. RETRY_RECOVERY "Block timeout" is rewritten: the default, the 10000 ms day,
+and why it went back. I also dropped its sentence "a block that is merely slow should
+therefore be waited for", since the new text explains that case was never seen.
+PROJECT_HISTORY §7.1 gains one sentence in the second part's update, and a
+**"Decision, 2026-10-16"** paragraph after the third part's verdict. Tests: 35 Rust
+passed; release build; the dry run prints `Block timeout   : 2500 ms`. All three CI
+checks are green.
+
+### Task 2
+
+- **Block latency** = previous PROGRESS → this PROGRESS (block 1: from the start of the
+  bulk writes), so it includes the block's own writes. That's the quantity §7.1 calls
+  "per block ~0.15 s".
+- **CONTROL1/CONTROL2 ACK time** = from the write to the second ACK of the pair.
+- `SLOW block 7/53 took 1834 ms (elapsed=4.21s)` for a block over 1000 ms (timestamped).
+- `WARNING first upload is slow (block 5 at 2.42 s; healthy 0.7–0.85 s)` when the first
+  upload of a connection ACKs block 5 later than 1.5 s. "First" means the first *attempt*
+  on that uploader process.
+- After every `UPLOAD COMPLETE` / `UPLOAD FAILED`:
+  `TIMING frame=… blocks_acked=53 median=…ms p90=…ms max=…ms slowest=block N control1_ack=…ms control2_ack=…ms`.
+  p90 is nearest-rank. On a failure the figures cover the ACKed blocks, and `-` marks a
+  CONTROL stage that wasn't reached.
+- `.delivered` gains `block_median_ms`, `block_p90_ms`, `block_max_ms`, `slowest_block`,
+  `control1_ack_ms`, `control2_ack_ms`. I checked every reader (STATUS_STACK both
+  layouts, the supervisor, display control): all read by key, so extra keys are safe.
+- **No behaviour change:** only `Instant::now()` calls and log lines are added; writes,
+  sleeps, timeouts and exit codes are identical. One tiny difference: `UPLOAD FAILED …
+  after X s` is now measured a few microseconds earlier (before the summary is computed),
+  not after.
+- 5 new tests (40 Rust). The thresholds are tested against the recorded values: 2.35,
+  2.42 and 2.97 s warn; 0.71, 0.85 and 1.5 s don't; a later upload at 2.04 s doesn't.
+- Docs: RETRY_RECOVERY "Per-block timing", CHANGELOG (also notes the 2500 ms return),
+  §7.1 question 4 now says the logging part is implemented.
+
+### Task 3 (details in `docs/design/CLEAN_STOP.md`)
+
+- **Mechanism: `<stream>.stop`**, a sidecar like `.session` and `.exit`. The supervisor
+  can see it too, which is what stops it restarting the uploader. Windows has no SIGTERM,
+  and Ctrl+Break would need the hidden `cmd /c` console.
+- **Uploader:** checks the file only at the top of its watch loop, i.e. between uploads,
+  so an upload is never abandoned for a stop. Then the existing `disconnect()` and exit 0.
+  If the file exists at start, it doesn't connect. It does *not* interrupt a scan or a
+  connect in progress.
+- **STOP_STACK (both):** writes the request, waits **30 s** (a healthy upload is ~10 s,
+  a failing one ends within ~15 s at 2500 ms, and a scan can take 15 s), then
+  `Stop-ScheduledTask` and the old force-kill, then removes the request. It logs one of
+  `exited on request after X s` / `did not exit within 30 s; force-killing it (pid N)` /
+  `no BLE uploader was running`, to the console and `startup_supervisor.log`. The logic is
+  `Invoke-StackStop` in `tiga_supervisor_common.ps1`, with the task stop and the kill
+  passed in as script blocks so the tests can use stand-ins.
+- **Supervisor:** an exit while the request stands is `stopped-on-request`. It isn't
+  restarted and isn't counted as a failure, but a marker or code 20/21 still halts. No
+  uploader starts while the request exists. A stale request is removed at supervisor
+  start (the logon task doesn't go through START_STACK), and START_STACK removes one too.
+  If the request vanishes while the supervisor still runs, the supervisor resumes and
+  logs it, like a cleared halt.
+- **Honest caveat, also in the doc:** in btleplug 0.12 on Windows, `disconnect()` just
+  drops the device object, `Close()`-ing its GATT services and the `BluetoothLEDevice`.
+  A killed process releases the same objects without those calls. The radio may see no
+  difference. The certain gain is that a stop never cuts an upload in half; whether the
+  restart pattern changes is what the hardware plan has to show. No GATT unsubscribe was
+  added: that would be a write the keyboard has never had from this uploader.
+- Tests: Rust `stop_request_is_a_sidecar` (41 total). In `test_supervisor_retry.ps1`, the
+  decision table, three loop scenarios with dummy uploaders, `Invoke-StackStop` with
+  dummies (cooperating, ignoring, none), and text checks on both STOP/START_STACKs. All
+  pass, and so does `test_supervisor_logging.ps1`. I read both suites first: they kill only
+  their own dummy PIDs, and they read STOP/START_STACK as text without running them.
+  **Not tested:** driving the uploader's `run()` offline. With a bug, that would open
+  Bluetooth.
+
+### Task 4: triage written, but the commit was refused
+
+`docs/ISSUE_TRIAGE_2026-10-16.md` exists in `tiga-dev\docs\`, but it is **not committed**.
+`.gitignore` has `docs/ISSUE*_*.md` ("Local task files and issue drafts (GitHub is the
+record once filed)"), so a plain `git add` ignores it. My `git add -f` was refused by
+the permission system ("Out-of-Place Publication"). I didn't rename the file to dodge
+the ignore rule. Your call: `git add -f` it yourself, rename it (e.g.
+`docs/TRIAGE_2026-10-16.md`), or keep it local, as the ignore rule intends. It is ignored,
+so the tree is clean either way.
+
+Proposals in it: **close** #4 (at the release, as your comment said), #5 (reopen if
+seen), #6, #8, #9, #10 (all seven boxes have commits), #14. **Keep open** #7 and #15
+until one Display Control session on hardware. Each has a ready-to-paste comment, plus a
+3-step GUI session that would settle #7 and #15 together. #11–#13 are PRs, not issues.
+
+### Task 5
+
+- `RELEASE_CHECKLIST.md`, stale text fixed: Phase 4's last step now says codes 10/11
+  retry every 5 min and never halt, and that no START_STACK is needed. Phase 5 is marked
+  decided (`dc30996`). The expected test counts are 68 Python / 35 Rust (they were
+  39 / 16). The "Keyboard off" / "Turn it on" words are left as they were.
+- `docs/RELEASE_NOTES_v0.3.0-beta.1.md`: Part 1 lists the blockers, Part 2 is the
+  user-facing text. It notes where the text depends on #18/#19 being merged, and has a
+  placeholder for "installing over v0.2.0-beta.1".
+
+### Task 6
+
+- **CI fonts: they ran.** In the latest `main` run (38934771243, the #17 merge) all 13
+  `FontFallbackCoverageTests` and the 7 `FontFallbackTests`, including `test_japanese`,
+  `test_chinese` and `test_korean`, report `ok`. There are 0 `skipped` lines, 68 tests,
+  `OK`. So `windows-latest` has Yu Gothic, YaHei and Malgun Gothic, and the skip paths
+  are just insurance. Nothing changed in CI.
+- **Old plans:** `TASKS.md` and `TASKS_A.md` copied to
+  `C:\Users\Regal\source\old-loose-files\`. Nothing was there under those names, so
+  nothing was overwritten. The originals and the stale folder are untouched.
+
+## Decisions I made that you would normally make
+
+1. **Stacked PRs** for #19 and #20 (bases `docs/restart-2026-10-16` and
+   `feature/block-diagnostics`), not PRs into `main`. Into `main` they'd have shown Task
+   1's diff (and Task 2's) as well. Retarget them once the lower ones merge.
+2. **Block latency includes the block's writes** (PROGRESS to PROGRESS), not "last write
+   to PROGRESS". That matches §7.1's per-block figures, and every past log is comparable.
+3. **SLOW and WARNING lines carry a timestamp** (`log!`), unlike the every-fifth-block
+   lines, so they can be grepped and lined up with other logs.
+4. **Clean stop: a request file, 30 s, exit 0, no unsubscribe**, and a withdrawn request
+   restarts the uploader. Reasons above.
+5. **The triage file was left uncommitted** rather than renamed past `.gitignore`.
+6. **CHANGELOG not completed** for #11–#16 on `docs/issue-triage`, to avoid a conflict
+   with #19's CHANGELOG lines. It's blocker 3 in the release draft.
+7. **The checklist title `v0.2.0-beta.2` was left alone.** The version name is yours
+   (release draft, blocker 2).
+
+## Contradictions with PROJECT_HISTORY.md
+
+None found. Two nuances:
+
+- CLEAN_STOP.md adds that on Windows a `disconnect()` and a kill may well look the same
+  to the keyboard. That weakens, but doesn't contradict, §7.1's "kill, not a clean
+  disconnect" hypothesis.
+- `main`'s §7.1 still says the longer wait is the uploader's default. That's true on
+  `main` until #18 merges; #18 updates it.
+
+**Merge conflict to expect:** `docs/issue-triage` and `docs/restart-2026-10-16` both
+append to the end of `NOTES_FOR_MICHI.md`. Whichever merges second will conflict there.
+Keep both sections, restart section first.
+
+## What needs you or the keyboard, in order
+
+1. **Merge #18** (no keyboard needed). Retarget #19 to `main`, check it's green, merge.
+2. **Deploy** (below), with a 30–40 s battery disconnect. Check the header and the
+   `TIMING` lines.
+3. **Decide** on the triage file (commit / rename / local), and post the issue comments
+   you agree with.
+4. **One Display Control session** (triage draft, last section) → settles #7 and #15.
+5. **Answer the "turn the keyboard off" question** (README ~275, RETRY_RECOVERY step 4,
+   RELEASE_CHECKLIST Phase 4's last step): mode toggle, or Bluetooth off on the PC? Then
+   I can fix all three.
+6. **The clean-stop hardware test** (#20, `docs/design/CLEAN_STOP.md`). At least 10
+   restarts without a reset, counting first-upload failures and the invisible period.
+   Do it after the TIMING lines are live, so every first upload has its block-5 time.
+7. **The release** (`docs/RELEASE_NOTES_v0.3.0-beta.1.md`, Part 1): version name,
+   CHANGELOG, the killed-uploader test, and the installer end to end, including over
+   v0.2.0-beta.1.
+
+## Deploy steps
+
+**Right now `main` has nothing new to deploy:** #18 and #19 aren't merged, so a pull
+would change nothing. Once you've merged **#18, and #19 retargeted to `main`**:
+
+```
+C:\Users\Regal\source\tiga-fresh-test\STOP_STACK.ps1
+cd C:\Users\Regal\source\tiga-fresh-test
+git pull
+cd windows_ble_probe
+cargo build --release --locked
+```
+
+Then disconnect the battery for 30–40 s (pressing a few keys), reconnect, and:
+
+```
+C:\Users\Regal\source\tiga-fresh-test\START_STACK.ps1
+```
+
+Check the newest `tiga-fresh-test\logs\ble.log`:
+
+- the header says `Block timeout   : 2500 ms`
+- after the first `UPLOAD COMPLETE`, a line
+  `TIMING frame=… blocks_acked=53 median=…ms p90=…ms max=…ms slowest=block N control1_ack=…ms control2_ack=…ms`.
+  Expect a median of about 150 ms. On this first-on-connection upload, no
+  `WARNING first upload is slow` line should appear
+- `extracted\session_01_bulk_stream.bin.delivered` has the new `block_*` /
+  `control*_ack_ms` keys
+
+If only #18 is merged, there are no TIMING lines; the 2500 ms header is the only check.
+**Task 3 (#20) is not part of this pull**, and STOP_STACK still force-kills.
+
+`tiga-dev` is left on `docs/issue-triage` with a clean tree (the triage file is ignored).
+Its uploader binary was last built from `feature/clean-stop`, so it has Task 3. Rebuild
+it before using `tiga-dev` for anything else.
