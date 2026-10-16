@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import unicodedata
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -99,11 +100,14 @@ FALLBACK_FONT_FILES = [
     ("YuGothR.ttc", "YuGothB.ttc"),    # Japanese
     ("meiryo.ttc", "meiryob.ttc"),     # Japanese, older Windows
     ("msyh.ttc", "msyhbd.ttc"),        # Chinese (Microsoft YaHei)
+    ("msjh.ttc", "msjhbd.ttc"),        # Traditional Chinese (Microsoft JhengHei)
     ("malgun.ttf", "malgunbd.ttf"),    # Korean
     ("seguisym.ttf", "seguisym.ttf"),  # symbols, including ♪
 ]
 _NOTDEF_PROBE = "\U0010fffd"  # private use, plane 16: no font here maps it
 _glyph_cache: dict[tuple[int, str], bool] = {}
+_fonts_logged = False
+_missing_logged: set[str] = set()
 
 
 def _glyph_mask(font, ch: str) -> bytes:
@@ -138,6 +142,10 @@ class FontChain:
         for font in self.fonts:
             if has_glyph(font, ch):
                 return font
+        if ch not in _missing_logged:
+            _missing_logged.add(ch)
+            name = unicodedata.name(ch, "unnamed")
+            log(f"FONT no font has U+{ord(ch):04X} {name}; drawn as a box")
         return self.primary
 
     def runs(self, text: str) -> list[tuple[str, object]]:
@@ -157,19 +165,26 @@ _chains: dict[tuple[int, bool], FontChain] = {}
 
 def find_text_font(size: int, bold: bool = False) -> FontChain:
     """find_font() with fallbacks, for text that comes from media metadata."""
+    global _fonts_logged
     key = (size, bold)
     if key not in _chains:
         fonts = [find_font(size, bold)]
+        loaded, skipped = [], []
         folder = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
         for regular, bold_file in FALLBACK_FONT_FILES:
             p = folder / (bold_file if bold else regular)
             if not p.exists():
                 p = folder / regular
-            if p.exists():
-                try:
-                    fonts.append(ImageFont.truetype(str(p), size=size))
-                except OSError:
-                    pass
+            try:
+                # Index 0 of each .ttc is the non-UI family (Yu Gothic, not Yu Gothic UI).
+                fonts.append(ImageFont.truetype(str(p), size=size))
+                loaded.append(p.name)
+            except OSError:
+                skipped.append(p.name)
+        if not _fonts_logged:
+            _fonts_logged = True
+            log(f"FONT fallbacks: {', '.join(loaded) or 'none'}"
+                + (f"; not installed: {', '.join(skipped)}" if skipped else ""))
         _chains[key] = FontChain(fonts)
     return _chains[key]
 
@@ -200,6 +215,37 @@ def draw_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill):
         x += f.getlength(s)
 
 
+# Japanese and Chinese are written without spaces, so a line may break between any two
+# of these characters, not only at spaces. Hangul is left out: Korean uses spaces.
+_BREAK_ANYWHERE = (
+    (0x3040, 0x30FF),    # Hiragana, Katakana
+    (0x31F0, 0x31FF),    # Katakana phonetic extensions
+    (0x3400, 0x4DBF),    # CJK extension A
+    (0x4E00, 0x9FFF),    # CJK unified ideographs
+    (0xF900, 0xFAFF),    # CJK compatibility ideographs
+    (0xFF66, 0xFF9F),    # halfwidth Katakana (not U+FF65, a Morse dot in the wild)
+    (0x20000, 0x3FFFF),  # CJK extensions B and later
+)
+# Never start a line with these (a simple form of the Japanese kinsoku rule).
+_NO_LINE_START = set("ー々ゝゞヽヾ・、。，．！？：；）」』】〕〉》ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ")
+
+
+def _breaks_anywhere(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _BREAK_ANYWHERE)
+
+
+def _break_units(word: str) -> list[str]:
+    """Split one space-free word into the pieces a line may break between."""
+    units: list[str] = []
+    for ch in word:
+        if units and (ch in _NO_LINE_START or not (_breaks_anywhere(ch) or _breaks_anywhere(units[-1][-1]))):
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
+
+
 def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int):
     words = (text or "").split()
     if not words:
@@ -208,28 +254,34 @@ def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lin
     def width(s: str) -> int:
         return text_width(draw, s, font)
 
-    # A word wider than the box (a long unbroken title, or CJK text without spaces)
-    # is broken between characters; otherwise it was drawn as one over-wide line.
-    tokens = []
+    # (separator, piece): pieces of one word join with "", words with " ".
+    tokens: list[tuple[str, str]] = []
     for word in words:
-        if width(word) <= max_width:
-            tokens.append(word)
-            continue
-        piece = ""
-        for ch in word:
-            if piece and width(piece + ch) > max_width:
-                tokens.append(piece)
-                piece = ch
-            else:
-                piece += ch
-        tokens.append(piece)
+        sep = " "
+        for unit in _break_units(word):
+            # A piece wider than the box (a long unbroken title) is broken between
+            # characters; otherwise it was drawn as one over-wide line.
+            if width(unit) <= max_width:
+                tokens.append((sep, unit))
+                sep = ""
+                continue
+            piece = ""
+            for ch in unit:
+                if piece and width(piece + ch) > max_width:
+                    tokens.append((sep, piece))
+                    sep = ""
+                    piece = ch
+                else:
+                    piece += ch
+            tokens.append((sep, piece))
+            sep = ""
 
     lines = []
     current = ""
     truncated = False
 
-    for token in tokens:
-        test = token if not current else current + " " + token
+    for sep, token in tokens:
+        test = token if not current else current + sep + token
         if width(test) <= max_width:
             current = test
             continue
