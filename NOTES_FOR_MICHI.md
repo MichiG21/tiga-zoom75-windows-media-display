@@ -1063,7 +1063,7 @@ separately worked. It looks like the classifier stays primed for a moment after 
 | 2. Per-block diagnostics | done | `feature/block-diagnostics` (from Task 1's branch) | `5daaa13`, `75c312d` | [#19](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/19) | no (Task 1 not merged) |
 | 3. Clean stop | done, prepared only | `feature/clean-stop` (from `feature/block-diagnostics`) | `c359c73`, `8037670`, `54f0fb8` | [#20](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/20) | no, by design |
 | 4. Issue triage | written, **not committed** (see below) | — | — | — | — |
-| 5. Release draft | done | `docs/issue-triage` (from `origin/main`) | `cce541b`, `d06b808` | see the run summary | no |
+| 5. Release draft | done | `docs/issue-triage` (from `origin/main`) | `cce541b`, `d06b808` | [#21](https://github.com/MichiG21/tiga-zoom75-windows-media-display/pull/21) | no (not attempted after #18 was refused) |
 | 6. CI fonts, old plans | done | — | — | — | — |
 
 ### Task 1
