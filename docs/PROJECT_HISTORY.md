@@ -633,6 +633,8 @@ observation each:
 - a **10–15 s** disconnect before 22:44 did **not** clear the keyboard: 22:44 and 22:46
   both stalled at block 11/53
 - a **30 s** disconnect before 22:49 did: 22:49 completed normally in 8.70 s
+- *(added 2026-10-16)* a **25 s** disconnect **without key presses** did **not** (21:09,
+  fifth part below); 40 s and about a minute with key presses did
 - Michi's older notes say 30–60 s, pressing a few keys while disconnected to drain the
   remaining charge
 
@@ -787,7 +789,8 @@ failure gives the block whose PROGRESS never came and the time from `UPLOAD STAR
    device. That missing comparison is what would separate the two.
 4. **Could the uploader spot trouble earlier?** *Proposal at the time. The logging part
    (per-block latency, `SLOW` lines, the block-5 warning, CONTROL ACK times) was added
-   on `feature/block-diagnostics`, 2026-10-16; see RETRY_RECOVERY.md.* The
+   in #22, 2026-10-16, and first ran on hardware that evening (fourth part below); see
+   RETRY_RECOVERY.md.* The
    catch is that anything after CONTROL2 cannot avoid the problem: abandoning a transfer
    is what leaves the partial session. So:
    - **Log more, decide later.** Log every block's ACK latency (or per-upload min/median/
@@ -890,6 +893,180 @@ the open question above: with 10 s, the transfer stalled anyway, only later.
 `Block timeout   :` line in `ble.log` stay, so a longer wait can still be tried per run.
 What 10000 ms was meant to reveal (does a slowing run recover?) is better answered by
 per-block latency logging than by waiting longer.
+
+#### Fourth part: 2500 ms and per-block timing live, 2026-10-16 20:16–20:56
+
+Source: `tiga-fresh-test\logs\` (`startup_supervisor.log`, `ble.log`, `renderer.log`),
+`tiga_display_command.ack`, `<stream>.delivered` and `git reflog`, plus Michi's account
+of the battery disconnect and the Display Control buttons. `ble.log` stamps are UTC;
+times here are local (UTC+2).
+
+**Before it: #18 alone, 20:16–20:49.** The live install was pulled to `019da37` (#18) at
+20:16 and started at 20:20:54: `Block timeout   : 2500 ms`. Another code 10 after the
+restart (no candidate in the 15 s scan), and the retry found the keyboard at once. Six uploads
+completed, 8.31–10.58 s, except one: **20:46:17, 20.01 s, the slowest completed upload on
+record.** Block 5 came at 3.90 s, and every five-block span after it took 0.9–2.3 s
+(about 0.2–0.46 s per block, against ~0.15 s healthy), with no recovery towards
+the end (block 53 at 18.67 s). No single block reached the 2.5 s timeout. This was
+before the timing lines existed, so the per-block figures are averages. The same image
+(CRC32 `525691c8`) then completed in 9.17 s after the deploy below. So a transfer can
+be uniformly slow for a whole upload and still finish, and again it wasn't the content.
+
+**The #22 deploy.** Pulled to `5ca54b3` (includes #22) at 20:49:06, uploader rebuilt
+20:49:26, a battery disconnect and reconnect (Michi), stack started 20:51:27.
+
+- **Code 11 on the first attempt after the reconnect: the first code 11 from the real
+  keyboard** (every earlier one was the BT1 typing device, §7). The scan saw the cached
+  address with an **empty name** (`CANDIDATE name="" address=07:01:88:B3:66:1B`); it was
+  a candidate only because of the address cache. The connect succeeded, and the
+  **media service `1f40eaf8…` was present but had no characteristics yet**: `missing
+  1f400001, 1f400002, 1f400003, 1f400004`, with three services listed, all empty. The rescan
+  found nothing else, and the uploader exited 11 at 20:52:02. The supervisor's retry 8 s later
+  saw `Zoom75 Tiga` with its name, qualified it, and the upload started at 20:52:14. The
+  most likely reading is that the keyboard was still booting after the reconnect: it was
+  advertising before its GATT table was complete. The code-11 retry handled it as
+  designed, with no halt.
+- **First upload: 9.17 s**, `TIMING … median=158ms p90=180ms max=210ms slowest=block 2
+  control1_ack=18ms control2_ack=76ms`. Block 5 at 0.90 s, a little slower than the
+  0.71–0.85 s range of earlier first uploads, and under the 1.5 s warning threshold.
+- **Startup delay of a freshly built uploader.** At both starts after a rebuild (20:20:54
+  and 20:51:27) the uploader printed its first line about 25 s after the supervisor
+  launched it. At the code-11 retry, with the same binary, it started at once. This
+  fits antivirus inspecting a new executable on first run (compare #15's CyberCapture
+  theory). Harmless here, but it adds ~25 s to the first start after every rebuild.
+
+**Display Control on hardware: #15 and #6's GUI path verified.** Three commands from the
+utility (the surviving ack's command ID ends in `-9728-3`: process 9728's third command). The renderer acted on each
+within a second and each resulting frame was uploaded:
+
+| Time | Button | Renderer | Upload |
+|---|---|---|---|
+| 20:54:25 | Lock Standby | `CONTROL -> manual standby`, f0004 | completed 11.38 s |
+| 20:55:00 | Lock Standby again | `CONTROL -> manual standby`, f0005 | completed 10.68 s |
+| 20:55:17 | Resume Automatic | `CONTROL -> automatic mode re-armed`, f0006; Now Playing again at 20:55:20 (f0007) | completed 9.97 s, then 9.69 s |
+
+The surviving `tiga_display_command.ack` belongs to the third command (`command_text=auto
+…-9728-3`, `frame_id …-f0006`). It was written 0.9 s after the command file. Each
+command was confirmed by the renderer and its frame uploaded. That verifies on hardware the #15 fix (the GUI
+confirms a command actually landed, via read-back and the renderer's ack) and, through
+the second Lock Standby, the #6 fix from the GUI side as well as by hand. **Not covered:**
+Standby + Shut Down (#7's delivery-ack and shutdown stages), which wasn't pressed.
+
+**What the timing lines show.** All seven uploads after the deploy:
+
+| Upload | Conn. | Total | b5 | median | p90 | max (block) | control1_ack | control2_ack |
+|---|---|---:|---:|---:|---:|---|---:|---:|
+| 20:52:14 | 1st | 9.17 s | 0.90 | 158 | 180 | 210 (2) | 18 | 76 |
+| 20:53:19 | later | 9.91 s | 1.48 | 157 | 180 | 697 (2) | 166 | 291 |
+| 20:54:26 | later | 11.38 s | 2.39 | 157 | 195 | **1079 (2)** | 577 | 294 |
+| 20:55:00 | later | 10.68 s | 1.52 | 158 | 187 | 892 (1) | 653 | 357 |
+| 20:55:18 | later | 9.97 s | 1.51 | 157 | 173 | 767 (1) | 178 | 283 |
+| 20:55:28 | later | 9.69 s | 1.13 | 157 | 180 | 421 (3) | 170 | 172 |
+| 20:56:02 | later | 9.95 s | 1.51 | 150 | 172 | 703 (1) | 357 | 297 |
+
+Times in ms unless marked; b5 is block 5's `elapsed` in seconds.
+
+- **The steady pace is the same on every upload:** median 150–158 ms per block, p90
+  172–195 ms. Later uploads are not slower throughout.
+- **Later uploads have a slow block at the very start.** The slowest block is always
+  block 1, 2 or 3: 0.7–1.1 s in five of the six later uploads (0.42 s in the sixth),
+  against 0.21 s on the first upload. 20:54:26's block 2 at 1079 ms is the **first `SLOW`
+  line ever logged**. The summary gives only the slowest block, so whether one or two early
+  blocks are slow can't be told, but a p90 of 172–195 ms allows at most five blocks over
+  ~0.2 s. **This answers §7.1's "where in blocks 1–5 do later uploads lose ~0.7 s":** one
+  slow block at the start, after which the pace is normal. Block 5 at ~1.5 s on later
+  uploads, against 0.9 s here on the first, matches the slow block's size.
+- **control1_ack: 18 ms on the first upload, 166–653 ms on later ones.** It isn't a steady
+  rise: 166, 577 and 653 ms, then back to 178, 170 and 357 ms. Both are in the time before
+  `elapsed` starts, so they add to the total but not to b5. Whether the CONTROL1 delay
+  and the slow first block share a cause (the keyboard still busy with the previous image?)
+  is open. Eight minutes on one connection is a small sample.
+- **Block 5 at 2.39 s did not mean trouble here.** 20:54:26 reached block 5 at 2.39 s,
+  inside the 2.35–2.97 s range of the three slowing failures, and then ran at the normal
+  pace (block 10 at 3.20 s) to complete in 11.38 s. It was a later upload whose one
+  slow block was 1.08 s. The early warning is deliberately limited to first-on-connection
+  uploads (healthy 0.71–0.90 s), and this upload shows why: on a later upload, b5 alone
+  doesn't separate a slowing run from a slow first block.
+
+**Verified on hardware in this part:** the 2500 ms default and the timing lines (#22);
+#15; #6 through the GUI; code-11 retry recovering a keyboard that wasn't ready yet.
+
+#### Fifth part: a failure on an open connection, and two recoveries, 20:58–21:15
+
+Same sources, plus Michi's account of the battery disconnects, the iPad and how
+START_STACK/STOP_STACK were used.
+
+| Time | What happened |
+|---|---|
+| 20:56:02 | Healthy upload on the 20:52 connection, 9.95 s (median 150 ms) |
+| 20:58:37 | Spotify auto-advanced (renderer: `media changed`, f0009); upload starts on the **same open connection** |
+| 20:58:42 | **Code 20 after 4.86 s**: block 5 at 1.58 s (a normal later-upload pace), then no PROGRESS for block 6 within 2.5 s. `TIMING blocks_acked=5 median=188ms max=802ms slowest=block 3 control1_ack=139ms control2_ack=296ms`. Halt (`session-open`) |
+| 21:00–21:09 | Renderer kept rendering (f0010–f0014); the uploader stayed halted |
+| (before 21:09) | Battery disconnect of **25 s, no key presses**. **START_STACK with the supervisor still running**: it cleared the halt, and the running supervisor started the uploader (21:09:33) |
+| 21:09:35 | Keyboard seen at once, **RSSI −66** |
+| 21:09:40 | **Code 20 after 3.74 s**, no PROGRESS for block 5 (last ACKed 4). `TIMING blocks_acked=4 median=185ms max=300ms slowest=block 4 control1_ack=20ms control2_ack=77ms`. Halt |
+| (before 21:14) | STOP_STACK, a battery disconnect of **about a minute, pressing keys**, START_STACK |
+| 21:14:06 | New supervisor and renderer; keyboard seen at once, **RSSI −58** |
+| 21:14:10–21:14:42 | Three uploads completed: 8.95 s (first on the connection, block 5 at 0.92 s, control1_ack 32 ms), 9.93 s, 10.06 s; medians 156–157 ms |
+
+**20:58: the sudden signature on an open connection.** It is the second failure ever of a
+later upload on a connection that had already completed uploads. The first was 21:39 on
+2026-10-15. It came 2.5 minutes after a healthy upload and looks like 21:39 too: a normal
+pace, then nothing. The one hint before the stall is block 3 at 802 ms. That is within
+the 0.42–1.08 s slow early block seen on every later upload in the fourth part, so
+**it's not a usable warning**. The `TIMING` line on a failure did its job: without it,
+the slow block 3 and the CONTROL ACK times wouldn't be known.
+
+**21:09: the first recovery failed after a 25 s disconnect without key presses, and the
+keyboard did not look stuck.** Its CONTROL1
+and CONTROL2 ACKs (20 / 77 ms) are what a first upload on a new connection looks like
+(18 / 76 ms at 20:52, 32 / 73 ms at 21:14). Whether they would also look like that from
+a keyboard that was *not* reset is unknown; nothing has logged that case yet. So the
+ACK times are consistent with the disconnect having worked, but don't prove it. The
+transfer then stopped at block 5 after a normal start (slowest block 300 ms), which is
+the sudden signature again, not the slowing one. The 25 s was below the 30 s working
+minimum and had no key presses, so this is the second short disconnect that failed to
+clear the keyboard: 10–15 s on 2026-10-15 22:44 was the first. That one stalled with
+the slowing signature; this one stalled suddenly.
+
+**21:14: the second recovery worked.** It differed from the first in three ways at
+once:
+
+1. **The disconnect was longer and drained:** about a minute with key presses, against 25 s
+   without.
+2. **STOP_STACK came first.** A new supervisor and a new renderer started.
+3. **The signal was stronger:** RSSI −58 against −66. Healthy starts that evening were
+   −58/−59 (20:51, 20:52); the 21:09 failure was −66. One reading each.
+
+**What this says about "STOP_STACK before the battery disconnect": not enough to change
+the advice.** During the 20:58–21:09 halt the uploader had already exited. No process
+held a Bluetooth connection to the keyboard, and the supervisor and renderer never talk
+to it. So STOP_STACK has no mechanism here by which it would change the keyboard's
+state. The disconnect duration has a known record, though: 10–15 s failed, 25 s without
+key presses failed, and every disconnect of 30 s or more worked. **That explains the 21:09
+failure without STOP_STACK.** **The recovery advice stays as it is:** disconnect the
+battery for at least 30 s, pressing a few keys (about a minute with key presses is what
+worked here), then START_STACK.
+Running STOP_STACK first does no harm and gives a fresh supervisor, so it's a reasonable
+habit, but nothing shows it's needed. Separately, STOP_STACK *while an upload is running*
+remains harmful (it kills the uploader mid-transfer). See the clean-stop design,
+`docs/design/CLEAN_STOP.md`.
+
+**Open question: 2.4 GHz interference. Hypothesis only.** An iPad was streaming nearby
+during the 20:58 and 21:09 failures (Michi). BLE shares the 2.4 GHz band with Wi-Fi, so
+heavy Wi-Fi traffic could cost PROGRESS notifications or acknowledgements, and a
+lower RSSI (−66) makes that more likely. Nothing in the logs measures interference.
+Whether the iPad was still streaming at 21:14 isn't recorded, and nobody noted Wi-Fi
+conditions for any of the 2026-10-15 failures. **Test, if wanted:** repeat
+uploads with the iPad streaming next to the keyboard and with it switched off, and log
+RSSI (already in `ble.log`'s `CANDIDATE` line) and any failures.
+
+**Tally update** (§7.1's restart table and the counts above): later uploads on an open
+connection, **2 failed** (21:39 on 10-15, 20:58 on 10-16). Recoveries after a halt: one
+failed (21:09: 25 s, no key presses, supervisor not restarted, RSSI −66). Every recovery
+with a disconnect of 30 s or more has worked (22:49 and 23:06 on 10-15 at 30 s; 18:54 on
+10-16 at 40 s; 21:14 at about a minute with key presses). Disconnects that were too short:
+10–15 s (22:44 on 10-15) and 25 s without key presses (21:09 on 10-16).
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
