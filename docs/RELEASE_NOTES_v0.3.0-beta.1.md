@@ -3,8 +3,9 @@
 **Draft. No tag and no release have been created.** Part 1 is for Michi: what blocks the
 release today. Part 2 is the release text for users, ready to paste once Part 1 is done.
 
-Written 2026-10-16 against `main` at `e8f7211` (after #17). The newest release is still
-`v0.2.0-beta.1` (2026-09-09).
+Written 2026-10-16 against `main` at `e8f7211` (after #17); updated the same evening for
+`main` at `56c3825` (after #18 and #22). The newest release is still `v0.2.0-beta.1`
+(2026-09-09).
 
 ---
 
@@ -13,20 +14,18 @@ Written 2026-10-16 against `main` at `e8f7211` (after #17). The newest release i
 In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keyboard;
 **(C)** Claude Code can do it once told to.
 
-1. **(M) Merge #18 (block timeout back to 2500 ms).** `main` still has the 10000 ms default
-   from `224e771`. A release cut from `main` today ships 10000 ms, which §7.1 found rescued
-   nothing and only delays the halt by about a minute. The unattended run of 2026-10-16
-   opened #18 with green checks but could not merge it (see NOTES_FOR_MICHI). Then
-   **#19** (per-block timing, logging only), retargeted to `main`. Both are small; #19 is
-   what makes a field report from a beta user useful.
+1. **Done: the 2500 ms block timeout (#18) and the per-block timing (#19, merged to `main`
+   as #22).** What's left is **(H)**: the live install was pulled to `019da37` (#18) and
+   its `ble.log` already shows `Block timeout   : 2500 ms`. It doesn't have #22 yet, so
+   no `TIMING` line has been seen on hardware. Pull, rebuild the uploader, and check that
+   a `TIMING` line follows the next `UPLOAD COMPLETE`.
 2. **(M) Version name.** `RELEASE_CHECKLIST.md` is still titled `v0.2.0-beta.2`, and its
    Phase 7 tags `v0.2.0-beta.2`. The task and these notes call it `v0.3.0-beta.1`. Pick
    one; then the checklist's title and Phase 7 tag command need that one word changed.
-3. **(C) CHANGELOG.** `## Unreleased` lists only the font fallback and the Morse subtitle
-   (#19 adds the block-timeout and timing lines). Bugs A–G, device selection, the halt
-   instruction and the display-control fixes (#11–#16) are not in it. Part 2 below is a
-   complete list to copy from. Not done in this run, to avoid a conflict with #19's
-   CHANGELOG lines.
+3. **(C) CHANGELOG.** `## Unreleased` lists the font fallback, the Morse subtitle, the
+   2500 ms block timeout and the per-block timing. Bugs A–G, device selection, the halt
+   instruction and the display-control fixes (#11–#16) are not in it yet. Part 2 below is
+   a complete list to copy from.
 4. **(H) Hardware, from the checklist,** on the build you will release:
    - **Phase 3, bug C via the GUI and #15:** Display Control → Standby, Standby again,
      then Standby + Shut Down. The display-control fix (`dbc902f`) has never run on
@@ -46,18 +45,20 @@ In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keybo
      on the packaged build once. Also install it **over** v0.2.0-beta.1 once: the
      installer runs STOP_STACK only after copying files (`CloseApplications=no`), so
      whether running old executables block the copy is untested.
-5. **(M) The three "turn the keyboard off" spots** (README ~line 275, RETRY_RECOVERY
-   step 4, RELEASE_CHECKLIST Phase 4's last step). The TIGA has no power switch, so "turn
-   the keyboard off" needs your answer: the mode toggle (BT / 2.4 GHz / wired), or
-   Bluetooth off on the PC? Not a hard blocker, but README line 275 is user-facing.
-6. **(M) Issues.** `docs/ISSUE_TRIAGE_2026-10-16.md` (local draft) proposes closing #4, #5,
+5. **Done: the three "turn the keyboard off" spots** (README, RETRY_RECOVERY step 4,
+   RELEASE_CHECKLIST Phase 4). They now say: with no power switch, "off" means
+   disconnecting the battery from the PCB; do it only when no upload is running; for the
+   unreachable-keyboard test, keep it disconnected for 1–2 minutes, then expect an upload
+   within 5 minutes with no START_STACK. Halt recovery is kept separate (at least 30 s).
+6. **(M) Issues.** `docs/TRIAGE_2026-10-16.md` proposes closing #4, #5,
    #6, #8, #9, #10 and #14 at the release and keeping #7 and #15 open until step 4's GUI
    session. Ready-to-paste comments are in it.
 7. **Not for this release:** #20 (clean stop). It changes the stop path and needs its own
    hardware test (`docs/design/CLEAN_STOP.md`). Release without it and say so under
    "Known problems".
 
-Already fine: CI is green on `main`, `Cargo.lock` is committed and every build uses
+Already fine: CI is green on `main` up to #18 (the run for #22 was still in progress when
+this was updated), `Cargo.lock` is committed and every build uses
 `--locked`, the installer workflow builds on a `v*` tag push, and the stale text fixed on
 2026-10-16 (codes 10/11 never halt; Phase 5 decided; test counts) is in the checklist.
 
@@ -118,11 +119,11 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 > - Logs in `logs\` keep their history across restarts and rotate at 5 MB. Every frame
 >   has an ID that appears in both `renderer.log` and `ble.log`. *Status* shows the last
 >   frame actually delivered to the keyboard, not just whether processes are running. (#9)
-> - *(if #19 is merged)* `ble.log` records how long every block of an upload took, flags
->   any block over 1 s as `SLOW`, warns when the first upload after connecting starts
->   slowly, and writes a `TIMING` summary after every upload.
-> - *(if #18 is merged)* The uploader waits up to 2.5 s for each block's confirmation, as
->   in v0.2.0-beta.1. A longer wait was tried for a day and helped nothing.
+> - `ble.log` records how long every block of an upload took, flags any block over 1 s
+>   as `SLOW`, warns when the first upload after connecting starts slowly, and writes a
+>   `TIMING` summary after every upload. Please include these lines in a bug report.
+> - The uploader waits up to 2.5 s for each block's confirmation, as in v0.2.0-beta.1. A
+>   longer wait was tried for a day and helped nothing.
 >
 > #### Verified on the keyboard
 >
@@ -135,8 +136,8 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 >
 > **Not yet verified on the keyboard:** Display Control's new "did it arrive" check and
 > the full Standby + Shut Down sequence; the 15-second rule for players that never report
-> their position moving (no such player is known); the installer build itself on this
-> release *(update before publishing)*.
+> their position moving (no such player is known); the new per-block timing lines; the
+> installer build itself on this release *(update before publishing)*.
 >
 > #### Known problems
 >
