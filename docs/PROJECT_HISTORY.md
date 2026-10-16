@@ -989,6 +989,74 @@ Times in ms unless marked; b5 is block 5's `elapsed` in seconds.
 **Verified on hardware in this part:** the 2500 ms default and the timing lines (#22);
 #15; #6 through the GUI; code-11 retry recovering a keyboard that wasn't ready yet.
 
+#### Fifth part: a failure on an open connection, and two recoveries, 20:58–21:15
+
+Same sources, plus Michi's account of the battery disconnects, the iPad and how
+START_STACK/STOP_STACK were used.
+
+| Time | What happened |
+|---|---|
+| 20:56:02 | Healthy upload on the 20:52 connection, 9.95 s (median 150 ms) |
+| 20:58:37 | Spotify auto-advanced (renderer: `media changed`, f0009); upload starts on the **same open connection** |
+| 20:58:42 | **Code 20 after 4.86 s**: block 5 at 1.58 s (a normal later-upload pace), then no PROGRESS for block 6 within 2.5 s. `TIMING blocks_acked=5 median=188ms max=802ms slowest=block 3 control1_ack=139ms control2_ack=296ms`. Halt (`session-open`) |
+| 21:00–21:09 | Renderer kept rendering (f0010–f0014); the uploader stayed halted |
+| (before 21:09) | Battery disconnect, duration not recorded. **START_STACK with the supervisor still running**: it cleared the halt, and the running supervisor started the uploader (21:09:33) |
+| 21:09:35 | Keyboard seen at once, **RSSI −66** |
+| 21:09:40 | **Code 20 after 3.74 s**, no PROGRESS for block 5 (last ACKed 4). `TIMING blocks_acked=4 median=185ms max=300ms slowest=block 4 control1_ack=20ms control2_ack=77ms`. Halt |
+| (before 21:14) | STOP_STACK, a **40–60 s** battery disconnect, START_STACK |
+| 21:14:06 | New supervisor and renderer; keyboard seen at once, **RSSI −58** |
+| 21:14:10–21:14:42 | Three uploads completed: 8.95 s (first on the connection, block 5 at 0.92 s, control1_ack 32 ms), 9.93 s, 10.06 s; medians 156–157 ms |
+
+**20:58: the sudden signature on an open connection.** It is the second failure ever of a
+later upload on a connection that had already completed uploads. The first was 21:39 on
+2026-10-15. It came 2.5 minutes after a healthy upload and looks like 21:39 too: a normal
+pace, then nothing. The one hint before the stall is block 3 at 802 ms. That is within
+the 0.42–1.08 s slow early block seen on every later upload in the fourth part, so
+**it's not a usable warning**. The `TIMING` line on a failure did its job: without it,
+the slow block 3 and the CONTROL ACK times wouldn't be known.
+
+**21:09: the first recovery failed, and the keyboard did not look stuck.** Its CONTROL1
+and CONTROL2 ACKs (20 / 77 ms) are what a first upload on a new connection looks like
+(18 / 76 ms at 20:52, 32 / 73 ms at 21:14). Whether they would also look like that from
+a keyboard that was *not* reset is unknown; nothing has logged that case yet. So the
+ACK times are consistent with the disconnect having worked, but don't prove it. The
+transfer then stopped at block 5 after a normal start (slowest block 300 ms), which is
+the sudden signature again, not the slowing one.
+
+**21:14: the second recovery worked.** It differed from the first in three ways at
+once:
+
+1. **The disconnect was longer, and its length is known:** 40–60 s, against "not recorded".
+2. **STOP_STACK came first.** A new supervisor and a new renderer started.
+3. **The signal was stronger:** RSSI −58 against −66. Healthy starts that evening were
+   −58/−59 (20:51, 20:52); the 21:09 failure was −66. One reading each.
+
+**What this says about "STOP_STACK before the battery disconnect": not enough to change
+the advice.** During the 20:58–21:09 halt the uploader had already exited. No process
+held a Bluetooth connection to the keyboard, and the supervisor and renderer never talk
+to it. So STOP_STACK has no mechanism here by which it would change the keyboard's
+state, and its effect can't be separated from the longer disconnect or the better
+signal. **The recovery advice stays as it is:** disconnect the battery for at least 30 s
+(40–60 s is what worked here, and is comfortably above the minimum), then START_STACK.
+Running STOP_STACK first does no harm and gives a fresh supervisor, so it's a reasonable
+habit, but nothing shows it's needed. Separately, STOP_STACK *while an upload is running*
+remains harmful (it kills the uploader mid-transfer). See the clean-stop design,
+`docs/design/CLEAN_STOP.md`.
+
+**Open question: 2.4 GHz interference. Hypothesis only.** An iPad was streaming nearby
+during the 20:58 and 21:09 failures (Michi). BLE shares the 2.4 GHz band with Wi-Fi, so
+heavy Wi-Fi traffic could cost PROGRESS notifications or acknowledgements, and a
+lower RSSI (−66) makes that more likely. Nothing in the logs measures interference.
+Whether the iPad was still streaming at 21:14 isn't recorded, and nobody noted Wi-Fi
+conditions for any of the 2026-10-15 failures. **Test, if wanted:** repeat
+uploads with the iPad streaming next to the keyboard and with it switched off, and log
+RSSI (already in `ble.log`'s `CANDIDATE` line) and any failures.
+
+**Tally update** (§7.1's restart table and the counts above): later uploads on an open
+connection, **2 failed** (21:39 on 10-15, 20:58 on 10-16). Recoveries after a halt: one
+failed (21:09: disconnect of unknown length, supervisor not restarted, RSSI −66); every
+recovery with a disconnect of 30 s or more has worked.
+
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
 Two separate fixes, easy to conflate:
