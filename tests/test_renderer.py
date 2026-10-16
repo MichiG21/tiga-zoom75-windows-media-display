@@ -387,6 +387,7 @@ class FontFallbackTests(unittest.TestCase):
 
         self.Image, self.ImageDraw = Image, ImageDraw
         self.r = load_renderer()
+        self.r.log = lambda message: None
         self.chain = self.r.find_text_font(18, bold=True)
 
     def test_primary_font_lacks_cjk_so_the_test_means_something(self):
@@ -428,6 +429,174 @@ class FontFallbackTests(unittest.TestCase):
     def test_media_render_with_cjk_does_not_crash(self):
         img = self.r.render_media({"title": "トーキョーレギー", "artist": "高中正義", "album": "한국어", "thumbnail": False})
         self.assertEqual(img.size, (self.r.WIDTH, self.r.HEIGHT))
+
+
+def fit_text_before_fallback(draw, text, font, max_width, max_lines):
+    """fit_text() as it was on main before the font fallback (128745d), verbatim."""
+    words = (text or "").split()
+    if not words:
+        return [""]
+
+    def width(s: str) -> int:
+        return draw.textbbox((0, 0), s, font=font)[2]
+
+    tokens = []
+    for word in words:
+        if width(word) <= max_width:
+            tokens.append(word)
+            continue
+        piece = ""
+        for ch in word:
+            if piece and width(piece + ch) > max_width:
+                tokens.append(piece)
+                piece = ch
+            else:
+                piece += ch
+        tokens.append(piece)
+
+    lines = []
+    current = ""
+    truncated = False
+
+    for token in tokens:
+        test = token if not current else current + " " + token
+        if width(test) <= max_width:
+            current = test
+            continue
+        lines.append(current)
+        current = token
+        if len(lines) >= max_lines:
+            truncated = True
+            current = ""
+            break
+
+    if current:
+        if len(lines) < max_lines:
+            lines.append(current)
+        else:
+            truncated = True
+
+    if truncated:
+        last = lines[-1]
+        ell = "…"
+        while last and width(last + ell) > max_width:
+            last = last[:-1]
+        lines[-1] = last.rstrip() + ell
+
+    return lines
+
+
+# Read from tiga-fresh-test\logs\renderer.log, 2026-10-15: the Morse band's dot and dash.
+MORSE_LOGGED = "･－"
+# Other Morse-like characters a title could use.
+MORSE_LIKE = "·•∙−–—▬⸺"
+MORSE_TITLE = "･－･･ ･ － ･･ － －－･ －－－"
+HAVE_CJK = any((FONTS / f).exists() for f in ("YuGothB.ttc", "meiryo.ttc", "msyhbd.ttc"))
+
+
+@unittest.skipUnless((FONTS / "segoeuib.ttf").exists(), "needs Windows fonts")
+class FontFallbackCoverageTests(unittest.TestCase):
+    """TASKS_D: every character is drawn with a font that has it."""
+
+    def setUp(self):
+        from PIL import Image, ImageDraw
+
+        self.r = load_renderer()
+        self.logged = []
+        self.r.log = self.logged.append
+        self.draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        self.Image, self.ImageDraw = Image, ImageDraw
+
+    def assert_every_char_has_a_font(self, text, size=18, bold=True):
+        chain = self.r.find_text_font(size, bold)
+        for ch in text:
+            self.assertTrue(self.r.has_glyph(chain.font_for(ch), ch), f"U+{ord(ch):04X}")
+
+    @unittest.skipUnless(HAVE_CJK, "no CJK font")
+    def test_morse_code_points_from_the_log(self):
+        self.assert_every_char_has_a_font(MORSE_LOGGED)
+        self.assert_every_char_has_a_font(MORSE_LOGGED, 16, False)
+
+    def test_morse_like_symbols(self):
+        self.assert_every_char_has_a_font(MORSE_LIKE)
+
+    @unittest.skipUnless(any((FONTS / f).exists() for f in ("YuGothB.ttc", "meiryo.ttc")), "no Japanese font")
+    def test_japanese(self):
+        self.assert_every_char_has_a_font("渚・モデラート")
+        self.assert_every_char_has_a_font("トーキョーレギー", 18, False)
+
+    @unittest.skipUnless((FONTS / "msyhbd.ttc").exists(), "no Chinese font")
+    def test_chinese(self):
+        self.assert_every_char_has_a_font("月亮代表我的心")
+
+    @unittest.skipUnless((FONTS / "malgunbd.ttf").exists(), "no Korean font")
+    def test_korean(self):
+        self.assert_every_char_has_a_font("밤양갱")
+
+    @unittest.skipUnless(HAVE_CJK, "no CJK font")
+    def test_mixed_latin_and_japanese_uses_both_fonts_on_one_baseline(self):
+        text = "高中正義 — Blue Lagoon"
+        chain = self.r.find_text_font(18, True)
+        self.assert_every_char_has_a_font(text)
+        fonts = {id(f) for _, f in chain.runs(text)}
+        self.assertIn(id(chain.primary), fonts)
+        self.assertGreater(len(fonts), 1)
+
+    def test_long_japanese_title_without_spaces_wraps_inside_the_box(self):
+        chain = self.r.find_text_font(18, True)
+        title = "ラブ・ストーリーは突然に東京ラブストーリー主題歌"
+        lines = self.r.fit_text(self.draw, title, chain, 174, 3)
+        self.assertGreater(len(lines), 1)
+        for line in lines:
+            self.assertLessEqual(self.r.text_width(self.draw, line, chain), 174, line)
+        self.assertEqual("".join(lines), title)  # nothing lost, no spaces inserted
+        for line in lines[1:]:
+            self.assertNotIn(line[0], "ー・、。ッャュョ", line)
+
+    def test_cjk_after_a_latin_word_fills_the_first_line(self):
+        chain = self.r.find_text_font(18, True)
+        lines = self.r.fit_text(self.draw, "ABC ラブ・ストーリーは突然に", chain, 174, 3)
+        self.assertTrue(lines[0].startswith("ABC ラ"), lines)
+
+    def test_morse_letters_are_not_split_across_lines(self):
+        chain = self.r.find_text_font(18, True)
+        lines = self.r.fit_text(self.draw, MORSE_TITLE, chain, 174, 3)
+        self.assertEqual(" ".join(lines).split(), MORSE_TITLE.split())
+
+    def test_missing_fallback_font_is_skipped(self):
+        self.r.FALLBACK_FONT_FILES = [("no-such-font.ttc", "no-such-font-bold.ttc")] + self.r.FALLBACK_FONT_FILES
+        chain = self.r.find_text_font(17, bold=True)
+        self.assertGreater(len(chain.fonts), 1)
+        self.assertEqual(len(self.logged), 1)
+        self.assertIn("not installed: no-such-font.ttc", self.logged[0])
+        self.r.find_text_font(17, bold=False)
+        self.assertEqual(len(self.logged), 1)  # one line per process, not per font size
+
+    def test_character_no_font_has_is_logged_once_and_drawn(self):
+        chain = self.r.find_text_font(18, True)
+        hieroglyph = "\U00013000"  # Egyptian; none of the fallback fonts has it
+        self.assertIs(chain.font_for(hieroglyph), chain.primary)
+        self.r.render_media({"title": hieroglyph * 3, "artist": "", "album": "", "thumbnail": False})
+        self.assertEqual([m for m in self.logged if "U+13000" in m], [self.logged[-1]])
+
+    def test_emoji_does_not_crash(self):
+        img = self.r.render_media({"title": "Song 🎵😀", "artist": "👍", "album": "", "thumbnail": False})
+        self.assertEqual(img.size, (self.r.WIDTH, self.r.HEIGHT))
+
+    def test_latin_frame_is_pixel_identical_to_before_the_fallback(self):
+        old = load_renderer()
+        old.log = self.logged.append
+        old.find_text_font = old.find_font
+        old.fit_text = fit_text_before_fallback
+        old.load_thumbnail = self.r.load_thumbnail  # the "♪" tile changed on purpose in 7c93850
+        for media in (
+            {"title": "Blue Lagoon", "artist": "Masayoshi Takanaka", "album": "Seychelles", "duration_ms": 245000},
+            {"title": "Alte Sünder", "artist": "SALÒ", "album": "Rabatt", "duration_ms": 180000},
+            {"title": "A Very Long Title That Has To Wrap Over Several Lines Because It Is Long",
+             "artist": "Some Artist With A Long Name As Well", "album": "An Album", "source": "Spotify"},
+            {"title": "Supercalifragilisticexpialidocious-and-more-unbroken-text", "artist": "X", "album": "Y"},
+        ):
+            self.assertEqual(self.r.render_media(dict(media)).tobytes(), old.render_media(dict(media)).tobytes(), media["title"])
 
 
 if __name__ == "__main__":
