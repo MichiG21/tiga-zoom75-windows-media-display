@@ -15,10 +15,8 @@ In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keybo
 **(C)** Claude Code can do it once told to.
 
 1. **Done: the 2500 ms block timeout (#18) and the per-block timing (#19, merged to `main`
-   as #22).** What's left is **(H)**: the live install was pulled to `019da37` (#18) and
-   its `ble.log` already shows `Block timeout   : 2500 ms`. It doesn't have #22 yet, so
-   no `TIMING` line has been seen on hardware. Pull, rebuild the uploader, and check that
-   a `TIMING` line follows the next `UPLOAD COMPLETE`.
+   as #22).** Both are live on hardware since 2026-10-16 20:51: `Block timeout   : 2500 ms`
+   and a `TIMING` line after every upload (PROJECT_HISTORY §7.1, fourth part).
 2. **(M) Version name.** `RELEASE_CHECKLIST.md` is still titled `v0.2.0-beta.2`, and its
    Phase 7 tags `v0.2.0-beta.2`. The task and these notes call it `v0.3.0-beta.1`. Pick
    one; then the checklist's title and Phase 7 tag command need that one word changed.
@@ -27,10 +25,11 @@ In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keybo
    instruction and the display-control fixes (#11–#16) are not in it yet. Part 2 below is
    a complete list to copy from.
 4. **(H) Hardware, from the checklist,** on the build you will release:
-   - **Phase 3, bug C via the GUI and #15:** Display Control → Standby, Standby again,
-     then Standby + Shut Down. The display-control fix (`dbc902f`) has never run on
-     hardware, and #7's ack-then-shutdown path has never completed. This is the one
-     user-facing feature with no hardware run at all.
+   - **Phase 3, Display Control: verified on 2026-10-16 except Standby + Shut Down.**
+     Lock Standby, Lock Standby again and Resume Automatic were each confirmed by the
+     renderer and uploaded (PROJECT_HISTORY §7.1, fourth part), which covers bug C from
+     the GUI and #15. **Still to do:** one Standby + Shut Down, whose ack-then-shutdown
+     path (#7) has never completed on hardware.
    - **Phase 4, killed uploader:** `Stop-Process -Name tiga_stream_watch_flow -Force` about
      3 s into an upload, by hand. Expect HALTED from the session marker. Never run on
      hardware (every real halt so far was a code 20). **It leaves the keyboard needing a
@@ -50,9 +49,9 @@ In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keybo
    disconnecting the battery from the PCB; do it only when no upload is running; for the
    unreachable-keyboard test, keep it disconnected for 1–2 minutes, then expect an upload
    within 5 minutes with no START_STACK. Halt recovery is kept separate (at least 30 s).
-6. **(M) Issues.** `docs/TRIAGE_2026-10-16.md` proposes closing #4, #5,
-   #6, #8, #9, #10 and #14 at the release and keeping #7 and #15 open until step 4's GUI
-   session. Ready-to-paste comments are in it.
+6. **Done: issues.** #4, #5, #6, #8, #9, #10, #14 and #15 were closed on 2026-10-16
+   (about 21:00), with comments (`docs/TRIAGE_2026-10-16.md`). Only #7 is open, pending
+   the Standby + Shut Down in step 4.
 7. **Not for this release:** #20 (clean stop). It changes the stop path and needs its own
    hardware test (`docs/design/CLEAN_STOP.md`). Release without it and say so under
    "Known problems".
@@ -130,13 +129,13 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 > uploads that each halted correctly and recovered after a reset; the uploader rejecting
 > `Zoom75 Tiga BT1` and remembering the right device; recovery on its own after the
 > keyboard was briefly unreachable; logs with history and frame IDs; a 34-character title
-> wrapping; Japanese text and the Morse-code band displaying. Repeated commands were
-> verified by writing the command file directly.
+> wrapping; Japanese text and the Morse-code band displaying; the per-block timing lines.
+> Display Control's "did it arrive" check was verified on 2026-10-16: Lock Standby, the
+> same button again, and Resume Automatic were each confirmed and reached the keyboard.
 >
-> **Not yet verified on the keyboard:** Display Control's new "did it arrive" check and
-> the full Standby + Shut Down sequence; the 15-second rule for players that never report
-> their position moving (no such player is known); the new per-block timing lines; the
-> installer build itself on this release *(update before publishing)*.
+> **Not yet verified on the keyboard:** the full Standby + Shut Down sequence; the
+> 15-second rule for players that never report their position moving (no such player is
+> known); the installer build itself on this release *(update before publishing)*.
 >
 > #### Known problems
 >
