@@ -662,15 +662,18 @@ def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font,
     The album starts below the last artist line and gets only the lines that fit
     above the divider. It used to be clamped to y=110, which drew it over a
     two-line artist (issue #10). A field in Morse code gives up one of its lines
-    to the decoded text, drawn in `morse_font` (None: no decoded lines).
+    to the decoded text, drawn in `morse_font` (None: no decoded lines). With room
+    for one line only (the album, under a long title and artist), the decoded text
+    replaces the Morse: a truncated Morse line says almost nothing.
     """
     items = []
 
     def field(y, text, font, fill, step, max_lines):
-        decoded = decode_morse(text) if morse_font is not None and max_lines > 1 else None
-        for line in fit_text(draw, text, font, max_text_w, max_lines - 1 if decoded else max_lines):
-            items.append((y, line, font, fill))
-            y += step
+        decoded = decode_morse(text) if morse_font is not None else None
+        if not decoded or max_lines > 1:
+            for line in fit_text(draw, text, font, max_text_w, max_lines - 1 if decoded else max_lines):
+                items.append((y, line, font, fill))
+                y += step
         if decoded:
             for line in fit_text(draw, decoded, morse_font, max_text_w, 1):
                 items.append((y, line, morse_font, MORSE_FILL))

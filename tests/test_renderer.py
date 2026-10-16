@@ -640,6 +640,34 @@ class MorseSubtitleTests(unittest.TestCase):
         off = self.r.layout_text_block(draw, MORSE_TITLE, "Erased Tapes", "", *fonts, 174)
         self.assertNotIn("LETITGO", [line for _, line, _, _ in off])
 
+    @unittest.skipUnless((FONTS / "segoeuib.ttf").exists(), "needs Windows fonts")
+    def test_one_line_album_shows_only_the_decoded_text(self):
+        from PIL import Image, ImageDraw
+
+        draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        fonts = [self.r.find_text_font(n, b) for n, b in ((18, True), (18, False), (16, False))]
+        morse = self.r.find_text_font(14, True)
+        artist = "･ ･－･ ･－ ･･･ ･ －･･"
+        items = self.r.layout_text_block(draw, MORSE_TITLE, artist, MORSE_TITLE, *fonts, 174, morse)
+        album = [(y, line, font) for y, line, font, _ in items if y > 110]
+        self.assertEqual([(line, font) for _, line, font in album], [("LETITGO", morse)])
+        self.assertLess(album[0][0] + self.r.MORSE_STEP, self.r.DIVIDER_Y + 1)
+        # Turned off, the album stays in Morse and nothing is decoded.
+        items = self.r.layout_text_block(draw, MORSE_TITLE, artist, MORSE_TITLE, *fonts, 174)
+        album = [line for _, line, font, _ in items if font is fonts[2]]
+        self.assertTrue(album and album[0].startswith(MORSE_TITLE[:4]), album)
+        self.assertNotIn("LETITGO", [line for _, line, _, _ in items])
+
+    @unittest.skipUnless((FONTS / "segoeuib.ttf").exists(), "needs Windows fonts")
+    def test_one_line_album_that_does_not_decode_keeps_its_text(self):
+        from PIL import Image, ImageDraw
+
+        draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        fonts = [self.r.find_text_font(n, b) for n, b in ((18, True), (18, False), (16, False))]
+        morse = self.r.find_text_font(14, True)
+        items = self.r.layout_text_block(draw, MORSE_TITLE, "･ ･－･ ･－ ･･･ ･ －･･", "Seychelles", *fonts, 174, morse)
+        self.assertEqual(items[-1][1], "Seychelles")
+
     def test_setting_defaults_on_and_can_be_turned_off(self):
         self.assertTrue(self.r.parse_args([]).morse_subtitle)
         self.assertFalse(self.r.parse_args(["--no-morse-subtitle"]).morse_subtitle)

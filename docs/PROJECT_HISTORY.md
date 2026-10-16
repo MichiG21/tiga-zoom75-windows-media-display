@@ -833,6 +833,8 @@ no word separator. Segoe UI has neither character; Yu Gothic has both.
 - **Morse subtitle:** a field that is entirely Morse and decodes completely gets the
   decoded text as a smaller line (`--no-morse-subtitle` turns it off). With single spaces
   only, the band's title decodes as `LETITGO`; word gaps can't be recovered.
+  A field with room for one line only (in practice the album, under a Morse title and
+  artist) shows just the decoded text: a truncated Morse line said almost nothing.
 
 ---
 
