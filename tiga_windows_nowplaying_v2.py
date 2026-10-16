@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -605,34 +606,87 @@ def read_control_command(last_text: str | None):
 
 DIVIDER_Y = 135
 TITLE_STEP, ARTIST_STEP, ALBUM_STEP = 20, 21, 17
+MORSE_STEP = 17
+MORSE_FILL = (120, 190, 255)
+
+# A field written entirely in Morse code also gets its decoded text as a smaller line
+# below it. A band writes its artist, album and track titles that way, with U+FF65 as
+# the dot and U+FF0D as the dash (renderer.log, 2026-10-15). Off: --no-morse-subtitle.
+MORSE_SUBTITLE = True
+MORSE_DOTS = set("\uff65.\u00b7\u2022\u2219")      # ･ . · • ∙
+MORSE_DASHES = set("\uff0d-_\u2212\u2013\u2014")  # － - _ − – —
+MORSE_CODE = {
+    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G",
+    "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N",
+    "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U",
+    "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z",
+    "-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
+    ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
+    ".-.-.-": ".", "--..--": ",", "..--..": "?", ".----.": "'", "-.-.--": "!",
+    "-..-.": "/", "-.--.": "(", "-.--.-": ")", ".-...": "&", "---...": ":",
+    "-.-.-.": ";", "-...-": "=", ".-.-.": "+", "-....-": "-", ".-..-.": '"', ".--.-.": "@",
+}
 
 
-def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w):
+def decode_morse(text: str) -> str | None:
+    """The text of a field written entirely in International Morse, else None.
+
+    Letters are separated by one space, words by "/" or a wider gap. Nothing is
+    returned unless every letter decodes and there are at least two of them, so
+    "..." or "-" alone, or a title that merely contains dashes, never counts.
+    """
+    text = (text or "").strip()
+    if not text or any(not (ch in MORSE_DOTS or ch in MORSE_DASHES or ch.isspace() or ch == "/") for ch in text):
+        return None
+    words = []
+    for word in re.split(r"\s*/\s*|\s{2,}", text):
+        letters = word.split()
+        if not letters:
+            return None
+        decoded = ""
+        for letter in letters:
+            key = "".join("." if ch in MORSE_DOTS else "-" for ch in letter)
+            if key not in MORSE_CODE:
+                return None
+            decoded += MORSE_CODE[key]
+        words.append((decoded, len(letters)))
+    if sum(n for _, n in words) < 2:
+        return None
+    return " ".join(w for w, _ in words)
+
+
+def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w,
+                      morse_font=None):
     """Return (y, text, font, fill) for the title/artist/album lines.
 
     The album starts below the last artist line and gets only the lines that fit
     above the divider. It used to be clamped to y=110, which drew it over a
-    two-line artist (issue #10).
+    two-line artist (issue #10). A field in Morse code gives up one of its lines
+    to the decoded text, drawn in `morse_font` (None: no decoded lines).
     """
     items = []
 
-    y = 9
-    for line in fit_text(draw, title, title_font, max_text_w, 3):
-        items.append((y, line, title_font, (242, 242, 245)))
-        y += TITLE_STEP
+    def field(y, text, font, fill, step, max_lines):
+        decoded = decode_morse(text) if morse_font is not None and max_lines > 1 else None
+        for line in fit_text(draw, text, font, max_text_w, max_lines - 1 if decoded else max_lines):
+            items.append((y, line, font, fill))
+            y += step
+        if decoded:
+            for line in fit_text(draw, decoded, morse_font, max_text_w, 1):
+                items.append((y, line, morse_font, MORSE_FILL))
+            y += MORSE_STEP
+        return y
+
+    y = field(9, title, title_font, (242, 242, 245), TITLE_STEP, 3)
 
     y = max(y + 4, 72)
-    for line in fit_text(draw, secondary, artist_font, max_text_w, 2):
-        items.append((y, line, artist_font, (224, 224, 230)))
-        y += ARTIST_STEP
+    y = field(y, secondary, artist_font, (224, 224, 230), ARTIST_STEP, 2)
 
     if tertiary:
         album_y = y + 1
         room = min(2, (DIVIDER_Y - album_y) // ALBUM_STEP)
         if room > 0:
-            for line in fit_text(draw, tertiary, album_font, max_text_w, room):
-                items.append((album_y, line, album_font, (180, 180, 188)))
-                album_y += ALBUM_STEP
+            field(album_y, tertiary, album_font, (180, 180, 188), ALBUM_STEP, room)
 
     return items
 
@@ -648,6 +702,7 @@ def render_media(media: dict) -> Image.Image:
     title_font = find_text_font(18, bold=True)
     artist_font = find_text_font(18, bold=False)
     album_font = find_text_font(16, bold=False)
+    morse_font = find_text_font(14, bold=True) if MORSE_SUBTITLE else None
     label_font = find_font(12, bold=True)
     duration_font = find_font(13, bold=True)
 
@@ -668,7 +723,7 @@ def render_media(media: dict) -> Image.Image:
     tertiary = media.get("album") or source_name(media.get("source", ""))
 
     for y, line, font, fill in layout_text_block(
-        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w
+        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w, morse_font
     ):
         draw_text(draw, (text_x, y), line, font, fill)
 
@@ -994,6 +1049,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--dlx-layout", choices=tiga_dlx.LAYOUTS, default="index",
         help="frame-index interpretation for --dlx-frames 1 (see docs/DLX_FORMAT.md)",
     )
+    parser.add_argument(
+        "--no-morse-subtitle", dest="morse_subtitle", action="store_false",
+        help="do not add a decoded line under titles written entirely in Morse code",
+    )
     return parser.parse_args(argv)
 
 
@@ -1001,4 +1060,5 @@ if __name__ == "__main__":
     _args = parse_args(sys.argv[1:])
     DLX_FRAMES = _args.dlx_frames
     DLX_LAYOUT = _args.dlx_layout
+    MORSE_SUBTITLE = _args.morse_subtitle
     main()

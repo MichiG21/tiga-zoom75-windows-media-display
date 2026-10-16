@@ -599,5 +599,51 @@ class FontFallbackCoverageTests(unittest.TestCase):
             self.assertEqual(self.r.render_media(dict(media)).tobytes(), old.render_media(dict(media)).tobytes(), media["title"])
 
 
+
+class MorseSubtitleTests(unittest.TestCase):
+    """TASKS_D Task 5: a field written entirely in Morse gets its decoded text below."""
+
+    def setUp(self):
+        self.r = load_renderer()
+        self.r.log = lambda message: None
+
+    def test_decodes_the_example_with_word_gaps(self):
+        self.assertEqual(self.r.decode_morse("·−·· · −   ·· −   −−· −−−"), "LET IT GO")
+        self.assertEqual(self.r.decode_morse(".-.. . - / .. - / --. ---"), "LET IT GO")
+
+    def test_decodes_the_logged_fields(self):
+        self.assertEqual(self.r.decode_morse(MORSE_TITLE), "LETITGO")  # single spaces only
+        self.assertEqual(self.r.decode_morse("･ ･－･ ･－ ･･･ ･ －･･"), "ERASED")
+
+    def test_rejects_partial_morse(self):
+        self.assertIsNone(self.r.decode_morse(".-.. . ........"))  # no such letter
+        self.assertIsNone(self.r.decode_morse(".-.. . - x"))
+        self.assertIsNone(self.r.decode_morse(".-.. . - / / .."))  # empty word
+
+    def test_ignores_ordinary_titles(self):
+        for title in ("...", "-", "—", "Blue Lagoon", "Hello - World", "Track 1", ""):
+            self.assertIsNone(self.r.decode_morse(title), title)
+
+    @unittest.skipUnless((FONTS / "segoeuib.ttf").exists(), "needs Windows fonts")
+    def test_subtitle_line_is_drawn_only_when_enabled(self):
+        from PIL import Image, ImageDraw
+
+        draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        fonts = [self.r.find_text_font(n, b) for n, b in ((18, True), (18, False), (16, False))]
+        morse = self.r.find_text_font(14, True)
+        on = self.r.layout_text_block(draw, MORSE_TITLE, "･ ･－･ ･－ ･･･ ･ －･･", "", *fonts, 174, morse)
+        texts = [line for _, line, _, _ in on]
+        self.assertIn("LETITGO", texts)
+        self.assertIn("ERASED", texts)
+        ys = [y for y, *_ in on]
+        self.assertEqual(ys, sorted(set(ys)))  # no two lines on top of each other
+        off = self.r.layout_text_block(draw, MORSE_TITLE, "Erased Tapes", "", *fonts, 174)
+        self.assertNotIn("LETITGO", [line for _, line, _, _ in off])
+
+    def test_setting_defaults_on_and_can_be_turned_off(self):
+        self.assertTrue(self.r.parse_args([]).morse_subtitle)
+        self.assertFalse(self.r.parse_args(["--no-morse-subtitle"]).morse_subtitle)
+
+
 if __name__ == "__main__":
     unittest.main()
