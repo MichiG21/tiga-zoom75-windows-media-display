@@ -930,11 +930,10 @@ fn write_cached_device(stream_path: &Path, address: &str, name: &str) {
     );
 }
 
-/// How long to wait for one block's PROGRESS before abandoning the transfer. Abandoning
-/// it is what leaves the keyboard holding a partial session that needs the battery
-/// disconnected, so a block that is merely slow should be waited for. Was 2500 until
-/// 2026-10-15; the longer wait is an unverified mitigation (PROJECT_HISTORY §7.1).
-const BLOCK_TIMEOUT_MS: u64 = 10_000;
+/// How long to wait for one block's PROGRESS before abandoning the transfer. Healthy
+/// blocks peak around 1 s. 10000 was tried 2026-10-15/16: it rescued no upload, and its
+/// one slowing run stalled anyway, only later (PROJECT_HISTORY §7.1, third part).
+const BLOCK_TIMEOUT_MS: u64 = 2_500;
 
 struct Opts {
     stream_path: PathBuf,
@@ -1329,7 +1328,7 @@ mod tests {
         assert_eq!(f.kind, Failure::Fatal);
         let ok: Vec<String> = ["--stream", "x.bin", "--confirm-flow-watch"].iter().map(|s| s.to_string()).collect();
         let o = parse_opts(&ok).unwrap();
-        assert!(o.live && !o.once && o.intra_block_ms == 2 && o.block_timeout_ms == 10_000);
+        assert!(o.live && !o.once && o.intra_block_ms == 2 && o.block_timeout_ms == 2_500);
     }
 
     #[test]

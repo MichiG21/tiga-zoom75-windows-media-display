@@ -668,7 +668,8 @@ signature, blocks were taking ~2 s each; with 10 s the 22:44 transfer might have
 crawled to completion, or stalled anyway at block 11, only later.
 *Update 2026-10-16:* answered by the third part below. A slowing run under 10000 ms
 stalled anyway, at block 41 after 78 s, and none of 27 completed uploads at 10000 ms
-needed more than 2.5 s for any block. The longer wait has rescued nothing so far.
+needed more than 2.5 s for any block. The longer wait has rescued nothing so far. The
+default went back to 2500 ms the same day.
 
 **Upload reliability on `fix/device-selection`:** one failure (23:00, the sudden
 signature, before a 30 s battery reset), then **five completed uploads in a row**,
@@ -882,6 +883,11 @@ granularity: the 20→25 and 30→35 spans averaged 2.28 and 2.45 s per block, s
 by block 25–35, possibly earlier. **The longer wait has not rescued a single upload, and
 in its one test it only delayed the halt.** One slowing run is n = 1, but it answers
 the open question above: with 10 s, the transfer stalled anyway, only later.
+
+**Decision, 2026-10-16: the default is back to 2500 ms.** `--block-timeout-ms` and the
+`Block timeout   :` line in `ble.log` stay, so a longer wait can still be tried per run.
+What 10000 ms was meant to reveal (does a slowing run recover?) is better answered by
+per-block latency logging than by waiting longer.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 

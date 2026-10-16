@@ -35,15 +35,19 @@ The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
 
 After each 4096-byte block the uploader waits for the keyboard's PROGRESS. If it does
 not come within the **block timeout**, the transfer is abandoned with code 20, and an
-abandoned transfer is what leaves the keyboard needing its battery disconnected. A
-block that is merely slow should therefore be waited for.
+abandoned transfer is what leaves the keyboard needing its battery disconnected.
 
-The default is **10000 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
-value in effect as `Block timeout`). It was 2500 ms until 2026-10-15. All five
-interrupted transfers that day ran with 2500 ms; the uploads after the change all
-completed, but none came near either limit and they followed a full battery reset, so
-**the longer wait is an unverified mitigation, not a fix** (PROJECT_HISTORY §7.1). Its
-cost is that a keyboard that is truly stuck is detected about 7.5 s later.
+The default is **2500 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
+value in effect as `Block timeout`). Healthy blocks peak at about 1 s.
+
+From 2026-10-15 to 2026-10-16 the default was 10000 ms, on the theory that a block that
+is merely slow, and then recovers, should be waited for. That case was never seen. In
+27 completed uploads at 10000 ms no block came near 2.5 s, so all of them would also have
+completed at 2500 ms. The one slowing transfer at 10000 ms did not recover: it crawled to
+block 40 at 1.2–2.5 s per block, stalled completely and ended with code 20 and a battery
+disconnect, like the 2500 ms failures, only about a minute later (PROJECT_HISTORY §7.1,
+third part). So the default went back to 2500 ms on 2026-10-16. Neither value avoids
+the battery disconnect; the timeout only decides when the failure is reported.
 
 ### The session marker
 
