@@ -65,6 +65,7 @@ While a new custom frame is being committed, the TIGA may briefly show its built
 - Uses Windows **Global System Media Transport Controls (GSMTC)** instead of a Spotify-specific API.
 - Works with Spotify and other applications that expose a Windows media session.
 - Displays artwork, title, artist / creator, album, and total duration when available.
+- Japanese, Chinese, Korean and symbol titles display, using fonts that ship with Windows (Yu Gothic, Microsoft YaHei / JhengHei, Malgun Gothic, Segoe UI Symbol). Titles written in Morse code also get a decoded line.
 - Large clock-and-date standby screen.
 - Ignores stale remembered media at login until playback is proven fresh.
 - Returns to standby after playback has been paused or stopped for **60 seconds**.

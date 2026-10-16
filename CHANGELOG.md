@@ -1,5 +1,15 @@
 # Bundle changelog
 
+## Unreleased
+
+- Japanese, Chinese, Korean and symbol characters in titles, artists and albums now
+  display instead of empty boxes. Each character is drawn with the first Windows font
+  that has it. Japanese and Chinese titles wrap between characters. Plain Latin titles
+  render exactly as before (#10).
+- A title, artist or album written entirely in Morse code gets its decoded text as a
+  smaller second line. Turn it off with `--no-morse-subtitle`.
+- The renderer logs which fallback fonts it found, and any character no font has.
+
 ## 2026-09-09 complete snapshot
 
 - Windows GSMTC generic media source
