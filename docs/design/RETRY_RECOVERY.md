@@ -35,15 +35,38 @@ The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
 
 After each 4096-byte block the uploader waits for the keyboard's PROGRESS. If it does
 not come within the **block timeout**, the transfer is abandoned with code 20, and an
-abandoned transfer is what leaves the keyboard needing its battery disconnected. A
-block that is merely slow should therefore be waited for.
+abandoned transfer is what leaves the keyboard needing its battery disconnected.
 
-The default is **10000 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
-value in effect as `Block timeout`). It was 2500 ms until 2026-10-15. All five
-interrupted transfers that day ran with 2500 ms; the uploads after the change all
-completed, but none came near either limit and they followed a full battery reset, so
-**the longer wait is an unverified mitigation, not a fix** (PROJECT_HISTORY §7.1). Its
-cost is that a keyboard that is truly stuck is detected about 7.5 s later.
+The default is **2500 ms** (`--block-timeout-ms` overrides it; `ble.log` prints the
+value in effect as `Block timeout`). Healthy blocks peak at about 1 s.
+
+From 2026-10-15 to 2026-10-16 the default was 10000 ms, on the theory that a block that
+is merely slow, and then recovers, should be waited for. That case was never seen. In
+27 completed uploads at 10000 ms no block came near 2.5 s, so all of them would also have
+completed at 2500 ms. The one slowing transfer at 10000 ms did not recover: it crawled to
+block 40 at 1.2–2.5 s per block, stalled completely and ended with code 20 and a battery
+disconnect, like the 2500 ms failures, only about a minute later (PROJECT_HISTORY §7.1,
+third part). So the default went back to 2500 ms on 2026-10-16. Neither value avoids
+the battery disconnect; the timeout only decides when the failure is reported.
+
+### Per-block timing (logging only)
+
+Each block's latency is the time from the previous PROGRESS (for block 1, the start of
+the bulk writes) to its own, so it includes that block's writes. Healthy blocks take
+about 0.15 s. Nothing below changes a write, a timeout or an exit code.
+
+- `SLOW block 7/53 took 1834 ms (elapsed=4.21s)` for any block over 1000 ms.
+- `WARNING first upload is slow (block 5 at 2.42 s; healthy 0.7–0.85 s)` when the first
+  upload on a connection reaches block 5 after more than 1.5 s. All three slowing
+  failures so far were at 2.35–2.97 s. It comes after CONTROL2, so it warns; it cannot
+  prevent anything.
+- After every `UPLOAD COMPLETE` and `UPLOAD FAILED`:
+  `TIMING frame=… blocks_acked=53 median=150ms p90=160ms max=420ms slowest=block 1 control1_ack=40ms control2_ack=55ms`
+  (p90 is nearest-rank; on a failure it covers the blocks that were ACKed). The
+  CONTROL ACK times run from the write to the second ACK of the pair; `-` means that
+  stage was not reached.
+- `<stream>.delivered` gets the same figures as `block_median_ms`, `block_p90_ms`,
+  `block_max_ms`, `slowest_block`, `control1_ack_ms` and `control2_ack_ms`.
 
 ### The session marker
 

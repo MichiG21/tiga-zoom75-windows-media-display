@@ -1025,6 +1025,94 @@ the album's decoded line could use the album grey instead.
 
 PR into `main`, not merged: see the link in the run summary.
 
+---
+
+# The 2026-10-16 18:48–18:55 restart, and the block timeout
+
+Branch `docs/restart-2026-10-16`, off `origin/main` (`e8f7211`, after #17). Docs only,
+pushed, no PR. Everything here is read from `tiga-fresh-test\logs\` and `git reflog`; the
+40 s battery disconnect is from you. Nothing was run against the keyboard.
+
+## What happened (now in PROJECT_HISTORY §7.1, "Third part")
+
+- **18:48:32** you pulled #17 into `tiga-fresh-test`. The 17:52 stack had just completed 22
+  uploads in a row, the last at 18:46:00. The restart at 18:48:44 did not reset the keyboard.
+- **18:49:00 code 10.** A 15 s scan saw nothing. The 8 s retry found `Zoom75 Tiga` 3 s into
+  its scan, so the keyboard was invisible for about 28 s. That's the fourth case of this
+  (19, 38, 67 s last night).
+- **18:49:14–18:50:32**, frame `0714ef6a` (the Morse band, first frame with the subtitle):
+  **the slowing signature**. Block 5 at 2.42 s (a healthy first upload is 0.71–0.85 s), then
+  ~1.2–2.5 s per block for 35 blocks, never recovering, then **no PROGRESS for block 41
+  within 10 s**. Code 20 after 77.83 s, halt.
+- **40 s battery disconnect, START_STACK 18:54:07.** The **same frame `0714ef6a`
+  completed in 9.06 s** at a healthy pace (block 5 at 0.85 s), and Takanaka after it in
+  9.52 s. Identical bytes, so the failure was not caused by the image. A 40 s disconnect
+  is enough.
+
+Small extra: Takanaka's frame `4bf3daed` is byte-identical to last night's, so the CJK
+wrap change didn't touch it, as intended. The renderer logged
+`FONT fallbacks: YuGothB.ttc, …; not installed: meiryo.ttc` at both starts. Whether the Morse
+subtitle *looked* right on the keyboard isn't in the logs. Tell me if it didn't.
+
+## Block timeout: the verdict
+
+- **27 completed uploads with 10000 ms** (5 last night in `tiga-dev`, 22 today live). After
+  block 5, the slowest five-block span averaged 0.21 s per block, so **no block in any of
+  them took more than ~1.05 s**. Every one would also have completed with 2500 ms.
+- **The one slowing run under 10000 ms didn't recover.** It crawled to block 40, stalled
+  completely, and ended exactly like the 2500 ms failures (code 20, battery). It just took
+  78 s instead of failing at the first block over 2.5 s, probably somewhere around block 25–35,
+  possibly earlier (five-block granularity can't place it).
+- So the open question in §7.1 ("with 10 s, would the 22:44 transfer have crawled to
+  completion?") has its first answer: **no, it stalled anyway, only later.** That's one
+  run, n = 1.
+
+## Proposal: go back to 2500 ms
+
+**Recommend: revert the uploader default to 2500 ms**, keep `--block-timeout-ms` and the
+`Block timeout   :` header line. Confidence medium. Reasons:
+
+1. 10000 ms has **rescued nothing** in 27 uploads, and the idea behind it (a block that's
+   merely late and then recovers) has not been seen once. Healthy blocks peak around
+   1 s, so 2500 ms still leaves well over 2× headroom.
+2. In its only test it **delayed the halt by about a minute** with the same outcome. The
+   keyboard spends that minute with a media session half-open. Whether that's harmful is
+   unknown, but it's no help either.
+3. Neither value avoids the battery disconnect; the timeout only decides *when* you're told.
+
+**What argues for keeping 10000 ms:** it costs nothing on healthy uploads, and the 78 s
+crawl taught us something (a slowing run doesn't recover). But per-block logging would
+capture that, without the wait. That's the better tool: a `SLOW` line for any block over
+~1 s, and on a first-on-connection upload a warning if block 5 is past ~1.5 s (healthy
+first uploads 0.71–0.85 s, all three slowing runs 2.35–2.97 s). Both are still after
+CONTROL2, so they warn rather than prevent.
+
+If you agree, it's a one-line default change plus the RETRY_RECOVERY "Block timeout"
+section and the test that asserts 10000. Say the word and I'll do it on a branch. I
+haven't changed any code here.
+
+## The more useful finding: failures follow restarts
+
+Counting every uploader start on 2026-10-15/16 by what came before it:
+
+| Before the first upload | Failed | Completed |
+|---|---:|---:|
+| Restart without a reset, last upload had completed | **3** (21:05, 22:59, 18:49) | 6 |
+| Battery disconnect ≥ 30 s | 0 | 4 |
+| 10–15 s disconnect, or no reset after a halt | 2 | 0 |
+| Later upload on an open connection | 1 (21:39) | 62 |
+
+**The risky moment looks like the first upload after a stack restart that didn't reset
+the keyboard.** `STOP_STACK.ps1` ends the uploader with `Stop-Process -Force`, so every
+restart drops a live BLE connection without a clean disconnect. That might also be why the
+keyboard is invisible for 20–70 s afterwards (a keyboard that thinks it's still connected
+doesn't advertise). **Hypothesis only.** Testing it would mean making the uploader
+disconnect cleanly on a stop request, then watching whether first uploads after restarts
+stop failing. That changes the stop path, so it needs your go-ahead and hardware time. I
+haven't touched it.
+
+Practical advice until then: after any `STOP_STACK`/`START_STACK` (a pull, a branch
+switch), expect the first upload to be the risky one.
 
 ---
 
