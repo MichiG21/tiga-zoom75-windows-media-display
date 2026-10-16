@@ -1484,3 +1484,67 @@ Nothing was posted.
 under "not yet verified on the keyboard", and its Part 1 blocker 4 still asks for the
 GUI session. Both are now verified except for Standby + Shut Down. It's a small edit if
 you want it.
+
+---
+
+# Later on 2026-10-16: issues closed, the 20:58 failure, and two recoveries
+
+Same branch, `docs/session-2026-10-16-evening`, PR #23 (open, **not merged**). Docs only.
+Read from `tiga-fresh-test\logs\` plus your account; nothing was run against the keyboard
+and nothing was posted on issues.
+
+## Most important: it was the disconnect length, not STOP_STACK
+
+The first recovery at 21:09 was a **25 s** battery disconnect **without key presses**,
+and it failed. The second at 21:14 was **about a minute with key presses**, and it worked.
+Both have been in the record since 2026-10-15: 10–15 s failed, and every disconnect of
+30 s or more has worked (30, 30, 40 s and now about a minute). **25 s without key
+presses is the second too-short disconnect.** That explains 21:09 on its own.
+
+STOP_STACK before the disconnect has no mechanism here. The uploader had exited when it
+halted at 20:58:42, so no process held a Bluetooth link to the keyboard. The supervisor
+and renderer never talk to it. **The recovery advice stays as it is:** at least 30 s,
+pressing a few keys, then START_STACK. Running STOP_STACK first is harmless and gives a
+fresh supervisor, but nothing shows it's needed.
+
+**Your call:** 25 s failing and 30 s working leaves very little margin. If you want
+the instructions to say "about a minute, pressing a few keys" instead of "at least 30 s",
+that's a text change in the halt instruction (`tiga_supervisor_common.ps1`, the
+uploader's exit message), README, BUILD_AND_RECOVERY, RETRY_RECOVERY and
+RELEASE_CHECKLIST, plus the test that asserts it. I haven't changed it.
+
+## Commits on this branch since the last notes section
+
+| Commit | What |
+|---|---|
+| `08af884` | `docs/TRIAGE_2026-10-16.md` records #4, #5, #6, #8, #9, #10, #14 and #15 as closed on 2026-10-16 (about 21:00, confirmed on GitHub: 19:00Z). #7 is still open, pending one Standby + Shut Down on hardware. The draft gets a Status column and per-issue status lines. `docs/RELEASE_NOTES_v0.3.0-beta.1.md` marks the Display Control check verified on 2026-10-16 except Standby + Shut Down. Three other lines there were also out of date, and I updated them: the issues blocker is done, the timing lines are live on hardware since 20:51, and the timing lines moved from "not verified" to verified. |
+| `4c6c8b7` | PROJECT_HISTORY §7.1, **fifth part**: the 20:58 failure and both recoveries. |
+| (with these notes) | The fifth part corrected with your durations (25 s / no key presses; about a minute / key presses; my first version said "not recorded" and "40–60 s"). The battery list in §7.1's second part now includes the 25 s failure. |
+
+## The fifth part, in short
+
+- **20:58:37, Spotify auto-advance, on the open 20:52 connection:** code 20 after 4.86 s.
+  Block 5 came at a normal 1.58 s, block 3 had taken 802 ms, then there was no PROGRESS
+  for block 6. It's the sudden signature, 2.5 minutes after a healthy upload. This is the
+  **second failure ever of a later upload on an open connection** (the first was 21:39
+  on 10-15). The 802 ms block is within the 0.42–1.08 s slow first block every later
+  upload has (fourth part), so it's no warning sign.
+- **21:09, after 25 s without key presses, START_STACK with the supervisor still
+  running:** code 20 after 3.74 s at block 5. CONTROL1/CONTROL2 ACKs were 20 / 77 ms,
+  like any first upload on a new connection (18 / 76 at 20:52, 32 / 73 at 21:14). No log
+  shows what those ACKs look like on a keyboard that was *not* reset, so they can't tell
+  "reset" from "not reset". RSSI was −66, against −58/−59 on the healthy starts.
+- **21:14, after STOP_STACK, about a minute with key presses, START_STACK:** RSSI −58,
+  three uploads in 8.95 / 9.93 / 10.06 s, medians 156–157 ms.
+- **2.4 GHz interference (the iPad streaming nearby):** recorded as a hypothesis only,
+  with a simple A/B test if you want one. Nothing in the logs measures it, and the short
+  disconnect already explains 21:09 without it.
+
+## Updated counts
+
+- Later uploads on an open connection: **2 failed** (21:39 on 10-15, 20:58 on 10-16).
+  Everything else completed.
+- Battery disconnects as recovery, where the length is known: ≥ 30 s **4 of 4 worked**
+  (22:49 and 23:06 on 10-15; 18:54 and 21:14 on 10-16). Shorter: **0 of 2** (10–15 s at
+  22:44 on 10-15; 25 s without key presses at 21:09 on 10-16). 21:15 on 10-15 also
+  worked, but its length isn't known.
