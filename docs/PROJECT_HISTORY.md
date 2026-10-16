@@ -785,7 +785,9 @@ failure gives the block whose PROGRESS never came and the time from `UPLOAD STAR
    rather than a clean reset). Nobody has ever uploaded into a keyboard left *un*-reset
    after a failure and seen the result: the 21:08–21:09 attempts went to the wrong
    device. That missing comparison is what would separate the two.
-4. **Could the uploader spot trouble earlier?** *Proposal only, not implemented.* The
+4. **Could the uploader spot trouble earlier?** *Proposal at the time. The logging part
+   (per-block latency, `SLOW` lines, the block-5 warning, CONTROL ACK times) was added
+   on `feature/block-diagnostics`, 2026-10-16; see RETRY_RECOVERY.md.* The
    catch is that anything after CONTROL2 cannot avoid the problem: abandoning a transfer
    is what leaves the partial session. So:
    - **Log more, decide later.** Log every block's ACK latency (or per-upload min/median/
