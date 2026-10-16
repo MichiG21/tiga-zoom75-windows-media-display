@@ -776,3 +776,233 @@ first; `Block timeout   : 10000 ms` in the header; and a restart logging the
 Everything else on the branch has either run on hardware or only changes text. After
 merging, pull into `tiga-fresh-test` **and rebuild its uploader**, or the live install
 keeps 2500 ms.
+
+---
+
+# Font fallback run (TASKS_D.md), 2026-10-16, about 18:20–18:45
+
+## Step 0
+
+- `origin/main` (`5543de1`) contains all of `fix/device-selection` (merge PR #16).
+- **`tiga-fresh-test` is live, `tiga-dev` is not:** the task action runs
+  `tiga-fresh-test\tiga_startup_supervisor.ps1`. The running `tiga_stream_watch_flow.exe`,
+  the renderer's Python and the supervisor's PowerShell are all from `tiga-fresh-test`.
+  Newest supervisor lines: `tiga-fresh-test` 2026-10-16 17:52:11, `tiga-dev` 2026-10-15 23:09:49.
+- `tiga-fresh-test` is on `main` at `5543de1`, level with `origin/main`, with nothing to
+  report in `git status`. The five untracked files mentioned last run are gone.
+- `tiga-dev` was clean. Branch `feature/font-fallback` created from `origin/main`.
+
+## Commits on `feature/font-fallback` (pushed, no PR)
+
+| Commit | What |
+|---|---|
+| `ff2f39d` | Task 3: CJK line breaks, font/missing-glyph log lines, JhengHei |
+| `957590a` | Task 4: tests, preview script, 9 preview PNGs |
+| `7274fd5` | Task 5: Morse subtitle (+ 2 previews, 6 tests) |
+| `53af926` | Task 6: README, CHANGELOG, PROJECT_HISTORY §7.2 |
+| (this) | these notes |
+
+Python tests: **66, all passing** (47 before, plus 19 new). No PowerShell or Rust
+code changed, so I didn't run those suites. Nothing was sent to the keyboard, and
+nothing in any `extracted\` folder was written. `tiga-dev\extracted\session_01_bulk_stream.bin`
+still has its 2026-10-15 23:13 timestamp.
+
+## Task 1: the exact characters (from `tiga-fresh-test\logs\renderer.log`)
+
+Confirmed. The renderer already logs `Title` / `Artist` / `Album` for every new media item,
+so no new log line was needed for this.
+
+| Field | Text | Decodes |
+|---|---|---|
+| Title | `･－･･ ･ － ･･ － －－･ －－－` | LETITGO |
+| Artist | `･ ･－･ ･－ ･･･ ･ －･･` | ERASED |
+| Album | same as title | LETITGO |
+
+- U+FF65 HALFWIDTH KATAKANA MIDDLE DOT (the dot)
+- U+FF0D FULLWIDTH HYPHEN-MINUS (the dash)
+- U+0020 SPACE, **always single**. There is no wider gap and no `/`, so the word breaks
+  in "LET IT GO" can't be recovered from the data.
+
+Takanaka `トーキョーレギー`: U+30C8 KATAKANA LETTER TO, U+30FC KATAKANA-HIRAGANA PROLONGED
+SOUND MARK, U+30AD KATAKANA LETTER KI, U+30E7 KATAKANA LETTER SMALL YO, U+30EC KATAKANA
+LETTER RE, U+30AE KATAKANA LETTER GI.
+
+The only other non-ASCII code points in all the live logs are U+00E4 ä, U+00FC ü
+(`Alte Sünder`) and U+00D2 Ò (`SALÒ`). Segoe UI has all three.
+
+What each font covers: Segoe UI has none of the Morse or katakana characters above.
+Yu Gothic has all of them. Of the TASKS_D test set, Segoe UI already has U+00B7, U+2022,
+U+2219, U+2212, U+2013, U+2014, U+25AC and U+2E3A. The preview `morse-like-symbols.png`
+shows them drawn as real glyphs, not boxes.
+
+## Task 2: how text is drawn (all in `tiga_windows_nowplaying_v2.py`)
+
+- **Fonts:** `find_font()` loads `segoeui(b).ttf` (Arial as backup) from `%WINDIR%\Fonts`.
+  `find_text_font()` wraps it in a `FontChain` with the fallbacks. It's cached per
+  (size, bold). Only metadata text (title, artist, album) and the no-artwork `♪` use the
+  chain. The clock, labels, duration and source name use the plain font (always ASCII).
+- **Drawn:** `draw_text()`, run by run, with every run on the primary font's baseline.
+  A run that is all primary font is drawn exactly as `draw.text()` did before.
+- **Measured:** `text_width()`, with the same runs.
+- **Wrapped and truncated:** `fit_text()`, which measures through `text_width()`. The
+  ellipsis is added there too. `layout_text_block()` places the lines.
+- **The Unicode crash fix** touched only `configure_output()` (stdout/stderr to UTF-8 with
+  `errors="replace"`) and the snapshot helper's `encoding="utf-8", errors="replace"`. It
+  never touched drawing. That's why it stopped the crash but left boxes.
+
+Measuring, wrapping and drawing already went through the same chain.
+
+## Task 3: what 7c93850 already did, and what I changed
+
+**Already right, not rebuilt:**
+
+- Primary font unchanged. Ordered fallbacks from `%WINDIR%\Fonts`, missing ones skipped
+  without crashing.
+- `.ttc` index: Pillow's default index 0 is the right face in every collection used
+  (Yu Gothic, not Yu Gothic UI; YaHei, not YaHei UI; Meiryo, not Meiryo Italic). Now
+  noted in a comment.
+- Per-character choice, runs, shared baseline, glyph cache (built once per font and
+  character, not per frame).
+- The Morse code points. U+FF65 and U+FF0D resolve to Yu Gothic, which is why the band
+  displayed on hardware at 23:52.
+- Emoji don't crash. They come out monochrome from Segoe UI Symbol where it has them.
+
+**Changed (`ff2f39d`):**
+
+1. **CJK wrapping.** Before, a line broke only at spaces, and a run was broken between
+   characters only when the *whole* run was wider than the box. So `ABC ラブ・ストーリーは…`
+   put `ABC` alone on line 1 and wasted it. Now a line can break between any two kana or
+   Han characters. A minimal kinsoku rule applies: no line starts with `ー ・ 、 。` or a
+   small kana. Hangul still breaks at spaces, since Korean uses them. U+FF65 is
+   deliberately not a break-anywhere character, so a Morse letter is never split. Latin
+   words wrap exactly as before.
+2. **Log lines.** At the first render:
+   `FONT fallbacks: YuGothB.ttc, msyhbd.ttc, msjhbd.ttc, malgunbd.ttf, seguisym.ttf; not installed: meiryo.ttc`.
+   (Meiryo isn't installed on this PC. That's normal on Windows 11, and Yu Gothic covers
+   it.) A character no font has is logged once:
+   `FONT no font has U+13000 EGYPTIAN HIEROGLYPH A001; drawn as a box`.
+3. **Microsoft JhengHei** added after YaHei for Traditional Chinese.
+
+**Not done, on purpose:**
+
+- **No fontTools.** TASKS_D suggests it as the reliable glyph check. The existing check
+  draws the character and compares it with the font's own missing-glyph box. It's
+  indirect, but it's correct for every character tested and on hardware. It also needs
+  nothing new, so **`requirements.txt` (Pillow only) and the installer build are
+  unchanged**. The installer build is `.github/workflows/installer.yml`:
+  `pip install -r requirements.txt pyinstaller`, then PyInstaller. `BUILD_AND_INSTALL.ps1`
+  also installs from `requirements.txt`. The fonts come from the user's own
+  `%WINDIR%\Fonts` at runtime, so nothing has to be bundled. If you want fontTools
+  anyway, it goes in `requirements.txt` and both of those pick it up.
+- **Fallback order kept as 7c93850 had it** (Japanese → Chinese → Korean → symbols), not
+  TASKS_D's symbols-first. Segoe UI already has the common symbols. The one visible
+  difference is that `♪` comes from Yu Gothic, not Segoe UI Symbol.
+- **Han unification:** Chinese titles use Yu Gothic's (Japanese) glyph shapes for shared
+  characters. They're readable (see `chinese.png`), but not the native Chinese forms.
+  Fixing that would need a per-string language guess, so I left it.
+
+## Task 4: tests and previews
+
+New tests in `tests\test_renderer.py` (`FontFallbackCoverageTests`, 13 tests), covering
+every bullet in Task 4: the logged Morse code points and the 8 Morse-like symbols;
+`渚・モデラート`, `月亮代表我的心`, `밤양갱`; `高中正義 — Blue Lagoon` (both fonts used); a
+long Japanese title with no spaces wraps inside 174 px, loses nothing, and no line starts
+with `ー`/`・`; CJK fills the line after a Latin word; Morse letters are never split; a
+non-existent fallback font is skipped with one log line; a missing code point is logged
+once and still drawn; emoji don't crash.
+
+**Latin pixel identity:** full 320×172 frames of four Latin titles, compared with the
+renderer using the plain font and a verbatim copy of the pre-fallback `fit_text`. I also
+checked once by hand against `128745d` (old `main`) itself: identical, once the
+no-artwork tile is the same in both. 7c93850 deliberately changed that tile from a box
+to `♪`.
+
+Tests needing a CJK/Korean font skip cleanly if it isn't installed (e.g. on a CI image).
+
+**Previews** in `previews\font-fallback\` (committed), written by
+`py tests\render_font_previews.py` (PNGs only): `morse-band-logged`, `takanaka-logged`,
+`morse-like-symbols`, `japanese`, `chinese`, `korean`, `mixed-latin-japanese`,
+`long-japanese-no-spaces`, `latin-only`, plus `morse-subtitle-logged` and
+`morse-subtitle-word-gaps`. I checked them by eye: no boxes, and CJK sits on the Latin
+baseline. The long Japanese title fills three lines and ends in `…`. Its third line sits
+close to the artist line, which is the existing #10 layout, not new.
+
+**Render time** (`render_media`, mean of 50, no artwork): old `main` 2.1 ms (Latin) /
+1.8 ms (Japanese, as boxes); new 1.4 ms / 1.5 ms. That's noise. The first frame with new
+characters pays a few ms once for the glyph cache. Upload time is ~8–10 s, so this is
+irrelevant either way.
+
+## Task 5: Morse subtitle (done)
+
+`decode_morse()` accepts dots `･ . · • ∙` and dashes `－ - _ − – —`, single spaces between
+letters, and `/` or 2+ spaces between words. It returns nothing unless **every** letter
+decodes and there are at least two letters. So `...`, `-`, `—`, `Hello - World` and
+`.-.. . ........` all show nothing. A Morse field gives up one of its lines to the
+decoded text: 14 px bold, light blue.
+
+- **Setting:** the renderer's settings are its command-line flags (`--dlx-frames`,
+  `--dlx-layout`), so it's `--no-morse-subtitle`. It's **on** by default, and no
+  supervisor change was needed.
+- **Layout, real band (`morse-subtitle-logged.png`):** title (2 Morse lines) + `LETITGO`,
+  artist + `ERASED`, then the album has room for **one** line only. That line is the
+  Morse album, truncated with `…`, and no decoded line. Nothing overlaps, and the title
+  and artist look fine. The album line is the weak spot: a truncated Morse line says
+  little. Two possible changes, your call: (a) when the album has room for one line and it
+  decodes, show the decoded text instead of the Morse; (b) leave it.
+- **`LETITGO` without spaces** is the data, not a bug (single spaces only, see Task 1).
+  `morse-subtitle-word-gaps.png` shows `LET IT GO` when the gaps exist.
+
+## Task 6: docs
+
+README feature bullet. CHANGELOG got a new `## Unreleased` section (there was none; the
+file only had the 2026-09-09 bundle). PROJECT_HISTORY has a new **§7.2** (crash fix vs.
+display fix, the Morse code points, the decisions above), and §7.1's "boxes" line now
+points to it.
+
+## Something odd in the tooling, for future runs
+
+Escape sequences typed into shell heredocs came out as literal characters in the files.
+So `MORSE_LOGGED` in the tests holds the literal `･－`, not escapes. That's harmless. The
+renderer's `MORSE_DOTS`/`MORSE_DASHES` were rewritten to real escapes, so the look-alike
+characters can be told apart.
+
+## What to do on hardware
+
+The change is renderer-only (Python). The uploader and supervisor on this branch are the
+same as `main`. `tiga-dev`'s uploader binary was rebuilt on 2026-10-15 from the code now
+on `main`, so it matches.
+
+1. **Stop the live stack:** `C:\Users\Regal\source\tiga-fresh-test\STOP_STACK.ps1`.
+2. **Point the task at `tiga-dev`:** run
+   `C:\Users\Regal\source\tiga-dev\install_tiga_startup.ps1`. It registers the task at
+   its own folder. Check:
+   `(Get-ScheduledTask "TIGA Windows Media Display").Actions.Arguments` shows `tiga-dev`.
+   `tiga-dev` must stay on `feature/font-fallback` meanwhile.
+3. **Start:** `C:\Users\Regal\source\tiga-dev\START_STACK.ps1`.
+4. **Check `tiga-dev\logs\renderer.log`:** after the first media frame, a line
+   `FONT fallbacks: YuGothB.ttc, msyhbd.ttc, msjhbd.ttc, malgunbd.ttf, seguisym.ttf; not installed: meiryo.ttc`.
+5. **Play the Morse band** (the `･－･･ ･ － ･･ …` track). On the keyboard: Morse title on
+   two lines, then `LETITGO` in blue. Morse artist, then `ERASED` in blue. One truncated
+   Morse album line. Compare with `previews\font-fallback\morse-subtitle-logged.png`.
+6. **Play Takanaka `トーキョーレギー`**: katakana, no boxes, on the same baseline as Latin.
+   If you have one, play a long Japanese title too. It should wrap within the right-hand
+   column and never run off the edge.
+7. **Play an ordinary Latin track.** It should look exactly as it does now.
+8. If any character shows as a box, `renderer.log` has a `FONT no font has U+…` line.
+   Send me that.
+9. **Switch back:** `tiga-dev\STOP_STACK.ps1`, then
+   `C:\Users\Regal\source\tiga-fresh-test\install_tiga_startup.ps1`, check the task
+   arguments show `tiga-fresh-test`, then `tiga-fresh-test\START_STACK.ps1`.
+
+If a transfer gets interrupted during the test, that's the known BLE issue (§7.1), not
+this branch. The same battery-disconnect procedure applies.
+
+## Ready to merge?
+
+**Yes, in my view, after one look on hardware (steps 5–7).** The basic fallback was
+already verified on hardware last night. This branch adds wrapping, logging, one font and
+the Morse line. Latin output is pixel-identical by test, all 66 Python tests pass, and
+nothing in the dependencies or the installer build changes. The one open choice is the
+Morse album line (Task 5, (a) or (b)), and it can follow after a merge. Not verified
+anywhere: how a CI `windows-latest` image's font set affects the CJK tests. They're
+written to skip, not fail, if the fonts are missing.
