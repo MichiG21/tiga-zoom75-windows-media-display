@@ -137,16 +137,135 @@ fn write_sidecar(stream_path: &Path, ext: &str, text: &str) {
     }
 }
 
-fn record_delivery(stream_path: &Path, frame_id: &str, crc: &str, elapsed_s: f64) {
+fn record_delivery(stream_path: &Path, frame_id: &str, crc: &str, elapsed_s: f64, timing: Option<&TimingSummary>) {
     write_sidecar(
         stream_path,
         ".delivered",
         &format!(
-            "delivered_at={}\nframe_id={frame_id}\ncrc32={crc}\nelapsed_s={elapsed_s:.2}\nrun_id={}\n",
+            "delivered_at={}\nframe_id={frame_id}\ncrc32={crc}\nelapsed_s={elapsed_s:.2}\nrun_id={}\n{}",
             utc_now(),
-            run_id()
+            run_id(),
+            timing.map(TimingSummary::sidecar_lines).unwrap_or_default()
         ),
     );
+}
+
+// ---- Per-block timing (PROJECT_HISTORY §7.1) --------------------------------------
+//
+// Logging only: nothing here changes a write, a timeout or an exit code. A block's
+// latency is the time from the previous PROGRESS (for block 1, the start of the bulk
+// writes) to its own PROGRESS, so it includes that block's writes. Healthy blocks take
+// ~0.15 s; in the slowing failures they took ~1.2-2.5 s each.
+
+/// A block slower than this gets a `SLOW` line.
+const SLOW_BLOCK_MS: f64 = 1000.0;
+/// On the first upload of a connection, block 5 ACKed later than this (elapsed since the
+/// bulk writes started) gets an early warning. Healthy first uploads: 0.71-0.85 s; all
+/// three slowing runs: 2.35-2.97 s.
+const FIRST_UPLOAD_BLOCK5_WARN_S: f64 = 1.5;
+const EARLY_WARNING_BLOCK: usize = 5;
+
+#[derive(Default)]
+struct UploadTimings {
+    control1_ack_ms: Option<f64>,
+    control2_ack_ms: Option<f64>,
+    /// Latency of each ACKed block, in block order (index 0 = block 1).
+    block_ms: Vec<f64>,
+}
+
+struct TimingSummary {
+    blocks: usize,
+    median_ms: f64,
+    p90_ms: f64,
+    max_ms: f64,
+    slowest_block: usize,
+    control1_ack_ms: Option<f64>,
+    control2_ack_ms: Option<f64>,
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+fn fmt_ms(v: Option<f64>) -> String {
+    v.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".into())
+}
+
+/// Median (mean of the two middle values for an even count) and nearest-rank p90.
+fn median_p90(values: &[f64]) -> Option<(f64, f64)> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(|a, b| a.total_cmp(b));
+    let n = v.len();
+    let median = if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 };
+    let rank = (n * 9).div_ceil(10).max(1);
+    Some((median, v[rank - 1]))
+}
+
+impl UploadTimings {
+    fn summary(&self) -> TimingSummary {
+        let (median_ms, p90_ms) = median_p90(&self.block_ms).unwrap_or((0.0, 0.0));
+        // The first block wins a tie, so a stall is attributed where it started.
+        let (slowest_block, max_ms) = self
+            .block_ms
+            .iter()
+            .enumerate()
+            .fold((0, 0.0f64), |best, (i, &v)| if v > best.1 { (i + 1, v) } else { best });
+        TimingSummary {
+            blocks: self.block_ms.len(),
+            median_ms,
+            p90_ms,
+            max_ms,
+            slowest_block,
+            control1_ack_ms: self.control1_ack_ms,
+            control2_ack_ms: self.control2_ack_ms,
+        }
+    }
+}
+
+impl TimingSummary {
+    fn log_line(&self, frame_id: &str) -> String {
+        format!(
+            "TIMING frame={frame_id} blocks_acked={} median={:.0}ms p90={:.0}ms max={:.0}ms slowest=block {} \
+             control1_ack={}ms control2_ack={}ms",
+            self.blocks,
+            self.median_ms,
+            self.p90_ms,
+            self.max_ms,
+            self.slowest_block,
+            fmt_ms(self.control1_ack_ms),
+            fmt_ms(self.control2_ack_ms)
+        )
+    }
+
+    fn sidecar_lines(&self) -> String {
+        format!(
+            "block_median_ms={:.0}\nblock_p90_ms={:.0}\nblock_max_ms={:.0}\nslowest_block={}\n\
+             control1_ack_ms={}\ncontrol2_ack_ms={}\n",
+            self.median_ms,
+            self.p90_ms,
+            self.max_ms,
+            self.slowest_block,
+            fmt_ms(self.control1_ack_ms),
+            fmt_ms(self.control2_ack_ms)
+        )
+    }
+}
+
+/// The `SLOW` line for one block, if it deserves one.
+fn slow_block_line(block_no: usize, total_blocks: usize, latency_ms: f64, elapsed_s: f64) -> Option<String> {
+    (latency_ms > SLOW_BLOCK_MS).then(|| {
+        format!("SLOW block {block_no}/{total_blocks} took {latency_ms:.0} ms (elapsed={elapsed_s:.2}s)")
+    })
+}
+
+/// The early warning for a first-on-connection upload whose block 5 came late.
+fn first_upload_warning(first_on_connection: bool, block_no: usize, elapsed_s: f64) -> Option<String> {
+    (first_on_connection && block_no == EARLY_WARNING_BLOCK && elapsed_s > FIRST_UPLOAD_BLOCK5_WARN_S).then(|| {
+        format!("WARNING first upload is slow (block 5 at {elapsed_s:.2} s; healthy 0.7–0.85 s)")
+    })
 }
 
 // ---- Failure classes and exit codes (issue #4) ------------------------------------
@@ -482,7 +601,7 @@ fn note_already_displayed(stream_path: &Path, last_crc: &str, last_frame_id: &mu
         return false;
     }
     log!("ALREADY DISPLAYED frame={id} crc32={last_crc} (identical to the last upload)");
-    record_delivery(stream_path, &id, last_crc, 0.0);
+    record_delivery(stream_path, &id, last_crc, 0.0, None);
     *last_frame_id = id;
     true
 }
@@ -498,6 +617,8 @@ async fn upload_stream<S>(
     block_timeout_ms: u64,
     stream_path: &Path,
     frame_id: &str,
+    first_on_connection: bool,
+    timings: &mut UploadTimings,
 ) -> Result<(), Failed>
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
@@ -524,24 +645,29 @@ where
     }
 
     let stream_len = chunks.iter().map(|c| c.value.len() - 1).sum::<usize>();
+    let control1_sent = Instant::now();
     peripheral.write(control, &control1_for(stream_len), WriteType::WithoutResponse).await
         .map_err(|e| p.fail(e))?;
     wait_for_ack_pair(notifications, C1_ACK_A, C1_ACK_B, 1500).await
         .map_err(|e| p.fail(e))?;
+    timings.control1_ack_ms = Some(ms(control1_sent.elapsed()));
 
     sleep(Duration::from_millis(60)).await;
 
     // ---- Point of no return: from here a failure leaves a partial media session. ----
     write_session_marker(p.stream_path, p.frame_id, 0, p.total_blocks);
     p.control2_attempted = true;
+    let control2_sent = Instant::now();
     peripheral.write(control, &CONTROL2, WriteType::WithoutResponse).await
         .map_err(|e| p.fail(e))?;
     wait_for_ack_pair(notifications, C2_ACK_A, C2_ACK_B, 1500).await
         .map_err(|e| p.fail(e))?;
+    timings.control2_ack_ms = Some(ms(control2_sent.elapsed()));
 
     sleep(Duration::from_millis(60)).await;
 
     let started = Instant::now();
+    let mut previous_ack = started;
     let total_blocks = p.total_blocks;
 
     for (idx, chunk) in chunks.iter().enumerate() {
@@ -562,8 +688,20 @@ where
                     "timed out waiting for PROGRESS after 4K block {block_no}/{total_blocks}"
                 )));
             }
+            let acked = Instant::now();
+            let latency_ms = ms(acked - previous_ack);
+            previous_ack = acked;
+            timings.block_ms.push(latency_ms);
             p.last_acked_block = block_no;
             write_session_marker(p.stream_path, p.frame_id, block_no, total_blocks);
+
+            let elapsed_s = (acked - started).as_secs_f64();
+            if let Some(line) = slow_block_line(block_no, total_blocks, latency_ms, elapsed_s) {
+                log!("{line}");
+            }
+            if let Some(line) = first_upload_warning(first_on_connection, block_no, elapsed_s) {
+                log!("{line}");
+            }
 
             if block_no % 5 == 0 || block_no == total_blocks {
                 println!(
@@ -1089,6 +1227,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut last_crc = String::new();
     let mut last_frame_id = String::new();
     let mut device_recorded = false;
+    let mut first_on_connection = true;
 
     loop {
         let stream = fs::read(stream_path).class(Failure::Fatal)?;
@@ -1108,7 +1247,8 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
         let started = Instant::now();
-        if let Err(f) = upload_stream(
+        let mut timings = UploadTimings::default();
+        let result = upload_stream(
             &peripheral,
             &control,
             &bulk,
@@ -1118,20 +1258,22 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
             block_timeout_ms,
             stream_path,
             &frame_id,
+            first_on_connection,
+            &mut timings,
         )
-        .await
-        {
-            log!(
-                "UPLOAD FAILED frame={frame_id} crc32={crc} after {:.2}s: {}",
-                started.elapsed().as_secs_f64(),
-                f.detail
-            );
+        .await;
+        let elapsed = started.elapsed().as_secs_f64();
+        first_on_connection = false;
+        let summary = timings.summary();
+        if let Err(f) = result {
+            log!("UPLOAD FAILED frame={frame_id} crc32={crc} after {elapsed:.2}s: {}", f.detail);
+            log!("{}", summary.log_line(&frame_id));
             return Err(f);
         }
 
-        let elapsed = started.elapsed().as_secs_f64();
         log!("UPLOAD COMPLETE frame={frame_id} crc32={crc} in {elapsed:.2}s");
-        record_delivery(stream_path, &frame_id, &crc, elapsed);
+        log!("{}", summary.log_line(&frame_id));
+        record_delivery(stream_path, &frame_id, &crc, elapsed, Some(&summary));
         if !device_recorded {
             write_cached_device(stream_path, &address, &name);
             device_recorded = true;
@@ -1156,6 +1298,88 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn median_and_p90() {
+        assert!(median_p90(&[]).is_none());
+        assert_eq!(median_p90(&[5.0]), Some((5.0, 5.0)));
+        assert_eq!(median_p90(&[4.0, 1.0, 3.0, 2.0]), Some((2.5, 4.0)));
+        // 1..=10: nearest-rank p90 is the 9th value.
+        let v: Vec<f64> = (1..=10).rev().map(f64::from).collect();
+        assert_eq!(median_p90(&v), Some((5.5, 9.0)));
+        // 53 healthy blocks with one slow one: p90 stays healthy, max does not.
+        let mut v = vec![150.0; 53];
+        v[40] = 2400.0;
+        assert_eq!(median_p90(&v), Some((150.0, 150.0)));
+    }
+
+    #[test]
+    fn summary_finds_the_slowest_block() {
+        let t = UploadTimings {
+            control1_ack_ms: Some(42.4),
+            control2_ack_ms: None,
+            block_ms: vec![150.0, 1800.0, 900.0, 1800.0],
+        };
+        let s = t.summary();
+        assert_eq!((s.blocks, s.slowest_block), (4, 2));
+        assert_eq!((s.median_ms, s.max_ms), (1350.0, 1800.0));
+        let line = s.log_line("r-f0001");
+        assert!(line.starts_with("TIMING frame=r-f0001 blocks_acked=4 median=1350ms p90=1800ms max=1800ms slowest=block 2"), "{line}");
+        assert!(line.ends_with("control1_ack=42ms control2_ack=-ms"), "{line}");
+        let side = s.sidecar_lines();
+        assert_eq!(sidecar_value(&side, "slowest_block"), Some("2"));
+        assert_eq!(sidecar_value(&side, "control2_ack_ms"), Some("-"));
+
+        // Failed before any block: no panic, zeros.
+        let s = UploadTimings::default().summary();
+        assert_eq!((s.blocks, s.slowest_block, s.max_ms), (0, 0, 0.0));
+    }
+
+    #[test]
+    fn slow_block_threshold() {
+        assert!(slow_block_line(7, 53, 1000.0, 3.0).is_none());
+        assert!(slow_block_line(7, 53, 150.0, 3.0).is_none());
+        assert_eq!(
+            slow_block_line(7, 53, 1834.4, 4.214).as_deref(),
+            Some("SLOW block 7/53 took 1834 ms (elapsed=4.21s)")
+        );
+    }
+
+    #[test]
+    fn first_upload_warning_threshold() {
+        // The slowing runs: 2.35, 2.42, 2.97 s. Healthy first uploads: 0.71-0.85 s.
+        for s in [2.35, 2.42, 2.97] {
+            assert!(first_upload_warning(true, 5, s).is_some(), "{s}");
+        }
+        for s in [0.71, 0.85, 1.5] {
+            assert!(first_upload_warning(true, 5, s).is_none(), "{s}");
+        }
+        // Later uploads on a connection reach block 5 at 1.3-2.04 s when healthy.
+        assert!(first_upload_warning(false, 5, 2.04).is_none());
+        assert!(first_upload_warning(true, 4, 2.5).is_none());
+        assert!(first_upload_warning(true, 6, 2.5).is_none());
+        assert_eq!(
+            first_upload_warning(true, 5, 2.42).as_deref(),
+            Some("WARNING first upload is slow (block 5 at 2.42 s; healthy 0.7–0.85 s)")
+        );
+    }
+
+    #[test]
+    fn delivery_record_carries_the_summary() {
+        let dir = std::env::temp_dir().join(format!("tiga_timing_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        let t = UploadTimings { control1_ack_ms: Some(40.0), control2_ack_ms: Some(55.0), block_ms: vec![150.0, 160.0] };
+        record_delivery(&stream, "r-f0002", "0badf00d", 8.7, Some(&t.summary()));
+        let d = fs::read_to_string(sidecar_path(&stream, ".delivered")).unwrap();
+        assert_eq!(sidecar_value(&d, "frame_id"), Some("r-f0002"));
+        assert_eq!(sidecar_value(&d, "elapsed_s"), Some("8.70"));
+        assert_eq!(sidecar_value(&d, "block_median_ms"), Some("155"));
+        assert_eq!(sidecar_value(&d, "block_max_ms"), Some("160"));
+        assert_eq!(sidecar_value(&d, "control1_ack_ms"), Some("40"));
+        assert_eq!(sidecar_value(&d, "control2_ack_ms"), Some("55"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn crc32_matches_zlib() {
@@ -1189,7 +1413,7 @@ mod tests {
         fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0001\ncrc32=0badf00d\n").unwrap();
         assert_eq!(frame_id_for(&stream, "0badf00d"), "r-f0001");
         assert_eq!(frame_id_for(&stream, "11111111"), "unknown(sidecar-is-r-f0001)");
-        record_delivery(&stream, "r-f0001", "0badf00d", 7.5);
+        record_delivery(&stream, "r-f0001", "0badf00d", 7.5, None);
         let delivered = fs::read_to_string(sidecar_path(&stream, ".delivered")).unwrap();
         assert_eq!(sidecar_value(&delivered, "frame_id"), Some("r-f0001"));
         assert_eq!(sidecar_value(&delivered, "elapsed_s"), Some("7.50"));
