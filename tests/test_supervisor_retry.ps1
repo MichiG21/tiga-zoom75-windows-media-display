@@ -56,6 +56,11 @@ $d = Decide 10 1 @{ frame_id = "r-f0001" }
 Assert-True ($d.Action -eq "halt") "a marker overrides even a retryable code"
 Assert-True ((Decide 1 1).Action -eq "retry") "a crash with no marker is retried (no session was open)"
 Assert-True ((Decide 0 0).Action -eq "retry") "a clean exit is restarted"
+$d = Get-UploaderDecision -ExitCode 0 -Session $null -Attempt 0 -StopRequested
+Assert-True ($d.Action -eq "stop" -and $d.Class -eq "stopped-on-request" -and -not $d.NeedsPowerCycle) "a clean exit after a stop request is not restarted"
+Assert-True ((Get-UploaderDecision -ExitCode 10 -Session $null -Attempt 1 -StopRequested).Action -eq "stop") "code 10 after a stop request (disconnect failed) is not retried"
+Assert-True ((Get-UploaderDecision -ExitCode 20 -Session $null -Attempt 1 -StopRequested).Action -eq "halt") "an upload that failed on its way out still halts"
+Assert-True ((Get-UploaderDecision -ExitCode 1 -Session @{ frame_id = "r-f0001" } -Attempt 1 -StopRequested).Class -eq "session-open") "a session marker still halts when a stop was requested"
 
 # ---- Loop with dummy children --------------------------------------------------------
 
@@ -67,6 +72,13 @@ run_id = os.environ.get("TIGA_RUN_ID", "")
 def put(ext, text):
     with open(stream + ext, "w") as f:
         f.write(text)
+if "wait-stop" in actions:  # like the real uploader: run until <stream>.stop appears
+    for _ in range(600):
+        if os.path.exists(stream + ".stop"):
+            break
+        time.sleep(0.05)
+if "ignore-stop" in actions:  # an uploader that never honours it (an old build, or stuck)
+    time.sleep(60)
 if "deliver" in actions:
     time.sleep(0.05)
     put(".delivered", "frame_id=r-f0009\ncrc32=00000000\nrun_id=%s\n" % run_id)
@@ -91,7 +103,7 @@ function Invoke-Scenario {
     # $Plan: one entry per uploader start: @(<exit code>, <actions...>); the last repeats.
     param([string]$Name, [object[]]$Plan, [int]$Iterations, [switch]$Halted)
     Write-Host "== $Name"
-    foreach ($ext in ".session", ".exit", ".delivered") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
+    foreach ($ext in ".session", ".exit", ".delivered", ".stop") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
     if (-not $Halted) { Remove-Item -LiteralPath $haltFile -ErrorAction SilentlyContinue }
     Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
 
@@ -201,6 +213,115 @@ try {
     Remove-Job $clearer -Force
 }
 
+# ---- Clean stop (docs/design/CLEAN_STOP.md) ------------------------------------------
+
+function Invoke-StopScenario {
+    # Runs the real loop while a background job plays STOP_STACK.ps1's part on <stream>.stop.
+    param([string]$Name, [object[]]$Plan, [int]$Iterations, [scriptblock]$Job, [switch]$StaleRequest)
+    Write-Host "== $Name"
+    foreach ($ext in ".session", ".exit", ".delivered", ".stop") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $haltFile -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+    if ($StaleRequest) { Set-Content -LiteralPath "$stream.stop" -Value "requested_at=yesterday" -Encoding ASCII }
+
+    $state = New-SupervisorState
+    $starts = New-Object System.Collections.ArrayList
+    $startUploader = {
+        $step = @($Plan[[Math]::Min($starts.Count, $Plan.Count - 1)])
+        [void]$starts.Add((Get-Date))
+        Start-LoggedProcess -Name "ble" -FilePath $python -Arguments (@($dummy, $stream) + ($step | ForEach-Object { "$_" })) `
+            -WorkingDirectory $work -StdOut (Join-Path $logs "ble.log") -StdErr (Join-Path $logs "ble_error.log")
+    }
+    $startRenderer = {
+        Start-LoggedProcess -Name "renderer" -FilePath $python -Arguments @($sleeper) `
+            -WorkingDirectory $work -StdOut (Join-Path $logs "renderer.log") -StdErr (Join-Path $logs "renderer_error.log")
+    }
+    $bg = if ($Job) { Start-Job -ScriptBlock $Job -ArgumentList "$stream.stop" }
+    try {
+        Invoke-SupervisorLoop -State $state -StartRenderer $startRenderer -StartUploader $startUploader `
+            -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations $Iterations
+        $state | Add-Member -NotePropertyName RendererAlive -NotePropertyValue (-not $state.Renderer.HasExited)
+    } finally {
+        foreach ($p in @($state.Renderer, $state.Uploader)) { try { Stop-LoggedProcess $p } catch {} }
+        if ($bg) { Remove-Job $bg -Force }
+        Remove-Item -LiteralPath "$stream.stop" -ErrorAction SilentlyContinue
+    }
+    return $state
+}
+
+# Wait until the uploader is running, then request the stop.
+$requestStop = { param($f) Start-Sleep -Milliseconds 500; Set-Content -LiteralPath $f -Value "requested_at=now" -Encoding ASCII }
+
+$s = Invoke-StopScenario "stop requested while idle" -Plan @(, @(0, "wait-stop")) -Iterations 60 -Job $requestStop -StaleRequest
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($log -match "Removed a stale stop request") "a stop request left at supervisor start is removed and logged"
+Assert-True ($s.UploaderStarts -eq 1) "uploader started once and not restarted after its requested exit (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "exited with code 0" -and $log -match "stopped on request") "supervisor logs the requested stop"
+Assert-True ($log -notmatch "Restarting BLE uploader") "no restart is scheduled"
+Assert-True (-not $s.Halted -and $null -eq (Read-Halt)) "a requested stop is not a halt"
+Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer untouched"
+
+$s = Invoke-StopScenario "stop requested; the upload in progress fails on its way out" `
+    -Plan @(, @(20, "wait-stop", "marker", "record")) -Iterations 60 -Job $requestStop
+$h = Read-Halt
+Assert-True ($s.UploaderStarts -eq 1 -and $s.Halted -and $h.class -eq "session-open" -and $h.needs_power_cycle) "it still halts and asks for a power cycle"
+
+$withdraw = { param($f) Start-Sleep -Milliseconds 500; Set-Content -LiteralPath $f -Value "x" -Encoding ASCII; Start-Sleep -Milliseconds 2500; Remove-Item -LiteralPath $f }
+$s = Invoke-StopScenario "stop request withdrawn while the supervisor still runs" -Plan @(, @(0, "wait-stop")) -Iterations 110 -Job $withdraw
+Assert-True ($s.UploaderStarts -eq 2) "uploader started again once the request was gone (starts: $($s.UploaderStarts))"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "Stop request withdrawn") "withdrawal is logged"
+
+# Invoke-StackStop is STOP_STACK.ps1's logic. The task and the force-kill are stand-ins:
+# nothing here touches the real scheduled task or kills anything but its own dummies.
+Write-Host "== Invoke-StackStop"
+function Start-Dummy {
+    param([string[]]$Actions)
+    $argLine = (@($dummy, $stream, "0") + $Actions | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $p = Start-Process -FilePath $python -ArgumentList $argLine -WindowStyle Hidden -PassThru
+    $null = $p.Handle
+    Start-Sleep -Milliseconds 300
+    return $p
+}
+Remove-Item -LiteralPath "$stream.stop" -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+
+$p = Start-Dummy @("wait-stop")
+$calls = New-Object System.Collections.ArrayList
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } `
+    -StopTask { [void]$calls.Add("task(uploader exited: $($p.HasExited))") } -ForceKillAll { [void]$calls.Add("kill") } `
+    -TimeoutSeconds 15 -PollSeconds 0.1 6>$null
+Assert-True ($r.Outcome -eq "clean" -and $p.HasExited -and $p.ExitCode -eq 0) "a cooperating uploader exits 0 on request ($($r.Outcome), $('{0:n1}' -f $r.Seconds) s)"
+Assert-True (($calls -join ",") -eq "task(uploader exited: True),kill") "task stopped and force-kill run only after the uploader exited: $($calls -join ',')"
+Assert-True (-not (Test-Path "$stream.stop")) "the request is withdrawn afterwards"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "STOP_STACK: BLE uploader exited on request after") "clean exit logged"
+
+$p = Start-Dummy @("ignore-stop")
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } -StopTask {} `
+    -ForceKillAll { Stop-Process -Id $p.Id -Force } -TimeoutSeconds 1 -PollSeconds 0.1 6>$null
+[void]$p.WaitForExit(5000)
+Assert-True ($r.Outcome -eq "timeout" -and $r.Seconds -ge 1 -and @($r.ProcessIds) -contains $p.Id) "an uploader that ignores the request times out"
+Assert-True ($p.HasExited) "and is force-killed afterwards"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "did not exit within 1 s; force-killing it \(pid $($p.Id)\)") "fallback logged with the pid"
+Assert-True (-not (Test-Path "$stream.stop")) "the request is withdrawn after a timeout too"
+
+$sawFile = $null
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { @() } `
+    -StopTask { $script:sawFile = Test-Path "$stream.stop" } -ForceKillAll {} -TimeoutSeconds 5 6>$null
+Assert-True ($r.Outcome -eq "not-running" -and $sawFile -eq $false) "no uploader: no request written, no wait"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "no BLE uploader was running") "that is logged too"
+
+# STOP_STACK.ps1 itself would stop the real scheduled task, so its text is checked instead.
+Write-Host "== STOP_STACK.ps1"
+foreach ($script in @("STOP_STACK.ps1", "installer\runtime\STOP_STACK.ps1")) {
+    $text = Get-Content -Raw (Join-Path $RepoRoot $script)
+    $invoke = $text.IndexOf("Invoke-StackStop")
+    Assert-True ($invoke -ge 0) "$script uses Invoke-StackStop"
+    $first = $text.IndexOf("Stop-ScheduledTask")
+    $kill = $text.IndexOf("Stop-Process")
+    Assert-True ($first -gt $invoke -and $kill -gt $invoke) "$script stops the task and kills only inside Invoke-StackStop's stand-ins"
+    Assert-True ($text -match "session_01_bulk_stream\.bin") "$script names the stream the uploader watches"
+}
+
 # STATUS_STACK.ps1 (dev layout) shows the halt prominently. It only reads, so a copy
 # can run against a fake install root.
 Write-Host "== STATUS_STACK.ps1"
@@ -241,6 +362,8 @@ foreach ($script in @("START_STACK.ps1", "installer\runtime\START_STACK.ps1")) {
     $clear = $text.IndexOf("Clear-UploaderHalt")
     $start = $text.IndexOf("Start-ScheduledTask")
     Assert-True ($clear -ge 0 -and $clear -lt $start) "$script clears the halt before Start-ScheduledTask"
+    $clearStop = $text.IndexOf("Clear-UploaderStopRequest")
+    Assert-True ($clearStop -ge 0 -and $clearStop -lt $start) "$script withdraws a leftover stop request before Start-ScheduledTask"
 }
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

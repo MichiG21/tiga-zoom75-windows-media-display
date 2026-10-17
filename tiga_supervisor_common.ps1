@@ -164,7 +164,9 @@ function New-UploaderDecision {
 function Get-UploaderDecision {
     # What to do after the uploader exited. No side effects.
     # $Attempt counts consecutive failed runs including this one; a successful upload resets it.
-    param([int]$ExitCode, $Session, [int]$Attempt)
+    # $StopRequested: STOP_STACK.ps1 asked it to stop (<stream>.stop). A halt still wins:
+    # an upload that failed on its way out leaves the keyboard needing a power cycle.
+    param([int]$ExitCode, $Session, [int]$Attempt, [switch]$StopRequested)
 
     $meaning = Get-UploaderExitMeaning $ExitCode
 
@@ -179,6 +181,9 @@ function Get-UploaderDecision {
     if ($ExitCode -eq 30) {
         return New-UploaderDecision halt "fatal" $false 0 "code ${ExitCode}: $meaning" `
             "Check logs\ble_error.log for the cause and fix it, then run START_STACK.ps1. The keyboard was not touched."
+    }
+    if ($StopRequested) {
+        return New-UploaderDecision stop "stopped-on-request" $false 0 "code ${ExitCode}: $meaning; a stop was requested" ""
     }
 
     if ($ExitCode -ne 0 -and $Attempt -gt $BleRetryDelays.Count) {
@@ -220,7 +225,7 @@ function New-SupervisorState {
     [pscustomobject]@{
         Renderer = $null; Uploader = $null
         NextRendererStart = [datetime]::MinValue; NextUploaderStart = [datetime]::MinValue
-        Attempts = 0; Halted = $false; RendererStarts = 0; UploaderStarts = 0
+        Attempts = 0; Halted = $false; RendererStarts = 0; UploaderStarts = 0; StopHeld = $false
     }
 }
 
@@ -232,6 +237,7 @@ function Resolve-UploaderExit {
     $code = if ($null -eq $proc.ExitCode) { -1 } else { [int]$proc.ExitCode }
 
     $session = Read-KeyValueFile "$StreamPath.session"
+    $stopRequested = Test-Path -LiteralPath (Get-StopRequestPath $StreamPath)
     $exitRecord = Read-KeyValueFile "$StreamPath.exit"
     if ($exitRecord -and $exitRecord["run_id"] -ne $proc.TigaRunId) { $exitRecord = $null }  # an older run's
 
@@ -245,8 +251,10 @@ function Resolve-UploaderExit {
     $detail = if ($exitRecord) { " Detail: $($exitRecord["detail"])" } else { "" }
     Write-SupervisorLog "BLE uploader exited with code $code ($(Get-UploaderExitMeaning $code)).$detail"
 
-    $d = Get-UploaderDecision -ExitCode $code -Session $session -Attempt $State.Attempts
-    if ($d.Action -eq "halt") {
+    $d = Get-UploaderDecision -ExitCode $code -Session $session -Attempt $State.Attempts -StopRequested:$stopRequested
+    if ($d.Action -eq "stop") {
+        Write-SupervisorLog "BLE uploader stopped on request ($($d.Reason)); not restarting it while the request stands."
+    } elseif ($d.Action -eq "halt") {
         Write-UploaderHaltState -Path $HaltFile -Decision $d -ExitCode $code -Session $session `
             -ExitRecord $exitRecord -Attempts $State.Attempts
         $State.Halted = $true
@@ -270,6 +278,11 @@ function Invoke-SupervisorLoop {
         [double]$PollSeconds = 2,
         [int]$MaxIterations = 0
     )
+
+    # A stop request at supervisor start is left over from an earlier STOP_STACK.ps1.
+    if (Clear-UploaderStopRequest $StreamPath) {
+        Write-SupervisorLog "Removed a stale stop request ($(Get-StopRequestPath $StreamPath))."
+    }
 
     if (Test-Path -LiteralPath $HaltFile) {
         $State.Halted = $true
@@ -301,7 +314,13 @@ function Invoke-SupervisorLoop {
             $State.Attempts = 0
             $State.NextUploaderStart = [datetime]::MinValue
         }
-        if ((-not $State.Halted) -and ($null -eq $State.Uploader) -and ((Get-Date) -ge $State.NextUploaderStart)) {
+        $stopRequested = Test-Path -LiteralPath (Get-StopRequestPath $StreamPath)
+        if ($State.StopHeld -and -not $stopRequested) {
+            Write-SupervisorLog "Stop request withdrawn; starting the BLE uploader again."
+            $State.NextUploaderStart = [datetime]::MinValue
+        }
+        $State.StopHeld = $stopRequested
+        if ((-not $State.Halted) -and (-not $stopRequested) -and ($null -eq $State.Uploader) -and ((Get-Date) -ge $State.NextUploaderStart)) {
             $State.Uploader = & $StartUploader
             $State.UploaderStarts++
         }
@@ -323,4 +342,108 @@ function Clear-UploaderHalt {
         }
     }
     return $cleared
+}
+
+# ---- Clean stop (docs/design/CLEAN_STOP.md) -----------------------------------------
+#
+# STOP_STACK.ps1 used to force-kill the uploader, which can cut an upload in half and
+# always drops the BLE link without a disconnect. Now it first writes <stream>.stop
+# and waits. The uploader checks for that file only between uploads, so an upload in
+# progress is finished (or fails the normal way) first; then it disconnects and exits
+# 0. Only if it has not exited in time does STOP_STACK.ps1 fall back to the force-kill.
+# While the file exists the supervisor does not start the uploader. Windows shutdown
+# and Stop-ScheduledTask on their own still end it with a kill.
+
+# One healthy upload takes ~8.4-10.1 s, and a failing one ends within ~15 s at the
+# 2500 ms block timeout (PROJECT_HISTORY 7.1). The uploader may also be in a scan (up
+# to 15 s) or a connect, which it does not interrupt. 30 s covers an upload that has
+# only just started, with margin, without making a stop feel hung.
+$UploaderStopTimeoutSeconds = 30
+
+function Get-StopRequestPath {
+    param([string]$StreamPath)
+    return "$StreamPath.stop"
+}
+
+function Clear-UploaderStopRequest {
+    # Returns $true if a request was removed.
+    param([string]$StreamPath)
+    $path = Get-StopRequestPath $StreamPath
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    Remove-Item -LiteralPath $path -Force
+    return $true
+}
+
+function Request-UploaderStop {
+    # Asks the running uploader to stop and waits up to $TimeoutSeconds for it to exit.
+    # Kills nothing: the caller decides what to do on a timeout. The request file stays,
+    # so a supervisor that is still running does not start the uploader again; the
+    # caller removes it once the stack is down.
+    #   $GetUploaderProcessIds returns the process IDs to wait for.
+    # Returns Outcome "not-running", "clean" or "timeout", the seconds waited, and the
+    # process IDs still running (on a timeout).
+    param(
+        [string]$StreamPath,
+        [scriptblock]$GetUploaderProcessIds,
+        [double]$TimeoutSeconds = $UploaderStopTimeoutSeconds,
+        [double]$PollSeconds = 0.25
+    )
+    $ids = @(& $GetUploaderProcessIds | Where-Object { $_ })
+    if ($ids.Count -eq 0) {
+        return [pscustomobject]@{ Outcome = "not-running"; Seconds = 0.0; ProcessIds = @() }
+    }
+    $text = "requested_at={0}`r`nrequested_by=STOP_STACK.ps1 pid {1}`r`nwaiting_for={2}`r`n" -f `
+        (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"), $PID, ($ids -join ",")
+    [System.IO.File]::WriteAllText((Get-StopRequestPath $StreamPath), $text, $Utf8NoBom)
+
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $alive = @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($alive.Count -eq 0) {
+            return [pscustomobject]@{ Outcome = "clean"; Seconds = $watch.Elapsed.TotalSeconds; ProcessIds = @() }
+        }
+        if ($watch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            return [pscustomobject]@{ Outcome = "timeout"; Seconds = $watch.Elapsed.TotalSeconds; ProcessIds = $alive }
+        }
+        Start-Sleep -Milliseconds ([int]($PollSeconds * 1000))
+    }
+}
+
+function Get-StopOutcomeMessage {
+    param($Result, [double]$TimeoutSeconds = $UploaderStopTimeoutSeconds)
+    switch ($Result.Outcome) {
+        "not-running" { return "STOP_STACK: no BLE uploader was running." }
+        "clean"       { return ("STOP_STACK: BLE uploader exited on request after {0:n1} s." -f $Result.Seconds) }
+        default       { return ("STOP_STACK: BLE uploader did not exit within {0:n0} s; force-killing it (pid {1})." -f $TimeoutSeconds, ($Result.ProcessIds -join ",")) }
+    }
+}
+
+function Invoke-StackStop {
+    # The body of STOP_STACK.ps1 (dev and packaged), with every side effect passed in so
+    # tests can run it against dummy processes:
+    #   $GetUploaderProcessIds  uploader processes to ask and wait for
+    #   $StopTask               stops the scheduled task (and with it the supervisor)
+    #   $ForceKillAll           the old force-kill of every stack process
+    # Order: ask, wait, stop the task, force-kill whatever is left, withdraw the request.
+    # Returns the Request-UploaderStop result.
+    param(
+        [string]$StreamPath,
+        [scriptblock]$GetUploaderProcessIds,
+        [scriptblock]$StopTask,
+        [scriptblock]$ForceKillAll,
+        [double]$TimeoutSeconds = $UploaderStopTimeoutSeconds,
+        [double]$PollSeconds = 0.25
+    )
+    $result = Request-UploaderStop -StreamPath $StreamPath -GetUploaderProcessIds $GetUploaderProcessIds `
+        -TimeoutSeconds $TimeoutSeconds -PollSeconds $PollSeconds
+    $message = Get-StopOutcomeMessage $result $TimeoutSeconds
+    Write-SupervisorLog $message
+    Write-Host $message
+    try {
+        & $StopTask
+        & $ForceKillAll
+    } finally {
+        [void](Clear-UploaderStopRequest $StreamPath)
+    }
+    return $result
 }
