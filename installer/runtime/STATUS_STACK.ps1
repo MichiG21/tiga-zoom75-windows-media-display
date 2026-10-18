@@ -62,7 +62,27 @@ if (Test-Path -LiteralPath $haltFile) {
     try { $halt = Get-Content -Raw -LiteralPath $haltFile | ConvertFrom-Json } catch { $halt = $null }
     if ($null -eq $halt) { $halt = [pscustomobject]@{ reason = "halt file unreadable: $haltFile" } }
     $verdict = "HALTED - BLE uploader stopped and will NOT retry by itself: $($halt.reason)"
-} elseif (Test-Path -LiteralPath "$Stream.session") {
+}
+
+# Automatic retry after a sudden failure (docs/design/RETRY_RECOVERY.md). The supervisor
+# keeps logs\uploader_retry.json up to date; a waiting or running retry outranks the
+# open session marker that goes with it.
+$retryFile = Join-Path $Logs "uploader_retry.json"
+$retry = $null
+if (Test-Path -LiteralPath $retryFile) {
+    try { $retry = Get-Content -Raw -LiteralPath $retryFile | ConvertFrom-Json } catch { $retry = $null }
+}
+# A waiting or running state older than 10 minutes is left over from a stopped stack.
+$retrying = (-not $halt) -and $retry -and ($retry.status -eq "waiting" -or $retry.status -eq "running") -and
+    ((ConvertTo-LocalTime $retry.updated_at) -gt (Get-Date).AddMinutes(-10))
+if ($retrying) {
+    if ($retry.status -eq "waiting") {
+        $at = ConvertTo-LocalTime $retry.next_attempt_at
+        $verdict = "RETRYING - sudden upload failure; automatic retry $($retry.retry) of $($retry.max_retries) at {0:HH:mm:ss} (no power-off needed yet)" -f $at
+    } else {
+        $verdict = "RETRYING - automatic retry $($retry.retry) of $($retry.max_retries) after a sudden upload failure is in progress"
+    }
+} elseif ((-not $halt) -and (Test-Path -LiteralPath "$Stream.session")) {
     $session = Read-KeyValueFile "$Stream.session"
     $verdict += " (media session open: frame $($session.frame_id), block $($session.last_acked_block)/$($session.total_blocks))"
 }
@@ -79,8 +99,16 @@ if ($halt) {
         Write-Host "Frame         : $($halt.frame_id)$blocks"
     }
     if ($halt.detail) { Write-Host "Detail        : $($halt.detail)" }
+    if ($halt.signature) { Write-Host "Signature     : $($halt.signature)" }
+    if ($halt.auto_retries) { Write-Host "Auto-retries  : $($halt.auto_retries) automatic retr$(if ($halt.auto_retries -eq 1) { 'y' } else { 'ies' }) used before halting" }
     Write-Host "Action        : $($halt.instruction)" -ForegroundColor Yellow
     Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+}
+
+if ($retry) {
+    $color = if ($retrying) { "Yellow" } else { "DarkGray" }
+    Write-Host ("Auto-retry    : {0}, retry {1} of {2}; last failure: {3}" -f $retry.status, $retry.retry, $retry.max_retries, $retry.last_failure) -ForegroundColor $color
+    foreach ($e in @($retry.events) | Select-Object -Last 4) { Write-Host "                $e" -ForegroundColor $color }
 }
 
 $lastFailure = Get-ChildItem -Path $Logs -Filter "ble.log*" -ErrorAction SilentlyContinue |

@@ -1640,3 +1640,106 @@ on issues. PR into `main` is open, **not merged**. Read
 
 - The fallback's logs (`tiga_ble_re_tools\logs`) can't be tabulated: no timestamps, and
   overwritten per run. Summarised in `upload_attempts.md` only.
+
+---
+
+# Three changes from run F, 2026-10-18 afternoon
+
+Three branches off `origin/main` (`212bda3`, after #24), each with its own PR into
+`main`, **none merged**. Nothing was sent to the keyboard, the live stack wasn't touched,
+and no issue was commented on. Only a dry run of the uploader (no Bluetooth) was run.
+This notes section is on the third branch only, so the three PRs don't conflict over
+this file.
+
+## Your answers to run F, recorded
+
+In PROJECT_HISTORY §7.1 sixth part (on `feature/sudden-retry`):
+
+- The delay between reconnecting and START_STACK at 13:41 is not known. So "not settled
+  after power-on" stays open; noting that delay at future power-offs would settle it.
+- The LCD showed the roar at every failure. So at each stall the keyboard was still in
+  the transfer it had accepted, which fits both the uploader's view and the successful
+  plain retries at 13:42 and 14:11.
+
+## PR #25: `feature/log-notifications` (logging only)
+
+- Every notification that isn't PROGRESS or COMPLETE gets a `NOTIFY` line in `ble.log`:
+  characteristic, hex value, what the uploader was waiting for (including `between
+  uploads`), and for how long.
+- A normal upload adds four lines (the CONTROL1/CONTROL2 ACK pairs, named as such).
+- Between uploads the uploader now reads the notification stream instead of sleeping.
+  The timing is the same; before, those notifications were thrown away unseen by the
+  next upload's drain.
+- **What to look for at the next stall:** any `NOTIFY … while=waiting for PROGRESS of
+  block N/53` just before the `UPLOAD FAILED`. None means the keyboard went silent.
+- Tests: cargo 44, all others pass.
+
+## PR #26: `feature/stop-scan-after-connect` (behaviour change)
+
+- The BLE scan stops as soon as a device qualifies (connected, media service present),
+  with a `Scan stopped` line after `SELECTED`.
+- Until then it runs as before, including the rescan after rejected candidates.
+- Nothing after selection ever needs a scan: every failure ends the process and the
+  next run scans afresh. If stopping fails, it's logged and the upload runs with the
+  scan on, as before.
+- **Hardware check:** `Scan stopped` after `SELECTED`, then normal uploads. If the very
+  first block never gets PROGRESS after this change, revert it.
+- Tests: cargo 42, all others pass.
+
+## PR #27: `feature/sudden-retry` (the bug A policy change you approved)
+
+- **Uploader:** on a code 20 it logs `SIGNATURE sudden|slowing|unclassified` and writes
+  `signature=` into the exit record.
+  - Sudden: a block timeout with a normal pace (median ≤ 500 ms, at most one block over
+    1 s). Today's 14:09, with one 1860 ms block, counts as sudden.
+  - Slowing: median over 500 ms or two or more slow blocks.
+  - Unclassified: anything else (link lost, no block ACKed, an earlier run's marker).
+- **Supervisor:** on a sudden code 20 it waits 120 s, removes the session marker, and
+  starts the uploader again, up to 3 times per incident.
+  - Each step goes into `startup_supervisor.log`: scheduled (with the time), started,
+    and SUCCEEDED or FAILED.
+  - A delivered frame ends the incident and resets the count.
+  - A code 10/11 during a retry uses the normal reconnect backoff and doesn't use up a
+    retry.
+  - After 3 failed retries it halts exactly as now (same class and instruction); the
+    halt file adds `auto_retries` and `signature`.
+  - Slowing, unclassified, code 21 and a killed uploader still halt at once.
+  - A retry pending when the supervisor stops isn't resumed.
+- **STATUS_STACK** (dev and packaged): `RETRYING - sudden upload failure; automatic
+  retry 1 of 3 at HH:MM:SS` while one is waiting, plus an `Auto-retry` line with the
+  last events from `logs\uploader_retry.json`. A halt after retries shows the signature
+  and the retries used.
+- **Docs:**
+  - RETRY_RECOVERY: the rule's exception, with PR #24's numbers; the exit-code table;
+    the signature definitions; the policy and STATUS.
+  - README: the known-issues bullet and the "BLE upload was interrupted" section.
+  - PROJECT_HISTORY: a note under bug A.
+- **Tests:** PowerShell retry test, with new decision-table rows and 8 new loop scenarios
+  (three retries then halt, a delivering retry, slowing/unclassified/21 halts, a
+  delivery resetting the count, code 10 during a retry, a leftover waiting retry) and
+  STATUS checks. Cargo 41 with the signature cases from the record; logging test and
+  Python pass.
+
+**Not changed, on purpose:**
+
+- The uploader's own exit message for code 20 still says to disconnect the battery
+  before retrying. It's printed for every sudden failure even when the supervisor will
+  retry. The halt instruction is unchanged as you asked, and the message is asserted by
+  a test.
+- 120 s and 3 are constants at the top of the policy block in
+  `tiga_supervisor_common.ps1` (`$BleSuddenRetryDelay`, `$BleSuddenRetryMax`).
+
+## Merge order and conflicts
+
+- #25, #26 and #27 all touch `tiga_stream_watch_flow.rs` in different places. Whichever
+  merges second or third may need a trivial rebase. #25 and #27 also both add to
+  `RETRY_RECOVERY.md`, in different sections.
+- My suggested order: #25 (logging), then #27 (retry), then #26 on its own afterwards.
+  #26 changes the radio's behaviour, so it's best judged in a period without other
+  changes.
+
+## Deploying (yours, not done)
+
+The live install only gets any of this after merge, `git pull` in `tiga-fresh-test`, a
+rebuild of the uploader, and a stack restart. Expect the ~25 s first-start delay after a
+rebuild (antivirus).

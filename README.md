@@ -143,7 +143,7 @@ The current release is still a **public beta**. Additional testing across Window
 ### Known behavior / limitations
 
 - The TIGA can briefly show its built-in roar animation during a custom-image upload.
-- If a BLE upload is interrupted partway through, the keyboard must be reset before another media upload. The TIGA has no power switch, and unplugging USB doesn't reset it — it has a battery. Open the case, disconnect the battery from the PCB, and wait at least 30 seconds, pressing a few keys while it's disconnected. Reconnect, then run `START_STACK.ps1`. A 10–15 second disconnect was not enough in testing.
+- If a BLE upload stops partway through with the keyboard simply going quiet, the stack retries it by itself after 2 minutes, up to 3 times. Only if that fails, or if the upload had been slowing down first, does it halt and ask you to reset the keyboard: the TIGA has no power switch, and unplugging USB doesn't reset it — it has a battery. Open the case, disconnect the battery from the PCB, and wait at least 30 seconds, pressing a few keys while it's disconnected. Reconnect, then run `START_STACK.ps1`. See [BLE upload was interrupted](#ble-upload-was-interrupted-uploader-halted).
 - The renderer keeps the historical filename `tiga_windows_nowplaying_v2.py` internally for compatibility with the existing stack.
 - An existing older/manual installation may have its `TIGA Windows Media Display` Scheduled Task replaced by the installer.
 
@@ -260,7 +260,11 @@ Logs in `logs\` are appended across restarts and rotated at 5 MB (`renderer.log.
 
 ### BLE upload was interrupted (uploader halted)
 
-If an upload stops partway through, the keyboard can be left holding an unfinished media session, and retrying makes that worse. So the stack does **not** retry it. The BLE uploader halts, the Now Playing renderer keeps running, and **Status** reports:
+If an upload stops partway through, the keyboard is left holding an unfinished media session.
+
+**Most interruptions recover by themselves.** When the transfer was running at a normal pace and the keyboard simply stopped answering (the usual case), the stack waits 2 minutes and tries again, up to 3 times, without you doing anything. Testing on 2026-10-18 showed that such a retry works about as often as any first upload (roughly 2 times in 3) and needs no reset. While it waits, **Status** says `RETRYING - … automatic retry 1 of 3 at …`, and `logs\startup_supervisor.log` records each retry and its result.
+
+If all three retries fail, or if the upload had been getting slower and slower before it stopped (a state retrying doesn't fix), the BLE uploader halts, the Now Playing renderer keeps running, and **Status** reports:
 
 ```
 Status        : HALTED - transfer interrupted after CONTROL2 ...

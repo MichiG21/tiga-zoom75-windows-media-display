@@ -322,11 +322,73 @@ struct Failed {
     detail: String,
     frame_id: Option<String>,
     last_acked_block: Option<usize>,
+    /// The keyboard stopped sending PROGRESS within the block timeout (rather than the
+    /// link failing or a write erroring).
+    progress_timeout: bool,
+    /// How the transfer stalled; set only for code 20.
+    signature: Option<Signature>,
 }
 
 impl Failed {
     fn new(kind: Failure, detail: impl Display) -> Self {
-        Failed { kind, detail: detail.to_string(), frame_id: None, last_acked_block: None }
+        Failed {
+            kind,
+            detail: detail.to_string(),
+            frame_id: None,
+            last_acked_block: None,
+            progress_timeout: false,
+            signature: None,
+        }
+    }
+}
+
+// ---- Failure signature (PROJECT_HISTORY §7.1) --------------------------------------
+//
+// Recorded so the supervisor can decide whether a code 20 may be retried
+// automatically (docs/design/RETRY_RECOVERY.md). From §7.1:
+//
+//   sudden  - a normal pace, then the keyboard stops sending PROGRESS. One slow block
+//             just before the stall still counts (2026-10-18 14:09).
+//   slowing - sustained slowness before the stall: blocks at ~1.2-2.5 s each
+//             (2026-10-15 22:44 and 22:46, 2026-10-16 18:49).
+//
+// Anything that isn't clearly sudden is reported as `unclassified`, and the supervisor
+// halts on it exactly as it did before the retry: a link failure or write error rather
+// than a PROGRESS timeout, or no ACKed block at all, so there is no pace to judge.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Signature {
+    Sudden,
+    Slowing,
+    Unclassified,
+}
+
+impl Signature {
+    fn as_str(self) -> &'static str {
+        match self {
+            Signature::Sudden => "sudden",
+            Signature::Slowing => "slowing",
+            Signature::Unclassified => "unclassified",
+        }
+    }
+}
+
+/// Median block latency above this means sustained slowness. Healthy medians are
+/// 150-188 ms, slowing runs ~1.2-2.5 s per block.
+const SLOWING_MEDIAN_MS: f64 = 500.0;
+/// Two or more blocks over SLOW_BLOCK_MS also mean sustained slowness; one does not.
+const SLOWING_SLOW_BLOCKS: usize = 2;
+
+fn stall_signature(block_ms: &[f64], progress_timeout: bool) -> Signature {
+    if !progress_timeout || block_ms.is_empty() {
+        return Signature::Unclassified;
+    }
+    let (median, _) = median_p90(block_ms).unwrap_or((0.0, 0.0));
+    let slow_blocks = block_ms.iter().filter(|&&v| v > SLOW_BLOCK_MS).count();
+    if median > SLOWING_MEDIAN_MS || slow_blocks >= SLOWING_SLOW_BLOCKS {
+        Signature::Slowing
+    } else {
+        Signature::Sudden
     }
 }
 
@@ -382,14 +444,15 @@ fn record_exit(stream_path: &Path, f: &Failed) {
         stream_path,
         ".exit",
         &format!(
-            "exited_at={}\nrun_id={}\ncode={}\nmeaning={}\ndetail={}\nframe_id={}\nlast_acked_block={}\n",
+            "exited_at={}\nrun_id={}\ncode={}\nmeaning={}\ndetail={}\nframe_id={}\nlast_acked_block={}\nsignature={}\n",
             utc_now(),
             run_id(),
             f.kind.code(),
             f.kind.meaning(),
             f.detail.replace(['\r', '\n'], " "),
             f.frame_id.as_deref().unwrap_or(""),
-            f.last_acked_block.map(|b| b.to_string()).unwrap_or_default()
+            f.last_acked_block.map(|b| b.to_string()).unwrap_or_default(),
+            f.signature.map(Signature::as_str).unwrap_or("")
         ),
     );
 }
@@ -584,6 +647,8 @@ impl UploadProgress<'_> {
             },
             frame_id: Some(self.frame_id.to_string()),
             last_acked_block: self.control2_attempted.then_some(self.last_acked_block),
+            progress_timeout: false,
+            signature: None,
         }
     }
 }
@@ -684,9 +749,11 @@ where
             let ok = wait_for_progress(notifications, block_timeout_ms).await
                 .map_err(|e| p.fail(e))?;
             if !ok {
-                return Err(p.fail(format!(
+                let mut f = p.fail(format!(
                     "timed out waiting for PROGRESS after 4K block {block_no}/{total_blocks}"
-                )));
+                ));
+                f.progress_timeout = true;
+                return Err(f);
             }
             let acked = Instant::now();
             let latency_ms = ms(acked - previous_ack);
@@ -1185,6 +1252,9 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
                 detail,
                 frame_id: Some(frame),
                 last_acked_block: block,
+                progress_timeout: false,
+                // A session left by an earlier run: nothing is known about its pace.
+                signature: Some(Signature::Unclassified),
             });
         }
         println!("WARNING: {detail}");
@@ -1265,9 +1335,14 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         let elapsed = started.elapsed().as_secs_f64();
         first_on_connection = false;
         let summary = timings.summary();
-        if let Err(f) = result {
+        if let Err(mut f) = result {
             log!("UPLOAD FAILED frame={frame_id} crc32={crc} after {elapsed:.2}s: {}", f.detail);
             log!("{}", summary.log_line(&frame_id));
+            if f.kind == Failure::Interrupted {
+                let sig = stall_signature(&timings.block_ms, f.progress_timeout);
+                log!("SIGNATURE {} frame={frame_id}", sig.as_str());
+                f.signature = Some(sig);
+            }
             return Err(f);
         }
 
@@ -1479,6 +1554,33 @@ mod tests {
     }
 
     #[test]
+    fn stall_signatures_from_the_record() {
+        let healthy = |n: usize| vec![155.0; n];
+        // 2026-10-18 13:20 / 13:41 / 14:03: a healthy pace, then nothing.
+        assert_eq!(stall_signature(&healthy(26), true), Signature::Sudden);
+        assert_eq!(stall_signature(&healthy(51), true), Signature::Sudden);
+        // 2026-10-16 20:58: a later upload's slow early block (802 ms) is not slowness.
+        assert_eq!(stall_signature(&[150.0, 160.0, 802.0, 170.0, 188.0], true), Signature::Sudden);
+        // 2026-10-18 14:09: block 6 took 1860 ms, then the stall: one slow block, sudden.
+        assert_eq!(stall_signature(&[170.0, 160.0, 175.0, 168.0, 180.0, 1860.0], true), Signature::Sudden);
+        // 2026-10-15 22:44: at least four of blocks 6-10 took ~1.8-2.5 s.
+        let mut b = healthy(5);
+        b.extend([1900.0, 2100.0, 1800.0, 2300.0, 1500.0]);
+        assert_eq!(stall_signature(&b, true), Signature::Slowing);
+        // 2026-10-16 18:49: 35 blocks at 1.2-2.5 s.
+        let mut b = healthy(5);
+        b.extend(vec![1800.0; 35]);
+        assert_eq!(stall_signature(&b, true), Signature::Slowing);
+        // Two slow blocks are already sustained.
+        let mut b = healthy(20);
+        b.extend([1200.0, 1300.0]);
+        assert_eq!(stall_signature(&b, true), Signature::Slowing);
+        // No pace to judge, or not a PROGRESS timeout: unclassified (the supervisor halts).
+        assert_eq!(stall_signature(&[], true), Signature::Unclassified);
+        assert_eq!(stall_signature(&healthy(30), false), Signature::Unclassified);
+    }
+
+    #[test]
     fn control2_is_the_boundary() {
         // Anything before CONTROL2 is retryable, however far it got.
         assert_eq!(classify_upload_failure(false, false), Failure::Unreachable);
@@ -1536,10 +1638,13 @@ mod tests {
             detail: "line one\nline two".into(),
             frame_id: Some("r-f0003".into()),
             last_acked_block: Some(12),
+            progress_timeout: true,
+            signature: Some(Signature::Sudden),
         };
         record_exit(&stream, &f);
         let e = fs::read_to_string(sidecar_path(&stream, ".exit")).unwrap();
         assert_eq!(sidecar_value(&e, "code"), Some("20"));
+        assert_eq!(sidecar_value(&e, "signature"), Some("sudden"));
         assert_eq!(sidecar_value(&e, "detail"), Some("line one line two"));
         assert_eq!(sidecar_value(&e, "last_acked_block"), Some("12"));
         fs::remove_dir_all(&dir).unwrap();

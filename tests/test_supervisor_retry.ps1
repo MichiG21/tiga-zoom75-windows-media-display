@@ -31,7 +31,10 @@ $haltFile = Join-Path $logs "uploader_halted.json"
 # ---- Pure decision table -----------------------------------------------------------
 Write-Host "== decision table"
 
-function Decide { param($Code, $Attempt, $Session = $null) Get-UploaderDecision -ExitCode $Code -Session $Session -Attempt $Attempt }
+function Decide {
+    param($Code, $Attempt, $Session = $null, $Signature = "", $SuddenRetries = 0)
+    Get-UploaderDecision -ExitCode $Code -Session $Session -Attempt $Attempt -Signature $Signature -SuddenRetries $SuddenRetries
+}
 
 $delays = 1..4 | ForEach-Object { (Decide 10 $_).Delay }
 Assert-True (($delays -join ",") -eq "8,16,32,60") "code 10 backs off 8,16,32,60 ($($delays -join ','))"
@@ -55,6 +58,23 @@ Assert-True ($d.Action -eq "halt" -and $d.Class -eq "session-open") "a killed up
 $d = Decide 10 1 @{ frame_id = "r-f0001" }
 Assert-True ($d.Action -eq "halt") "a marker overrides even a retryable code"
 Assert-True ((Decide 1 1).Action -eq "retry") "a crash with no marker is retried (no session was open)"
+
+# Sudden-failure retry (approved 2026-10-18; RETRY_RECOVERY.md).
+$marker = @{ frame_id = "r-f0042" }
+$sudden = 0..2 | ForEach-Object { Decide 20 ($_ + 1) $marker "sudden" $_ }
+Assert-True (@($sudden | Where-Object { $_.Action -eq "retry" -and $_.Class -eq "sudden-retry" -and $_.Delay -eq 120 -and -not $_.NeedsPowerCycle }).Count -eq 3) "sudden code 20: retries 1-3 after 120 s, no power cycle"
+Assert-True ($sudden[0].Reason -match "automatic retry 1 of 3" -and $sudden[2].Reason -match "automatic retry 3 of 3") "the reason names the retry number"
+$d = Decide 20 4 $marker "sudden" 3
+Assert-True ($d.Action -eq "halt" -and $d.Class -eq "session-open" -and $d.NeedsPowerCycle -and $d.Instruction -eq $PowerCycleInstruction) "after 3 retries: halt exactly as before (same class and instruction)"
+Assert-True ($d.Reason -match "all 3 automatic retries have failed") "the halt reason says the retries failed"
+foreach ($sig in "slowing", "unclassified", "") {
+    $d = Decide 20 1 $marker $sig 0
+    Assert-True ($d.Action -eq "halt" -and $d.NeedsPowerCycle) "code 20, signature '$sig': halts at once"
+}
+Assert-True ((Decide 20 1 $marker "slowing" 0).Reason -match "signature slowing, so no automatic retry") "a slowing halt says why there was no retry"
+Assert-True ((Decide 21 1 $marker "sudden" 0).Action -eq "halt") "code 21 halts at once, whatever the signature"
+Assert-True ((Decide 1 1 $marker "sudden" 0).Action -eq "halt") "a killed uploader (code 1) with a marker halts, even with a stray signature"
+Assert-True ((Decide 20 1 $null "sudden" 0).Action -eq "retry") "sudden code 20 retries even if the marker is already gone"
 Assert-True ((Decide 0 0).Action -eq "retry") "a clean exit is restarted"
 
 # ---- Loop with dummy children --------------------------------------------------------
@@ -64,6 +84,9 @@ Set-Content -LiteralPath $dummy -Encoding ASCII -Value @'
 import os, sys, time
 stream, code, actions = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
 run_id = os.environ.get("TIGA_RUN_ID", "")
+if "check" in actions and os.path.exists(stream + ".session"):
+    print("dummy uploader: session marker still present at start")
+    sys.exit(77)
 def put(ext, text):
     with open(stream + ext, "w") as f:
         f.write(text)
@@ -73,9 +96,12 @@ if "deliver" in actions:
 if "marker" in actions:
     put(".session", "frame_id=r-f0042\nlast_acked_block=17\ntotal_blocks=53\nrun_id=%s\n" % run_id)
 if "stale" in actions:
-    put(".exit", "run_id=ble-some-older-run\ncode=20\ndetail=from an older run\n")
+    put(".exit", "run_id=ble-some-older-run\ncode=20\ndetail=from an older run\nsignature=sudden\n")
 if "record" in actions:
-    put(".exit", "run_id=%s\ncode=%d\ndetail=PROGRESS timeout after block 18\nframe_id=r-f0042\nlast_acked_block=17\n" % (run_id, code))
+    sig = next((a for a in actions if a in ("sudden", "slowing", "unclassified")), "")
+    put(".exit", "run_id=%s\ncode=%d\ndetail=PROGRESS timeout after block 18\nframe_id=r-f0042\nlast_acked_block=17\nsignature=%s\n" % (run_id, code, sig))
+if "stay" in actions:
+    time.sleep(60)  # a running uploader in watch mode
 print("dummy uploader exiting with", code)
 sys.exit(code)
 '@
@@ -85,6 +111,7 @@ Set-Content -LiteralPath $sleeper -Encoding ASCII -Value 'import time; time.slee
 # Fast schedule so the test takes seconds, not minutes.
 $BleRetryDelays = @(0.3, 0.6, 1.2, 2.4)
 $BleSlowRetryDelay = 3
+$BleSuddenRetryDelay = 0.4
 $RendererRestartDelay = 0.2
 
 function Invoke-Scenario {
@@ -92,6 +119,7 @@ function Invoke-Scenario {
     param([string]$Name, [object[]]$Plan, [int]$Iterations, [switch]$Halted)
     Write-Host "== $Name"
     foreach ($ext in ".session", ".exit", ".delivered") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath (Get-RetryStatePath $haltFile) -ErrorAction SilentlyContinue
     if (-not $Halted) { Remove-Item -LiteralPath $haltFile -ErrorAction SilentlyContinue }
     Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
 
@@ -151,6 +179,51 @@ Assert-True ($h.frame_id -eq "r-f0042" -and $h.last_acked_block -eq 17 -and $h.t
 Assert-True ($h.detail -match "PROGRESS timeout" -and $h.halted_at -and $h.instruction -match "Disconnect the keyboard's battery for at least 30 s" -and $h.instruction -notmatch "power switch \(") "halt: detail, time and plain-English instruction"
 Assert-True ((Get-Content -Raw $SupervisorLog) -match "HALTED \(session-open\)") "supervisor log says HALTED"
 
+# 2b. Sudden failures: three automatic retries, each with the marker removed, then halt.
+$s = Invoke-Scenario "sudden code 20 every time" -Plan @(, @(20, "check", "marker", "record", "sudden")) -Iterations 80
+$h = Read-Halt
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($s.UploaderStarts -eq 4) "1 run + 3 automatic retries (starts: $($s.UploaderStarts))"
+Assert-True ($log -notmatch "code 77") "the marker was removed before every retry"
+foreach ($n in 1..3) {
+    Assert-True ($log -match "automatic retry $n of 3 at \d\d:\d\d:\d\d" -and $log -match "Automatic retry $n of 3: session marker removed; starting" -and $log -match "Automatic retry $n of 3 FAILED \(code 20, signature sudden\)") "retry ${n}: scheduled, started and its failure logged"
+}
+Assert-True ($s.Halted -and $h.class -eq "session-open" -and $h.needs_power_cycle -and $h.instruction -eq $PowerCycleInstruction) "then halted exactly as before"
+Assert-True ($h.auto_retries -eq 3 -and $h.signature -eq "sudden" -and $h.reason -match "all 3 automatic retries have failed") "halt file: 3 automatic retries, signature sudden"
+Assert-True ($r.status -eq "exhausted" -and $r.retry -eq 3 -and @($r.events).Count -ge 7) "retry state: exhausted, with the events ($(@($r.events).Count))"
+Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer untouched"
+
+# 2c. A retry that delivers (and keeps running, as in watch mode) ends the incident.
+$s = Invoke-Scenario "sudden code 20, then a retry that delivers" -Plan @(@(20, "marker", "record", "sudden"), @(0, "check", "deliver", "stay")) -Iterations 40
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt)) "one retry, not halted"
+Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and $s.SuddenRetries -eq 0 -and $s.RetryInFlight -eq 0) "success logged while the uploader runs; count reset"
+Assert-True ($r.status -eq "succeeded" -and $r.retry -eq 1) "retry state: succeeded"
+
+# 2d. Slowing and unclassified failures still halt at once.
+foreach ($sig in "slowing", "unclassified") {
+    $s = Invoke-Scenario "code 20, signature $sig" -Plan @(, @(20, "marker", "record", $sig)) -Iterations 20
+    $h = Read-Halt
+    Assert-True ($s.UploaderStarts -eq 1 -and $h.class -eq "session-open" -and $h.auto_retries -eq 0 -and $h.reason -match "signature $sig, so no automatic retry") "signature ${sig}: halted at once, no retry"
+}
+$s = Invoke-Scenario "code 21 with a sudden-looking record" -Plan @(, @(21, "marker", "record", "sudden")) -Iterations 20
+Assert-True ($s.UploaderStarts -eq 1 -and (Read-Halt).needs_power_cycle) "code 21 halts at once"
+
+# 2e. A delivery between failures starts a new incident with 3 fresh retries.
+$s = Invoke-Scenario "sudden, then deliver-and-fail, then sudden x4" `
+    -Plan @(@(20, "marker", "record", "sudden"), @(20, "deliver", "marker", "record", "sudden"), @(20, "marker", "record", "sudden")) -Iterations 110
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($s.UploaderStarts -eq 5) "1 + 1 retry (delivered, then failed) + 3 fresh retries (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and (Read-Halt).auto_retries -eq 3) "the delivery reset the count; halted after 3 more"
+
+# 2f. A retry that can't reach the keyboard (code 10) keeps its number and the normal backoff.
+$s = Invoke-Scenario "sudden, then code 10, then deliver" -Plan @(@(20, "marker", "record", "sudden"), @(10, "check"), @(0, "deliver", "stay")) -Iterations 60
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($log -match "Automatic retry 1 of 3 has not reached the keyboard yet \(code 10\)" -and $log -match "Automatic retry 1 of 3 SUCCEEDED") "code 10 during a retry: backoff, then retry 1 succeeds"
+Assert-True ($s.UploaderStarts -eq 3 -and -not $s.Halted) "not halted (starts: $($s.UploaderStarts))"
+
 # 3. Uploader killed mid-transfer: the exit code is meaningless (1) but the marker survives.
 $s = Invoke-Scenario "killed (code 1) with marker" -Plan @(, @(1, "marker", "stale")) -Iterations 20
 $h = Read-Halt
@@ -201,6 +274,24 @@ try {
     Remove-Job $clearer -Force
 }
 
+# A retry that was waiting when the previous supervisor stopped is not resumed.
+Write-Host "== leftover waiting retry"
+Remove-Item -LiteralPath $haltFile, "$stream.session" -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+Write-RetryState -HaltFile $haltFile -Status "waiting" -Retry 2 -Event "retry 2 of 3 scheduled"
+$state = New-SupervisorState
+try {
+    Invoke-SupervisorLoop -State $state `
+        -StartRenderer { Start-LoggedProcess -Name "renderer" -FilePath $python -Arguments @($sleeper) -WorkingDirectory $work -StdOut (Join-Path $logs "r.log") -StdErr (Join-Path $logs "re.log") } `
+        -StartUploader { Start-LoggedProcess -Name "ble" -FilePath $python -Arguments @($sleeper) -WorkingDirectory $work -StdOut (Join-Path $logs "b.log") -StdErr (Join-Path $logs "be.log") } `
+        -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations 2
+} finally {
+    foreach ($p in @($state.Renderer, $state.Uploader)) { try { Stop-LoggedProcess $p } catch {} }
+}
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($r.status -eq "abandoned" -and (Get-Content -Raw $SupervisorLog) -match "it is not resumed" -and $state.RetryInFlight -eq 0) "marked abandoned and logged; the new supervisor starts fresh"
+Remove-Item -LiteralPath (Get-RetryStatePath $haltFile)
+
 # STATUS_STACK.ps1 (dev layout) shows the halt prominently. It only reads, so a copy
 # can run against a fake install root.
 Write-Host "== STATUS_STACK.ps1"
@@ -218,7 +309,29 @@ Assert-True ($out -match "Status\s+: HALTED") "status verdict is HALTED"
 Assert-True ($out -match "exit code 20") "status shows the exit code"
 Assert-True ($out -match "r-f0042; last ACKed block 17/53") "status shows frame and block"
 Assert-True ($out -match "Action\s+: Disconnect the keyboard's battery.*START_STACK\.ps1") "status gives the power-cycle instruction"
+# Halt after automatic retries: STATUS says so.
+$decision = Get-UploaderDecision -ExitCode 20 -Session @{ frame_id = "r-f0042" } -Attempt 4 -Signature "sudden" -SuddenRetries 3
+Write-UploaderHaltState -Path (Join-Path $root "logs\uploader_halted.json") -Decision $decision -ExitCode 20 `
+    -Session @{ frame_id = "r-f0042"; last_acked_block = "51"; total_blocks = "53" } `
+    -ExitRecord @{ detail = "timed out waiting for PROGRESS after 4K block 52/53"; signature = "sudden" } -Attempts 4 -AutoRetries 3
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: HALTED" -and $out -match "Signature\s+: sudden" -and $out -match "Auto-retries\s+: 3 automatic retries used before halting") "a halt after retries shows the signature and the retries"
 Remove-Item (Join-Path $root "logs\uploader_halted.json")
+
+# A waiting retry outranks the open session marker that goes with it.
+$retryState = Join-Path $root "logs\uploader_retry.json"
+Set-Content -LiteralPath "$fakeStream.session" -Encoding ASCII -Value "frame_id=r-f0042", "last_acked_block=26", "total_blocks=53"
+Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "waiting" -Retry 1 -LastFailure "code 20, signature sudden, last ACKed block 26" `
+    -NextAttemptAt ((Get-Date).AddSeconds(120)) -Event "sudden failure; retry 1 of 3 scheduled"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: RETRYING - sudden upload failure; automatic retry 1 of 3 at \d\d:\d\d:\d\d" -and $out -notmatch "HALTED") "a waiting retry is shown as RETRYING, with its time"
+Assert-True ($out -match "Auto-retry\s+: waiting, retry 1 of 3; last failure: code 20, signature sudden, last ACKed block 26" -and $out -match "retry 1 of 3 scheduled") "the retry line and its events are shown"
+Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "succeeded" -Retry 1 -Event "retry 1 of 3 succeeded (frame delivered)"
+Remove-Item -LiteralPath "$fakeStream.session"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -notmatch "RETRYING" -and $out -match "Auto-retry\s+: succeeded, retry 1 of 3") "a finished retry is history, not the status"
+Remove-Item -LiteralPath $retryState
+
 Set-Content -LiteralPath "$fakeStream.session" -Encoding ASCII -Value "frame_id=r-f0042", "last_acked_block=5", "total_blocks=53"
 $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
 Assert-True ($out -notmatch "HALTED" -and $out -match "media session open: frame r-f0042, block 5/53") "an in-progress upload is shown, not as halted"
