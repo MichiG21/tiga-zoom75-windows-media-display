@@ -135,16 +135,100 @@ fn notification_line(uuid: &Uuid, value: &[u8], phase: &str, waited: Duration) -
     )
 }
 
-/// Logs `n` unless it is PROGRESS or COMPLETE. `since` is when the current wait began.
+// ---- Repeats -----------------------------------------------------------------------
+//
+// The keyboard sends the same 28-byte status message on 1f400002 every 1-3 s
+// (`88 00 00 00 00 00 14 2a 03 0d …`, docs/PROTOCOL_NOTES.md). Logged in full each time
+// it was ~300 KB/h of ble.log and pushed older upload history out of the 3 x 5 MB
+// rotation. So a notification identical to the one logged just before it (same
+// characteristic, same bytes) is only counted. The count goes out as one summary line
+// when a different notification arrives, before each UPLOAD START / COMPLETE / FAILED,
+// and before the uploader exits. Anything that differs is still logged at once, in full.
+
+#[derive(Default)]
+struct RepeatFilter {
+    /// The last notification logged in full.
+    current: Option<(Uuid, Vec<u8>)>,
+    /// Identical ones counted since that line or the last summary.
+    repeats: usize,
+    first_repeat: String,
+    last_repeat: String,
+}
+
+impl RepeatFilter {
+    const fn new() -> Self {
+        RepeatFilter { current: None, repeats: 0, first_repeat: String::new(), last_repeat: String::new() }
+    }
+
+    /// The lines to log for one notification, in order: nothing for a repeat; otherwise a
+    /// pending summary (if any) and then `line`. `now` is the arrival time.
+    fn note(&mut self, uuid: &Uuid, value: &[u8], line: String, now: &str) -> Vec<String> {
+        if self.current.as_ref().is_some_and(|(u, v)| u == uuid && v == value) {
+            if self.repeats == 0 {
+                self.first_repeat = now.to_string();
+            }
+            self.repeats += 1;
+            self.last_repeat = now.to_string();
+            return Vec::new();
+        }
+        let mut lines: Vec<String> = self.flush().into_iter().collect();
+        lines.push(line);
+        self.current = Some((*uuid, value.to_vec()));
+        lines
+    }
+
+    /// The summary of the repeats counted so far, if any. Later identical notifications
+    /// are counted again from zero, so each summary covers the span since the previous
+    /// line about this value.
+    fn flush(&mut self) -> Option<String> {
+        if self.repeats == 0 {
+            return None;
+        }
+        let (uuid, value) = self.current.as_ref()?;
+        let hex: Vec<String> = value.iter().map(|b| format!("{b:02x}")).collect();
+        let times = if self.repeats == 1 { "time" } else { "times" };
+        let line = format!(
+            "NOTIFY repeated {} more {times} char={} len={} value={} first={} last={}",
+            self.repeats,
+            &uuid.to_string()[..8],
+            value.len(),
+            hex.join(" "),
+            self.first_repeat,
+            self.last_repeat
+        );
+        self.repeats = 0;
+        Some(line)
+    }
+}
+
+static NOTIFY_REPEATS: std::sync::Mutex<RepeatFilter> = std::sync::Mutex::new(RepeatFilter::new());
+
+/// Logs `n` unless it is PROGRESS or COMPLETE, or a repeat of the previous logged one.
+/// `since` is when the current wait began.
 fn log_notification(n: &btleplug::api::ValueNotification, phase: &str, since: Instant) {
     if should_log_notification(&n.value) {
-        log!("{}", notification_line(&n.uuid, &n.value, phase, since.elapsed()));
+        let line = notification_line(&n.uuid, &n.value, phase, since.elapsed());
+        let lines = match NOTIFY_REPEATS.lock() {
+            Ok(mut f) => f.note(&n.uuid, &n.value, line, &utc_now()),
+            Err(_) => vec![line],
+        };
+        for l in lines {
+            log!("{l}");
+        }
+    }
+}
+
+/// Writes out the pending repeat summary, if there is one.
+fn flush_notification_repeats() {
+    if let Some(line) = NOTIFY_REPEATS.lock().ok().and_then(|mut f| f.flush()) {
+        log!("{line}");
     }
 }
 
 /// Waits `d` between uploads while logging whatever arrives. Returns how many
-/// notifications were logged. A stream that has ended is reported once (`ended`) and
-/// then left alone; noticing it is still the next upload's job, as before.
+/// notifications it handled (logged, or counted as repeats); PROGRESS and COMPLETE are
+/// not included. A stream that has ended is reported once (`ended`) and then left alone;
+/// noticing it is still the next upload's job, as before.
 async fn listen_between_uploads<S>(notifications: &mut S, d: Duration, ended: &mut bool) -> usize
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
@@ -1288,6 +1372,7 @@ async fn main() -> ExitCode {
     };
     match run(&opts).await {
         Ok(()) => {
+            flush_notification_repeats();
             log!("EXIT code=0 (success)");
             ExitCode::SUCCESS
         }
@@ -1296,6 +1381,7 @@ async fn main() -> ExitCode {
 }
 
 fn exit_with(stream_path: Option<&Path>, f: Failed) -> ExitCode {
+    flush_notification_repeats();
     let line = format!(
         "EXIT code={} ({}): {}{}",
         f.kind.code(),
@@ -1417,6 +1503,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         let crc = format!("{:08x}", crc32(&stream));
         let frame_id = frame_id_for(stream_path, &crc);
         println!();
+        flush_notification_repeats();
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
         let started = Instant::now();
@@ -1439,6 +1526,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         first_on_connection = false;
         let summary = timings.summary();
         if let Err(mut f) = result {
+            flush_notification_repeats();
             log!("UPLOAD FAILED frame={frame_id} crc32={crc} after {elapsed:.2}s: {}", f.detail);
             log!("{}", summary.log_line(&frame_id));
             if f.kind == Failure::Interrupted {
@@ -1449,6 +1537,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
             return Err(f);
         }
 
+        flush_notification_repeats();
         log!("UPLOAD COMPLETE frame={frame_id} crc32={crc} in {elapsed:.2}s");
         log!("{}", summary.log_line(&frame_id));
         record_delivery(stream_path, &frame_id, &crc, elapsed, Some(&summary));
@@ -1570,6 +1659,63 @@ mod tests {
         for v in [C1_ACK_A, C1_ACK_B, C2_ACK_A, C2_ACK_B, &[0x88, 0, 0, 0, 0, 0, 0x03, 0x0b, 0x08, 0x06, 0x07][..], &[][..]] {
             assert!(should_log_notification(v), "{v:02x?}");
         }
+    }
+
+    const STATUS28: &[u8] = &[
+        0x88, 0, 0, 0, 0, 0, 0x14, 0x2a, 0x03, 0x0d, 0, 0, 0x01, 0x40, 0, 0, 0x01, 0x40, 0, 0, 0x01, 0x40, 0, 0, 0x01,
+        0x64, 0, 0,
+    ];
+
+    #[test]
+    fn repeat_filter_logs_a_repeat_once_then_a_summary() {
+        let mut f = RepeatFilter::new();
+        let line = |v: &[u8]| notification_line(&CHAR_NOTIFY, v, "between uploads", Duration::ZERO);
+        let first = f.note(&CHAR_NOTIFY, STATUS28, line(STATUS28), "T1");
+        assert_eq!(first.len(), 1);
+        assert!(first[0].starts_with("NOTIFY char=1f400002 len=28 value=88 00 00 00 00 00 14 2a 03 0d"), "{}", first[0]);
+        // Identical ones are only counted.
+        for t in ["T2", "T3", "T4"] {
+            assert!(f.note(&CHAR_NOTIFY, STATUS28, line(STATUS28), t).is_empty());
+        }
+        // A different one: the summary first, then the new line, in full.
+        let other = &[0x88, 0x01];
+        let out = f.note(&CHAR_NOTIFY, other, line(other), "T5");
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(
+            out[0],
+            "NOTIFY repeated 3 more times char=1f400002 len=28 value=88 00 00 00 00 00 14 2a 03 0d 00 00 01 40 00 00 01 40 \
+             00 00 01 40 00 00 01 64 00 00 first=T2 last=T4"
+        );
+        assert_eq!(out[1], line(other));
+        // The status message after that is new again, so it is logged in full.
+        assert_eq!(f.note(&CHAR_NOTIFY, STATUS28, line(STATUS28), "T6").len(), 1);
+    }
+
+    #[test]
+    fn repeat_filter_flushes_at_upload_boundaries_and_keeps_counting() {
+        let mut f = RepeatFilter::new();
+        let line = notification_line(&CHAR_NOTIFY, STATUS28, "between uploads", Duration::ZERO);
+        assert_eq!(f.flush(), None, "nothing seen yet");
+        f.note(&CHAR_NOTIFY, STATUS28, line.clone(), "T1");
+        assert_eq!(f.flush(), None, "logged once, no repeats yet: no summary");
+        f.note(&CHAR_NOTIFY, STATUS28, line.clone(), "T2");
+        let s = f.flush().unwrap();
+        assert!(s.starts_with("NOTIFY repeated 1 more time char=1f400002 len=28") && s.ends_with("first=T2 last=T2"), "{s}");
+        assert_eq!(f.flush(), None, "flushing twice adds nothing");
+        // After a summary (say at UPLOAD START) the same value is counted, not re-logged.
+        assert!(f.note(&CHAR_NOTIFY, STATUS28, line.clone(), "T3").is_empty());
+        assert!(f.note(&CHAR_NOTIFY, STATUS28, line.clone(), "T4").is_empty());
+        assert!(f.flush().unwrap().contains("repeated 2 more times") );
+    }
+
+    #[test]
+    fn repeat_filter_tells_characteristics_apart() {
+        let mut f = RepeatFilter::new();
+        let v = &[0x01, 0x02];
+        assert_eq!(f.note(&CHAR_NOTIFY, v, "a".into(), "T1"), ["a"]);
+        // Same bytes on the other characteristic: different notification, logged.
+        assert_eq!(f.note(&CHAR_NOTIFY2, v, "b".into(), "T2"), ["b"]);
+        assert!(f.note(&CHAR_NOTIFY2, v, "b".into(), "T3").is_empty());
     }
 
     #[test]
