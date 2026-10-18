@@ -1,7 +1,9 @@
 # Clean stop: STOP_STACK asks the uploader instead of killing it
 
 Status: implemented on `feature/clean-stop`, **not verified on hardware**. Not for merge
-before the hardware test below.
+before the hardware test below. Rebased on 2026-10-18 onto `main` with the notification
+log (#25, #30), the scan stop (#26) and the automatic retry after a sudden failure (#28);
+see "With the automatic retry" below.
 
 ## Why
 
@@ -43,14 +45,43 @@ tested that yet; this change makes it testable.
    - `STOP_STACK: BLE uploader did not exit within 30 s; force-killing it (pid 1234).`
    - `STOP_STACK: no BLE uploader was running.`
 4. **Supervisor.** When the uploader exits while `<stream>.stop` exists, the exit is
-   classed `stopped-on-request`: logged, not counted as a failure, not restarted. A session
-   marker or code 20/21 still wins and halts, because then the keyboard does need a
-   battery disconnect. While the file exists the supervisor starts no uploader. If the
+   classed `stopped-on-request`: logged, not counted as a failure, not restarted. A real
+   failure still wins: a **sudden** code 20 is scheduled for its automatic retry as usual
+   (#28), and a session marker, a slowing or unclassified code 20, or 21 still halts.
+   While the file exists the supervisor starts no uploader, not even a waiting retry. If the
    file disappears while the supervisor is still running (STOP_STACK interrupted), it
    logs `Stop request withdrawn` and starts the uploader again, like a cleared halt.
 5. **Stale requests.** A supervisor removes any `<stream>.stop` when it starts (the
    scheduled task at logon does not go through START_STACK), and `START_STACK.ps1`
    removes it before `Start-ScheduledTask`.
+
+### With the automatic retry (#28) and the notification log (#25, #30)
+
+- **An exit on request is never a failed retry.** If the uploader running as automatic
+  retry N exits 0 because of the request, before delivering a frame, the supervisor logs
+  `Automatic retry N of 3 ended by a stop request before it delivered a frame; not
+  counted as a failure.` and marks the retry `cancelled`. The retry count and the
+  consecutive-failure count are unchanged, and nothing is restarted. If it had already
+  delivered, it was a success, logged as such.
+- **A stop during the 120 s retry wait cancels the wait.** No uploader is running then,
+  so STOP_STACK writes no request (`STOP_STACK: no BLE uploader was running.`). The
+  waiting retry dies with the supervisor when the task is stopped. Afterwards STOP_STACK
+  marks it cancelled in `logs\uploader_retry.json` and logs `STOP_STACK: automatic retry
+  N of 3 was waiting; cancelled. …`, so `STATUS_STACK.ps1` no longer shows `RETRYING`.
+  The session marker of the failed upload stays; `START_STACK.ps1` clears it, as after
+  any halt. If a request does appear while a retry waits (and the supervisor is still
+  alive), the supervisor logs `Stop requested while automatic retry N of 3 is waiting; it
+  will not start while the request stands.` and holds it.
+- **An upload that fails while a stop is waiting for it** is reported as such, not as a
+  clean exit: `STOP_STACK: BLE uploader exited after 6.2 s, but not on request: the upload
+  it was finishing failed (code 20, signature sudden: …)`. STOP_STACK tells the two
+  apart by whether the uploader wrote `<stream>.exit` after the request. It only does
+  that on a failure.
+- **Notification log:** a pending `NOTIFY repeated …` summary (#30) is written before
+  `STOP requested; …`, so the uploader's last lines read summary, `STOP requested`,
+  `Disconnected cleanly.`, `EXIT code=0 (success)`.
+- **Scan stop (#26)** doesn't interact: the request is only checked once connected (or
+  before scanning at all).
 
 ### Why a request file
 

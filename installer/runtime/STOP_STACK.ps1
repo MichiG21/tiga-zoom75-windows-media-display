@@ -12,6 +12,7 @@ $SupervisorLog = Join-Path $Logs "startup_supervisor.log"
     -GetUploaderProcessIds {
         Get-CimInstance Win32_Process -Filter "Name = 'tiga_stream_watch_flow.exe'" | ForEach-Object { $_.ProcessId }
     } `
+    -HaltFile (Join-Path $Logs "uploader_halted.json") `
     -StopTask { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } `
     -ForceKillAll {
         Get-CimInstance Win32_Process | Where-Object {

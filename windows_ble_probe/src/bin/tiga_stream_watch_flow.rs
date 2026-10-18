@@ -1510,6 +1510,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     loop {
         // Only here, between uploads: never in the middle of one.
         if stop_requested(stream_path) {
+            flush_notification_repeats();
             log!("STOP requested; no upload in progress, disconnecting.");
             break;
         }
