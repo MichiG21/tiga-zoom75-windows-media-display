@@ -12,5 +12,7 @@ copyright notice:
 
 See `reference/zoom-sync-rgb565-test/LICENSE` for the full license text.
 
-The root MIT license applies to the TIGA Windows Media Display project files
-unless a file or nested directory states otherwise.
+The root license, GPL-2.0 (see `LICENSE`), applies to the TIGA Windows Media
+Display project files unless a file or nested directory states otherwise. The
+MIT-licensed zoom-sync reference tree is compatible with it and keeps its own
+license.
