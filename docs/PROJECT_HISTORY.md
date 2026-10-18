@@ -640,6 +640,10 @@ observation each:
 
 So **30 s is a working minimum, not a proven threshold.** Every recovery instruction now
 says: disconnect the battery for at least 30 s, pressing a few keys.
+*Correction 2026-10-18 (sixth part):* a ~1.5 min full power-off was followed by a failed
+first upload (13:41), and a retry with no power-off at all worked (13:42). The duration
+record is weaker evidence than it looked: a first upload fails about 1 time in 3
+regardless.
 
 **Two failure signatures, both on the correct device (`07:01…`):**
 
@@ -787,6 +791,9 @@ failure gives the block whose PROGRESS never came and the time from `UPLOAD STAR
    rather than a clean reset). Nobody has ever uploaded into a keyboard left *un*-reset
    after a failure and seen the result: the 21:08–21:09 attempts went to the wrong
    device. That missing comparison is what would separate the two.
+   *Update 2026-10-18:* it has now been done three times. 13:42 (no reset, 46 s after a
+   halt) and 14:11 (~2.5 min) completed; 14:09 (~5 min) failed (sixth part). A halted
+   keyboard does not need a reset to accept a new upload.
 4. **Could the uploader spot trouble earlier?** *Proposal at the time. The logging part
    (per-block latency, `SLOW` lines, the block-5 warning, CONTROL ACK times) was added
    in #22, 2026-10-16, and first ran on hardware that evening (fourth part below); see
@@ -867,6 +874,10 @@ what preceded it (`ble.log`, both installs):
 | Later upload on an open connection | 1 (21:39) | 62 |
 
 \* 21:05 followed stopping the old `tiga_ble_re_tools` stack; what it had last done isn't in these logs.
+
+*Update 2026-10-18 (sixth part):* the ≥ 30 s row now has a failure (13:41, after a
+~1.5 min full power-off), and a first upload after a cold Windows boot failed too (13:20).
+Across all 23 first uploads, 9 failed; a reset does not make the next one safe.
 
 Small numbers, but it sharpens "failures cluster at connection start". The risky moment
 seems to be the **first upload after a restart that did not reset the keyboard**.
@@ -1044,7 +1055,9 @@ held a Bluetooth connection to the keyboard, and the supervisor and renderer nev
 to it. So STOP_STACK has no mechanism here by which it would change the keyboard's
 state. The disconnect duration has a known record, though: 10–15 s failed, 25 s without
 key presses failed, and every disconnect of 30 s or more worked. **That explains the 21:09
-failure without STOP_STACK.** **The recovery advice stays as it is:** disconnect the
+failure without STOP_STACK.** *Correction 2026-10-18:* it is one possible explanation,
+not the only one. A first upload fails about 1 time in 3 even after a long power-off
+(sixth part), so 21:09 is equally consistent with that base rate. **The recovery advice stays as it is:** disconnect the
 battery for at least 30 s, pressing a few keys (about a minute with key presses is what
 worked here), then START_STACK.
 Running STOP_STACK first does no harm and gives a fresh supervisor, so it's a reasonable
@@ -1067,6 +1080,89 @@ failed (21:09: 25 s, no key presses, supervisor not restarted, RSSI −66). Ever
 with a disconnect of 30 s or more has worked (22:49 and 23:06 on 10-15 at 30 s; 18:54 on
 10-16 at 40 s; 21:14 at about a minute with key presses). Disconnects that were too short:
 10–15 s (22:44 on 10-15) and 25 s without key presses (21:09 on 10-16).
+*No longer true as of 2026-10-18:* the ~1.5 min power-off before 13:41 was followed by
+a failure (sixth part).
+
+#### Sixth part: 2026-10-18, failures after a boot and after a power-off, 13:20–14:11
+
+Sources: `tiga-fresh-test\logs\` (`ble.log`, `startup_supervisor.log`,
+`renderer.log`), `tiga_display_command.ack`, the Windows System event log (boot and
+shutdown times), GitHub (#7), and Michi's account. Full table and analysis:
+`docs/investigations/upload_attempts.csv` and `UPLOAD_FAILURES_2026-10-18.md`.
+
+**Resets are real power-offs (Michi, 2026-10-18).** With USB-C plugged in, the front
+panel won't come off, so every "battery disconnect" in this section was: unplug USB-C,
+pop off the front panel, lift the PCB sandwich so the magnetic battery contacts
+separate, wait, reassemble, plug USB-C back in. **Every reset was a complete power-off
+and also included a USB unplug and replug.** "The reset didn't really happen" is ruled
+out for all of them. Also: the keyboard types over that USB-C cable, which is always
+plugged in, so typing doesn't use Bluetooth.
+
+**#7 verified and closed.** On 2026-10-16 at 23:07:01 Standby + Shut Down rendered the
+standby frame (f0010). The ack was written at 23:07:02, the upload completed at
+23:07:13 (10.80 s, one `SLOW` block 1 of 1009 ms), and Windows shut down at 23:07:27
+(event 6006). Shutdown came after the delivery, as designed. #7 was closed on GitHub on
+2026-10-18 at 13:31.
+
+| Time | What happened |
+|---|---|
+| 13:14:34 | Windows boots (keyboard idle since 2026-10-16 23:07) |
+| 13:20:02 | Supervisor launched at logon; keyboard seen at once, RSSI −69 |
+| 13:20:06 | Startup standby frame (`c3b19bf6`). **Failed after 7.02 s: no PROGRESS for block 27/53.** `TIMING median=157ms p90=173ms max=195ms control1_ack=21ms control2_ack=106ms`, a perfectly healthy pace. Halt 13:20:15 |
+| 13:29:25 | Renderer installs the Morse band frame (`0714ef6a`); not uploaded (halted) |
+| (before 13:41) | STOP_STACK; **full power-off for about 1.5 min**; reconnect; START_STACK |
+| 13:41:20 | New supervisor and renderer; keyboard seen at once, **RSSI −55** |
+| 13:41:21 | Startup standby (`a3f02116`). **Failed after 8.50 s: no PROGRESS for block 37/53.** `median=154ms p90=172ms max=193ms control1_ack=26ms control2_ack=66ms`. Halt 13:41:30 |
+| 13:42:16 | START_STACK again, **no power-off**, 46 s after the halt (halt cleared on the running supervisor). RSSI −61 |
+| 13:42:19 | **Completed in 8.71 s** (`control1_ack=30ms control2_ack=70ms`), then five more, 9.52–10.00 s |
+| 14:03:57 | 7th upload on that connection (media changed). **Failed after 11.69 s: no PROGRESS for block 52/53**, healthy pace (median 150 ms). Halt 14:04:09 |
+| 14:09:03 | **Wait-then-retry:** START_STACK, no power-off, ~5 min after the halt. RSSI −58 |
+| 14:09:06 | **Failed after 5.79 s**: block 5 at 1.01 s, then block 6 took **1860 ms** (`SLOW`), then no PROGRESS for block 7. `control1_ack=19ms control2_ack=75ms`. Halt 14:09:13 |
+| 14:11:39 | START_STACK again, **no power-off**, ~2.5 min after the halt. Cached address seen with an empty name, RSSI −70 |
+| 14:11:43 | **Completed in 8.66 s**, `median=150ms max=195ms control1_ack=28ms control2_ack=69ms` |
+
+Michi's account of the recovery: "stop stack, battery disconnect for approx.
+1.5 minutes, put back in and connect, then start stack. Waited 20 seconds and nothing
+appeared. Ran START_STACK again, and then it caught itself within 10 or 15 seconds."
+The logs agree: 13:41:30 halt, 13:42:16 START_STACK, 13:42:28 completed.
+
+**What today changes:**
+
+- **A full power-off does not make the next upload safe.** 13:41 failed after ~1.5 min
+  without power. "Every recovery with a disconnect of 30 s or more has worked" no longer
+  holds: now 4 of 5 known-length resets of 30 s or more were followed by a completed
+  upload.
+- **A halted keyboard doesn't need a power-off.** 13:42 (46 s after a halt) and 14:11
+  (~2.5 min after one) completed with no reset, and the 13:42 connection completed five
+  more. 14:09 (~5 min) and 22:46 on 2026-10-15 (116 s) failed the same way. Retry
+  without any reset: **2 of 4**; the delay sorts nothing.
+- **Signal strength doesn't explain it.** −55 (the strongest on record) failed; −79
+  worked four times on 2026-10-15.
+- **The first upload on a connection fails about 1 time in 3.** Across all 24 first
+  uploads, 9 failed; across 91 later uploads, 3 failed. **Attempts that followed a
+  failure failed 5 of 12; attempts whose previous upload had completed, 4 of 12.**
+  Sudden failures fit independent draws at that rate. "Stuck until a power-off" is
+  refuted by 13:42 and 14:11. The one hint of a persisting state is the slowing pair at
+  block 11 (2026-10-15 22:44/22:46). With that base rate, the old
+  "30 s works, shorter doesn't" record (4 of 4 and 0 of 2) could have arisen by chance
+  (0.7⁴ ≈ 0.24). It remains the best guess for the slowing failures of 2026-10-15 22:44/22:46.
+- **No warning before the stall** at 13:20, 13:41 and 14:03: block latencies were
+  normal right up to it, and the CONTROL ACK times match successful first uploads.
+  14:09 is the first case where `TIMING` caught a single slow block immediately before a
+  stall.
+- **Block numbers:** 27 (the block containing the frame-1/frame-2 boundary), 37, 52 and 7.
+  Across all 12 failures there is no clustering at the boundary.
+
+**Recovery advice, unchanged in the code for now:** the halt instruction still says
+power off, then START_STACK. A power-off was followed by a completed upload 5 of 6
+times after a failure, a plain retry 2 of 4. The difference is within chance (n = 6 and 4).
+If the first upload after a power-off fails, it's a new failure at the ordinary
+first-upload rate, not proof the power-off was too short. **What it would mean for bug
+A:** if independence holds, a bounded automatic retry after a *sudden* code 20 (wait
+60–120 s, at most two retries, then halt; slowing failures halt at once) would recover
+most halts without a power-off. That revises bug A's "never retry after CONTROL2" and is
+Michi's decision. The proposal and the confirming experiment (retry-first recovery on
+the next 6–8 halts) are in `docs/investigations/UPLOAD_FAILURES_2026-10-18.md`.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
