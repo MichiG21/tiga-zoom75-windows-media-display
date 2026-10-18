@@ -99,6 +99,81 @@ macro_rules! log {
     ($($arg:tt)*) => { println!("{} {}", utc_now(), format!($($arg)*)) };
 }
 
+// ---- Notification log (docs/investigations/UPLOAD_FAILURES_2026-10-18.md, proposal A) --
+//
+// Logging only: nothing here changes what is written or when. Every notification other
+// than PROGRESS and COMPLETE is logged with its characteristic, its value in hex, what
+// the uploader was waiting for when it arrived, and how long that wait had lasted.
+// Before this, anything else the keyboard sent (an error, a different status) was
+// discarded unseen, including at the moment of a stall. Between uploads the stream is
+// read too, so a notification is logged when it arrives rather than not at all.
+
+/// Short name for the notifications the protocol expects (other than PROGRESS/COMPLETE).
+fn known_notification(value: &[u8]) -> Option<&'static str> {
+    match value {
+        v if v == C1_ACK_A => Some("CONTROL1 ACK A"),
+        v if v == C1_ACK_B => Some("CONTROL1 ACK B"),
+        v if v == C2_ACK_A => Some("CONTROL2 ACK A"),
+        v if v == C2_ACK_B => Some("CONTROL2 ACK B"),
+        _ => None,
+    }
+}
+
+fn should_log_notification(value: &[u8]) -> bool {
+    value != PROGRESS && value != COMPLETE
+}
+
+fn notification_line(uuid: &Uuid, value: &[u8], phase: &str, waited: Duration) -> String {
+    let hex: Vec<String> = value.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "NOTIFY char={} len={} value={}{} while={phase} after={:.0}ms",
+        &uuid.to_string()[..8],
+        value.len(),
+        hex.join(" "),
+        known_notification(value).map(|k| format!(" ({k})")).unwrap_or_default(),
+        ms(waited)
+    )
+}
+
+/// Logs `n` unless it is PROGRESS or COMPLETE. `since` is when the current wait began.
+fn log_notification(n: &btleplug::api::ValueNotification, phase: &str, since: Instant) {
+    if should_log_notification(&n.value) {
+        log!("{}", notification_line(&n.uuid, &n.value, phase, since.elapsed()));
+    }
+}
+
+/// Waits `d` between uploads while logging whatever arrives. Returns how many
+/// notifications were logged. A stream that has ended is reported once (`ended`) and
+/// then left alone; noticing it is still the next upload's job, as before.
+async fn listen_between_uploads<S>(notifications: &mut S, d: Duration, ended: &mut bool) -> usize
+where
+    S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
+{
+    let since = Instant::now();
+    let deadline = sleep(d);
+    tokio::pin!(deadline);
+    let mut logged = 0;
+    while !*ended {
+        tokio::select! {
+            _ = &mut deadline => return logged,
+            n = notifications.next() => match n {
+                Some(n) => {
+                    if should_log_notification(&n.value) {
+                        logged += 1;
+                    }
+                    log_notification(&n, "between uploads", since);
+                }
+                None => {
+                    *ended = true;
+                    log!("NOTIFY stream ended while idle (between uploads)");
+                }
+            }
+        }
+    }
+    deadline.await;
+    logged
+}
+
 fn sidecar_path(stream_path: &Path, ext: &str) -> PathBuf {
     let mut name = stream_path.as_os_str().to_owned();
     name.push(ext);
@@ -488,10 +563,12 @@ async fn wait_for_ack_pair<S>(
     a_expected: &[u8],
     b_expected: &[u8],
     timeout_ms: u64,
+    phase: &str,
 ) -> Result<(), Box<dyn Error>>
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
 {
+    let since = Instant::now();
     let timeout = sleep(Duration::from_millis(timeout_ms));
     tokio::pin!(timeout);
     let (mut a, mut b) = (false, false);
@@ -501,6 +578,7 @@ where
             _ = &mut timeout => break,
             n = notifications.next() => {
                 let Some(n) = n else { return Err("notification stream ended".into()); };
+                log_notification(&n, phase, since);
                 if n.value.as_slice() == a_expected { a = true; }
                 if n.value.as_slice() == b_expected { b = true; }
                 if a && b { return Ok(()); }
@@ -514,10 +592,12 @@ where
 async fn wait_for_progress<S>(
     notifications: &mut S,
     timeout_ms: u64,
+    phase: &str,
 ) -> Result<bool, Box<dyn Error>>
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
 {
+    let since = Instant::now();
     let timeout = sleep(Duration::from_millis(timeout_ms));
     tokio::pin!(timeout);
 
@@ -526,6 +606,7 @@ where
             _ = &mut timeout => return Ok(false),
             n = notifications.next() => {
                 let Some(n) = n else { return Err("notification stream ended".into()); };
+                log_notification(&n, phase, since);
                 if n.value.as_slice() == PROGRESS {
                     return Ok(true);
                 }
@@ -546,6 +627,7 @@ async fn wait_for_completion<S>(
 where
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
 {
+    let since = Instant::now();
     let timeout = sleep(Duration::from_millis(timeout_ms));
     tokio::pin!(timeout);
 
@@ -554,6 +636,7 @@ where
             _ = &mut timeout => return Ok(false),
             n = notifications.next() => {
                 let Some(n) = n else { return Err("notification stream ended".into()); };
+                log_notification(&n, "waiting for COMPLETE", since);
                 if n.value.as_slice() == COMPLETE {
                     return Ok(true);
                 }
@@ -632,14 +715,16 @@ where
         all_blocks_acked: false,
     };
 
-    // Drain stale notifications.
+    // Drain stale notifications (logged, then discarded as before).
+    let drain_started = Instant::now();
     let drain = sleep(Duration::from_millis(150));
     tokio::pin!(drain);
     loop {
         tokio::select! {
             _ = &mut drain => break,
             n = notifications.next() => {
-                if n.is_none() { return Err(p.fail("notification stream ended")); }
+                let Some(n) = n else { return Err(p.fail("notification stream ended")); };
+                log_notification(&n, "draining before CONTROL1", drain_started);
             }
         }
     }
@@ -648,7 +733,7 @@ where
     let control1_sent = Instant::now();
     peripheral.write(control, &control1_for(stream_len), WriteType::WithoutResponse).await
         .map_err(|e| p.fail(e))?;
-    wait_for_ack_pair(notifications, C1_ACK_A, C1_ACK_B, 1500).await
+    wait_for_ack_pair(notifications, C1_ACK_A, C1_ACK_B, 1500, "waiting for CONTROL1 ACK").await
         .map_err(|e| p.fail(e))?;
     timings.control1_ack_ms = Some(ms(control1_sent.elapsed()));
 
@@ -660,7 +745,7 @@ where
     let control2_sent = Instant::now();
     peripheral.write(control, &CONTROL2, WriteType::WithoutResponse).await
         .map_err(|e| p.fail(e))?;
-    wait_for_ack_pair(notifications, C2_ACK_A, C2_ACK_B, 1500).await
+    wait_for_ack_pair(notifications, C2_ACK_A, C2_ACK_B, 1500, "waiting for CONTROL2 ACK").await
         .map_err(|e| p.fail(e))?;
     timings.control2_ack_ms = Some(ms(control2_sent.elapsed()));
 
@@ -681,7 +766,8 @@ where
         if chunk.ends_4k_block {
             let block_no = p.last_acked_block + 1;
 
-            let ok = wait_for_progress(notifications, block_timeout_ms).await
+            let phase = format!("waiting for PROGRESS of block {block_no}/{total_blocks}");
+            let ok = wait_for_progress(notifications, block_timeout_ms, &phase).await
                 .map_err(|e| p.fail(e))?;
             if !ok {
                 return Err(p.fail(format!(
@@ -1228,6 +1314,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut last_frame_id = String::new();
     let mut device_recorded = false;
     let mut first_on_connection = true;
+    let mut stream_ended = false;
 
     loop {
         let stream = fs::read(stream_path).class(Failure::Fatal)?;
@@ -1236,7 +1323,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         if last_uploaded.as_deref() == Some(stream.as_slice()) {
             note_already_displayed(stream_path, &last_crc, &mut last_frame_id);
             if once { break; }
-            sleep(Duration::from_millis(250)).await;
+            listen_between_uploads(&mut notifications, Duration::from_millis(250), &mut stream_ended).await;
             continue;
         }
 
@@ -1287,7 +1374,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
             break;
         }
 
-        sleep(Duration::from_millis(100)).await;
+        listen_between_uploads(&mut notifications, Duration::from_millis(100), &mut stream_ended).await;
     }
 
     peripheral.disconnect().await.class(Failure::Unreachable)?;
@@ -1379,6 +1466,57 @@ mod tests {
         assert_eq!(sidecar_value(&d, "control1_ack_ms"), Some("40"));
         assert_eq!(sidecar_value(&d, "control2_ack_ms"), Some("55"));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn notification(value: &[u8]) -> btleplug::api::ValueNotification {
+        btleplug::api::ValueNotification { uuid: CHAR_NOTIFY, service_uuid: SERVICE_MEDIA, value: value.to_vec() }
+    }
+
+    #[test]
+    fn notification_log_skips_only_progress_and_complete() {
+        assert!(!should_log_notification(PROGRESS));
+        assert!(!should_log_notification(COMPLETE));
+        for v in [C1_ACK_A, C1_ACK_B, C2_ACK_A, C2_ACK_B, &[0x88, 0, 0, 0, 0, 0, 0x03, 0x0b, 0x08, 0x06, 0x07][..], &[][..]] {
+            assert!(should_log_notification(v), "{v:02x?}");
+        }
+    }
+
+    #[test]
+    fn notification_line_format() {
+        let line = notification_line(&CHAR_NOTIFY, C2_ACK_B, "waiting for CONTROL2 ACK", Duration::from_millis(76));
+        assert_eq!(
+            line,
+            "NOTIFY char=1f400002 len=11 value=88 00 00 00 00 00 03 0e 08 04 02 (CONTROL2 ACK B) \
+             while=waiting for CONTROL2 ACK after=76ms"
+        );
+        let line = notification_line(&CHAR_NOTIFY2, &[0x88, 0xee], "waiting for PROGRESS of block 7/53", Duration::from_millis(2412));
+        assert_eq!(line, "NOTIFY char=1f400004 len=2 value=88 ee while=waiting for PROGRESS of block 7/53 after=2412ms");
+        assert_eq!(notification_line(&CHAR_NOTIFY, &[], "between uploads", Duration::ZERO), "NOTIFY char=1f400002 len=0 value= while=between uploads after=0ms");
+    }
+
+    #[tokio::test]
+    async fn listening_between_uploads_logs_and_survives_a_closed_stream() {
+        let items = vec![notification(PROGRESS), notification(&[0x88, 0x01]), notification(COMPLETE), notification(C1_ACK_A)];
+        let mut stream = futures::stream::iter(items);
+        let mut ended = false;
+        let started = Instant::now();
+        let logged = listen_between_uploads(&mut stream, Duration::from_millis(60), &mut ended).await;
+        assert_eq!(logged, 2, "PROGRESS and COMPLETE are not logged");
+        assert!(ended, "the end of the stream is noticed");
+        assert!(started.elapsed() >= Duration::from_millis(60), "still waits the full time");
+        // Once ended, later calls just wait.
+        let again = Instant::now();
+        assert_eq!(listen_between_uploads(&mut stream, Duration::from_millis(30), &mut ended).await, 0);
+        assert!(again.elapsed() >= Duration::from_millis(30));
+    }
+
+    #[tokio::test]
+    async fn listening_returns_on_time_with_an_open_quiet_stream() {
+        let mut quiet = futures::stream::pending::<btleplug::api::ValueNotification>();
+        let mut ended = false;
+        let started = Instant::now();
+        assert_eq!(listen_between_uploads(&mut quiet, Duration::from_millis(40), &mut ended).await, 0);
+        assert!(!ended && started.elapsed() >= Duration::from_millis(40) && started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

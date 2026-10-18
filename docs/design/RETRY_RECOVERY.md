@@ -68,6 +68,26 @@ about 0.15 s. Nothing below changes a write, a timeout or an exit code.
 - `<stream>.delivered` gets the same figures as `block_median_ms`, `block_p90_ms`,
   `block_max_ms`, `slowest_block`, `control1_ack_ms` and `control2_ack_ms`.
 
+### Notification log (logging only)
+
+Before this, every notification other than the one being waited for was discarded
+unseen, so nobody knew whether the keyboard says anything when it stalls
+(`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`, proposal A). Now every
+notification that isn't PROGRESS or COMPLETE gets a line, during uploads and between
+them:
+
+```
+NOTIFY char=1f400002 len=11 value=88 00 00 00 00 00 03 0e 08 04 02 (CONTROL2 ACK B) while=waiting for CONTROL2 ACK after=76ms
+NOTIFY char=1f400004 len=2 value=88 ee while=waiting for PROGRESS of block 7/53 after=2412ms
+```
+
+`char` is the first 8 hex digits of the characteristic; `while` is what the uploader was
+waiting for (`draining before CONTROL1`, a CONTROL ACK, a block's PROGRESS, `waiting for
+COMPLETE` or `between uploads`); `after` is how long that wait had lasted. The four
+expected CONTROL ACKs are named, so a normal upload adds four lines. The first stall
+with this logging will show either nothing (the keyboard went silent) or a value nobody
+has seen yet. Writes, timeouts and exit codes are unchanged.
+
 ### The session marker
 
 `extracted\session_01_bulk_stream.bin.session` is written just before CONTROL2,
