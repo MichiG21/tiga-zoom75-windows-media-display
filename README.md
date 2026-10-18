@@ -18,47 +18,18 @@ TIGA Windows Media Display reads the active Windows media session, renders artwo
 
 ### [Download the Windows installer →](https://github.com/MichiG21/tiga-zoom75-windows-media-display/releases)
 
-For normal use, download the newest file named similar to:
+For normal use, download the newest file named similar to `TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe` from the **Assets** section of the newest release.
 
-```text
-TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe
-```
-
-from the **Assets** section of the newest release.
-
-The installer bundles the application and its runtime dependencies, so normal users do **not** need to install:
-
-- Python
-- Pillow
-- Rust or Cargo
-- Visual Studio / C++ Build Tools
-- Developer PowerShell
+The installer bundles the application and its runtime dependencies, so normal users do **not** need to install Python, Pillow, Rust or Cargo, Visual Studio / C++ Build Tools, or Developer PowerShell.
 
 The current public installer is a **beta**. Testing and issue reports are very welcome.
 
----
-
 ## Preview
 
-### Now Playing
-
-Displays cover art, title, artist / creator, album, and total duration when the active Windows media source exposes it.
-
-![TIGA Now Playing](Now-Playing.jpeg)
-
-### Standby
-
-When no fresh media is playing, the display switches to a clean clock-and-date standby screen.
-
-![TIGA Standby](Standby.jpeg)
-
-### Upload transition
-
-While a new custom frame is being committed, the TIGA may briefly show its built-in roar animation before the new image appears.
-
-![TIGA upload transition](Intermission-Screen.jpeg)
-
----
+| Now Playing | Standby | Upload transition |
+|---|---|---|
+| ![TIGA Now Playing](docs/images/Now-Playing.jpeg) | ![TIGA Standby](docs/images/Standby.jpeg) | ![TIGA upload transition](docs/images/Intermission-Screen.jpeg) |
+| Cover art, title, artist / creator, album, and total duration when the active Windows media source exposes it. | When no fresh media is playing, a clean clock-and-date standby screen. | While a new frame is being committed, the TIGA may briefly show its built-in roar animation before the new image appears. |
 
 ## Features
 
@@ -76,54 +47,15 @@ While a new custom frame is being committed, the TIGA may briefly show its built
 - Does **not** require the blocked / vulnerable `meletrixid.sys` kernel driver.
 - Installs per-user under LocalAppData and does not require an administrator install.
 
----
-
 ## Quick start
 
-### 1. Connect the keyboard
+1. **Connect the keyboard.** Plug the Zoom75 TIGA into the PC with its **USB-C cable**. This is how it's used on the development unit: it types over the cable, in wired mode. The wireless typing modes (Bluetooth, 2.4 GHz) haven't been tested with this project.
 
-Plug the Zoom75 TIGA into the PC with its **USB-C cable**. This is how it's used on the development unit: it types over the cable, in wired mode. The wireless typing modes (Bluetooth, 2.4 GHz) haven't been tested with this project.
-
-The PC also needs **Bluetooth turned on**. The images for the screen are not sent over the cable: they go over Bluetooth Low Energy to the keyboard's display, which advertises itself as:
-
-```text
-Zoom75 Tiga
-```
-
-**You don't need to pair it in Windows' Bluetooth settings.** The app finds the display by itself and connects to it directly. On the development PC the keyboard isn't paired at all. The keyboard may also show up as `Zoom75 Tiga BT1`; that's its Bluetooth typing connection, and the app ignores it.
-
-### 2. Install
-
-Download the newest Windows installer from the [Releases page](https://github.com/MichiG21/tiga-zoom75-windows-media-display/releases) and run it.
-
-The installer places the application under:
-
-```text
-%LOCALAPPDATA%\Programs\TIGA Windows Media Display
-```
-
-and creates a Scheduled Task named:
-
-```text
-TIGA Windows Media Display
-```
-
-The display stack is started automatically after installation and again at user logon.
-
-### 3. Use the Start Menu shortcuts
-
-The installer adds shortcuts for:
-
-- **Display Control**
-- **Start Display**
-- **Stop Display**
-- **Status**
-
-That is all normal users need for everyday use.
+   The PC also needs **Bluetooth turned on**. The images for the screen are not sent over the cable: they go over Bluetooth Low Energy to the keyboard's display, which advertises itself as `Zoom75 Tiga`. **You don't need to pair it in Windows' Bluetooth settings.** The app finds the display by itself and connects to it directly. On the development PC the keyboard isn't paired at all. The keyboard may also show up as `Zoom75 Tiga BT1`; that's its Bluetooth typing connection, and the app ignores it.
+2. **Install.** Download the newest Windows installer from the [Releases page](https://github.com/MichiG21/tiga-zoom75-windows-media-display/releases) and run it. The installer places the application under `%LOCALAPPDATA%\Programs\TIGA Windows Media Display` and creates a Scheduled Task named `TIGA Windows Media Display`. The display stack is started automatically after installation and again at user logon.
+3. **Use the Start Menu shortcuts:** **Display Control**, **Start Display**, **Stop Display** and **Status**. That is all normal users need for everyday use.
 
 > Windows SmartScreen may warn about early beta installers because the executable is not currently code-signed. Only download releases from this GitHub repository.
-
----
 
 ## Display Control
 
@@ -136,15 +68,9 @@ The included display-control utility can request:
 
 The renderer returns to normal automatic behavior when launched normally.
 
----
+## Known limitations
 
-## Current status
-
-The project is functional on the original Windows development system and Zoom75 TIGA unit and now has a public Windows installer.
-
-The current release is still a **public beta**. Additional testing across Windows systems, Bluetooth adapters, TIGA firmware revisions, and media applications is welcome.
-
-### Known behavior / limitations
+The project is functional on the original Windows development system and Zoom75 TIGA unit and now has a public Windows installer. The current release is still a **public beta**. Additional testing across Windows systems, Bluetooth adapters, TIGA firmware revisions, and media applications is welcome.
 
 - The TIGA can briefly show its built-in roar animation during a custom-image upload.
 - If a BLE upload stops partway through with the keyboard simply going quiet, the stack retries it by itself after 2 minutes, up to 3 times. Only if that fails, or if the upload had been slowing down first, does it halt and ask you to reset the keyboard: the TIGA has no power switch, and unplugging USB doesn't reset it — it has a battery. Open the case, disconnect the battery from the PCB, and wait at least 30 seconds, pressing a few keys while it's disconnected. Reconnect, then run `START_STACK.ps1`. See [BLE upload was interrupted](#ble-upload-was-interrupted-uploader-halted).
@@ -153,114 +79,11 @@ The current release is still a **public beta**. Additional testing across Window
 
 Please report installation, Bluetooth, display, startup, or media-detection problems through [GitHub Issues](https://github.com/MichiG21/tiga-zoom75-windows-media-display/issues).
 
----
-
-## How it works
-
-```text
-Windows media session (GSMTC)
-        │
-        ▼
-tiga_windows_media_snapshot.exe
-        │
-        ▼
-tiga_windows_nowplaying_v2.py
-        │
-        ├── artwork
-        ├── title
-        ├── artist / creator
-        ├── album
-        ├── duration
-        └── standby clock / date
-        │
-        ▼
-extracted/session_01_bulk_stream.bin
-        │
-        ▼
-tiga_stream_watch_flow.exe
-        │
-        ├── BLE bulk upload
-        ├── 4096-byte progress flow-control
-        └── completion acknowledgement
-        │
-        ▼
-Zoom75 TIGA LCD
-```
-
-More detail is available in:
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/PROTOCOL_NOTES.md`](docs/PROTOCOL_NOTES.md)
-
----
-
-## Media-session behavior
-
-The project relies on what each application publishes through Windows GSMTC.
-
-Examples:
-
-- **Spotify** normally exposes title, artist, album, thumbnail, playback state, and duration.
-- **Browser media** can expose title, creator, thumbnail, and playback state.
-- Some browser / website combinations may omit duration or other timeline information.
-
-The renderer falls back gracefully when a field is unavailable.
-
-### Standby and stale-session handling
-
-Windows can keep old media-session metadata around after playback has stopped or after a reboot.
-
-To avoid showing an old track immediately at login, the renderer:
-
-1. shows standby first,
-2. records the media state Windows exposes at startup,
-3. waits until playback is proven fresh,
-4. then switches to Now Playing.
-
-Fresh playback can be detected through a new media item, a playback-state transition, or an advancing timeline when the source provides one.
-
-Some sources report "Playing" but never advance their position. If the same media item, with a title, reports "Playing" continuously for 15 seconds, that also counts as fresh. A remembered session that reports Paused or Stopped still stays on standby.
-
----
-
-## BLE uploader
-
-The uploader uses the keyboard's own progress notifications as flow-control.
-
-Instead of sleeping a fixed amount between every write, it sends data quickly inside a 4096-byte block and waits for the keyboard's progress notification before continuing.
-
-This reduced a full upload on the original development unit from roughly **39 seconds** to about **8 seconds**.
-
-The uploader intentionally remains active in **watch mode** after a successful upload so later media changes can be transferred without rebuilding the connection stack from scratch.
-
----
-
-## Privacy
-
-The active implementation reads the **local Windows media session**.
-
-It does not require:
-
-- a Spotify developer account
-- Spotify OAuth
-- a cloud service for Now Playing metadata
-- uploading your media history anywhere
-
-Runtime logs stay local and are ignored by Git.
-
----
-
 ## Troubleshooting
 
 ### TIGA stays on the stock roar animation
 
-Wait for the current upload to finish first.
-
-If the custom frame never appears, use the installed **Status** shortcut and inspect the local logs in the installation directory.
-
-**Status** reports the last frame rendered and the last frame actually delivered to the keyboard (`OK`, `PENDING` or `STALLED`), not just whether the processes are running.
-
-Logs in `logs\` are appended across restarts and rotated at 5 MB (`renderer.log.1` ... `.3`). Every process start is stamped with a run ID, and every frame has a frame ID (for example `renderer-20261015-091500-a1b2c3-f0004`) that appears in `renderer.log` when it is rendered and in `ble.log` at `UPLOAD START`, `UPLOAD COMPLETE` or `UPLOAD FAILED`, so the two logs can be matched up.
+Wait for the current upload to finish first. If the custom frame never appears, use the installed **Status** shortcut and inspect the local logs in the installation directory. **Status** reports the last frame rendered and the last frame actually delivered to the keyboard (`OK`, `PENDING` or `STALLED`), not just whether the processes are running.
 
 ### BLE upload was interrupted (uploader halted)
 
@@ -280,202 +103,19 @@ To recover:
 1. **The TIGA has no power switch, and unplugging USB doesn't reset it** — it has a battery. Open the case, disconnect the battery from the PCB, and wait **at least 30 seconds**, pressing a few keys while it's disconnected. Reconnect. A 10–15 second disconnect was not enough in testing.
 2. Run **Start Display** (`START_STACK.ps1`). Running it by hand is how you say "I have reset the keyboard": it clears the halt (`logs\uploader_halted.json`) and starts the uploader again. Nothing clears the halt automatically.
 
-If the uploader cannot reach the keyboard (battery disconnected, asleep, out of range, or Bluetooth off), it does **not** halt: it retries after 8, 16, 32 and 60 seconds, then every 5 minutes until the keyboard is back. No **Start Display** is needed: once the keyboard is reachable again, the next retry picks it up, within about 5 minutes.
+More cases (keyboard unreachable, turning it off on purpose, missing duration, logs): [docs/BUILD_AND_RECOVERY.md](docs/BUILD_AND_RECOVERY.md#troubleshooting).
 
-The TIGA has no power switch, so "off" means the battery disconnected from the PCB. If you do that on purpose, do it only while no upload is running: check that **Status** says `OK`, or that the last line in `logs\ble.log` is `UPLOAD COMPLETE`. A disconnect in the middle of an upload interrupts it, and the uploader halts. This is not the halt recovery above: that one needs the battery disconnected for at least 30 seconds and then **Start Display**.
+## For developers
 
-Stopping the stack (or shutting Windows down) in the middle of an upload counts as an interruption too. The next start will report it as halted.
-
-### Media is detected but duration is missing
-
-This is usually caused by the application / browser not publishing useful timeline data through Windows GSMTC. The project will still render the available metadata.
-
-### Existing manual installation
-
-The beta installer uses the Scheduled Task name:
-
-```text
-TIGA Windows Media Display
-```
-
-If an older manual version already uses that task name, the installer may replace that task with the packaged installation.
-
----
-
-## Build from source
-
-The installer is the recommended path for normal users. The following is only needed if you want to develop, modify, or build the project yourself.
-
-### Developer requirements
-
-- **Windows 10 or Windows 11**
-- **Meletrix / Wuque Studio Zoom75 TIGA**
-- Bluetooth enabled
-- **Visual Studio 2022 C++ Build Tools**
-- **Developer PowerShell for VS 2022**
-- **Rust + Cargo**
-- **Python** with the `py.exe` launcher
-- **Pillow**
-
-### Clone
-
-```powershell
-git clone https://github.com/MichiG21/tiga-zoom75-windows-media-display.git
-cd tiga-zoom75-windows-media-display
-```
-
-### Build and install the development stack
-
-Open **Developer PowerShell for VS 2022** in the repository folder and run:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\BUILD_AND_INSTALL.ps1
-```
-
-Then start it with:
-
-```powershell
-.\START_STACK.ps1
-```
-
-Other development commands:
-
-```powershell
-.\STOP_STACK.ps1
-.\STATUS_STACK.ps1
-```
-
-### Manual BLE test
-
-From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_stream.bin` is generated at runtime and is not in Git; on a fresh checkout, run the renderer once or copy `extracted\session_01_bulk_stream.redgreen-backup.bin` to that name first.
-
-```powershell
-.\target\release\tiga_stream_watch_flow.exe --stream "..\extracted\session_01_bulk_stream.bin" --intra-block-ms 0 --confirm-flow-watch
-```
-
-Leave out `--confirm-flow-watch` for a dry run: it validates the stream and opens no Bluetooth connection.
-
-### Installing from source: troubleshooting
-
-Problems hit on a from-scratch install. None of them means the project is broken.
-
-**PowerShell refuses to run the scripts** (`UnauthorizedAccess`, "running scripts is disabled on this system").
-Windows blocks `.ps1` files by default. Allow them for your user once (no admin needed):
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-or prefix each call with `powershell -ExecutionPolicy Bypass -File`.
-
-**"… is not digitally signed"**, even after that.
-Files extracted from a downloaded ZIP carry Windows' mark-of-the-web. Unblock them from the repository folder:
-
-```powershell
-Get-ChildItem -Recurse -File | Unblock-File
-```
-
-A `git clone` doesn't have this problem.
-
-**A freshly built `.exe` seems to do nothing, or its files never appear.**
-Antivirus software (Norton CyberCapture, for example) may hold or sandbox an executable it hasn't seen before, so its writes don't reach the folder. The Display Control utility now says so if the renderer never confirms a command ([#15](https://github.com/MichiG21/tiga-zoom75-windows-media-display/issues/15)). Wait for the scan to finish, or allow the program in your antivirus.
-
-**`tiga_stream_watch_flow.exe` "is not recognized"** after `cargo test`.
-`cargo test` builds a separate test binary. Build the real one with `cargo build --release` in `windows_ble_probe`.
-
-**Manual dry run fails with `EXIT code=30 … cannot find the file specified`.**
-A fresh clone has no `extracted\session_01_bulk_stream.bin`; it is generated at runtime. The supervisors seed it automatically, but a manual run needs it copied first:
-
-```powershell
-Copy-Item .\extracted\session_01_bulk_stream.redgreen-backup.bin .\extracted\session_01_bulk_stream.bin
-```
-
----
-
-## Repository layout
-
-```text
-.
-├── .github/workflows/
-├── installer/
-│   ├── runtime/
-│   └── TIGA-Windows-Media-Display.iss
-├── BUILD_AND_INSTALL.ps1
-├── START_STACK.ps1
-├── STOP_STACK.ps1
-├── STATUS_STACK.ps1
-├── install_tiga_startup.ps1
-├── tiga_startup_supervisor.ps1
-├── tiga_windows_nowplaying_v2.py
-├── tiga_windows_media_snapshot.cpp
-├── tiga_display_control.cpp
-├── windows_ble_probe/
-├── extracted/
-├── docs/
-└── reference/
-```
-
-### `installer/`
-
-Windows installer definition and packaged-runtime helper scripts.
-
-### `windows_ble_probe/`
-
-Rust source for the current BLE uploader and earlier BLE investigation tools.
-
-### `extracted/`
-
-Contains the known-good media stream template used by the renderer.
-
-### `docs/`
-
-Architecture, protocol notes, build notes, and recovery information.
-
-### `reference/`
-
-Reverse-engineering probes and supporting material from earlier development.
-
-Large raw packet captures, private transcripts, credentials, and personal runtime logs are intentionally not included.
-
----
-
-## Reverse-engineering
-
-The media-upload protocol used here was reverse-engineered from the Zoom75 TIGA's BLE traffic and media-transfer behavior.
-
-Documented areas include:
-
-- GATT service / characteristics
-- media envelope structure
-- DLX frame layout
-- RGB565 big-endian pixels
-- chunking behavior
-- XOR checksums
-- progress notifications
-- flow-control
-- completion acknowledgement
-
-See [`docs/PROTOCOL_NOTES.md`](docs/PROTOCOL_NOTES.md) for details.
-
----
+- [How it works, media-session behaviour, BLE uploader, privacy, repository layout, reverse-engineering](docs/ARCHITECTURE.md)
+- [Build from source, manual BLE test, detailed troubleshooting and recovery](docs/BUILD_AND_RECOVERY.md)
+- [BLE protocol notes](docs/PROTOCOL_NOTES.md) · [DLX container format](docs/DLX_FORMAT.md)
+- [Uploader failure classes and the retry / halt policy](docs/design/RETRY_RECOVERY.md)
+- [Project history and decisions](docs/PROJECT_HISTORY.md) · [Release checklist](docs/RELEASE_CHECKLIST.md)
 
 ## Contributing
 
-Issues and pull requests are welcome.
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-Useful contribution areas include:
-
-- testing additional TIGA firmware revisions
-- Bluetooth adapter / Windows compatibility
-- browser / media-session compatibility
-- installer robustness
-- UI / layout improvements
-- uploader robustness and speed
-- protocol documentation
-
----
+Issues and pull requests are welcome; see [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
 
 ## Disclaimer
 
@@ -484,8 +124,6 @@ This is an unofficial community project.
 Use it at your own risk. No warranty is provided. Firmware, protocol behavior, and compatibility can change between keyboard revisions or software versions.
 
 This project is not affiliated with, sponsored by, or endorsed by Meletrix or Wuque Studio.
-
----
 
 ## License
 

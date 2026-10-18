@@ -1745,3 +1745,75 @@ In PROJECT_HISTORY §7.1 sixth part (on `feature/sudden-retry`):
 The live install only gets any of this after merge, `git pull` in `tiga-fresh-test`, a
 rebuild of the uploader, and a stack restart. Expect the ~25 s first-start delay after a
 rebuild (antivirus).
+
+---
+
+# Shorter front page, 2026-10-18 evening
+
+Branch `docs/shorter-front-page`, off `origin/main` (`5718dde`, after #25–#28). Docs and
+file moves only, no behaviour change. PR into `main` is open, **not merged**.
+
+## What moved where
+
+- **README** (498 → 136 lines) keeps download, previews, features, quick start, Display
+  Control, known limitations, two troubleshooting cases (stuck on the roar; interrupted
+  upload), a "For developers" list of links, contributing (one line), disclaimer and
+  license.
+  - The previews are now a three-column table, and the download and quick-start lists
+    are written inline. The wording is unchanged.
+- **docs/ARCHITECTURE.md** now holds How it works, media-session behaviour (including the
+  stale-session gate), BLE uploader, privacy, repository layout and reverse-engineering.
+  - The README's diagram items (renderer fields, completion acknowledgement) were merged
+    into the existing diagram.
+  - The layout now also lists `tests/` and `tools/`.
+- **docs/BUILD_AND_RECOVERY.md** now holds build from source (requirements, clone, build,
+  manual BLE test, installing-from-source troubleshooting) and a Troubleshooting section:
+  logs, keyboard unreachable, turning it off on purpose, missing duration, existing
+  manual installation.
+- **.github/CONTRIBUTING.md** got the README's "useful contribution areas" list.
+- **Checked by script:** every line of the old README is still somewhere in the new
+  README or these three files. The only differences are the compacted lists, the merged
+  diagram, and links rewritten for their new location.
+
+**One content fix, not just a move:** BUILD_AND_RECOVERY's "BLE recovery" paragraph
+still said every interrupted upload halts. Since #28 that isn't true, so it now
+describes the automatic retry after a sudden failure. It also lists
+`uploader_retry.json` among the runtime files.
+
+## Files moved
+
+| From | To |
+|---|---|
+| `Now-Playing.jpeg`, `Standby.jpeg`, `Intermission-Screen.jpeg` | `docs/images/` |
+| `NOTES_FOR_MICHI.md`, `RELEASE_CHECKLIST.md` | `docs/` |
+| `CONTRIBUTING.md`, `SECURITY.md` | `.github/` (GitHub still finds them there) |
+
+- **`PUBLISH_TO_GITHUB.md` deleted as obsolete.** It was a one-time guide for the first
+  push (2026-09-09, "Initial public release").
+  - Everything it describes is done: the repository exists, v0.1.0 and v0.2.0-beta.1 are
+    released, and the description is set word for word.
+  - It recommends the name `tiga-windows-media-display` and a `YOUR_USERNAME` remote,
+    neither of which matches the real repository (`tiga-zoom75-windows-media-display`).
+  - Its topic list is a subset of the topics now set on GitHub, except `rgb565` and
+    `reverse-engineering`. Add those by hand if you want them.
+  - It's still in git history.
+- **No script, `.py`, `.cpp`, `.ps1` or anything the task, installer, tests or supervisor
+  use was moved.** Nothing in the scripts, workflows, installer, tests or `tools/`
+  referenced the moved files; the only CI copy is `LICENSE`, which stays.
+- **Historical mentions** of the old file names inside earlier notes sections were left
+  as they were: they describe what was true at the time.
+
+## Outside the repository
+
+- `C:\Users\Regal\source\CLAUDE.md`: a new paragraph under "Read this first" pointing
+  to `tiga-dev/docs/NOTES_FOR_MICHI.md` (plus where the checklist, CONTRIBUTING and
+  SECURITY went).
+- `TASKS_C.md` to `TASKS_F.md`: every `tiga-dev\NOTES_FOR_MICHI.md` is now
+  `tiga-dev\docs\NOTES_FOR_MICHI.md`.
+- The Claude memory note for the old `tiga-windows-media-display` folder named the same
+  path; updated too.
+
+## Note for the live install
+
+`tiga-fresh-test` still has the files at the root until you pull. Pulling moves them;
+nothing that runs depends on them.

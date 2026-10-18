@@ -4,6 +4,19 @@ Contributions are welcome, especially around Windows media-session compatibility
 BLE robustness, rendering/layout improvements, packaging, and testing on other
 Zoom75 TIGA units.
 
+Useful contribution areas include:
+
+- testing additional TIGA firmware revisions
+- Bluetooth adapter / Windows compatibility
+- browser / media-session compatibility
+- installer robustness
+- UI / layout improvements
+- uploader robustness and speed
+- protocol documentation
+
+How the project fits together: [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+Building from source: [`docs/BUILD_AND_RECOVERY.md`](../docs/BUILD_AND_RECOVERY.md).
+
 ## Before opening a pull request
 
 1. Keep the project working on Windows 10/11.
