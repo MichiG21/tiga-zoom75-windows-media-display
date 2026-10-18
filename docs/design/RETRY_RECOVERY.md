@@ -123,6 +123,22 @@ expected CONTROL ACKs are named, so a normal upload adds four lines. The first s
 with this logging will show either nothing (the keyboard went silent) or a value nobody
 has seen yet. Writes, timeouts and exit codes are unchanged.
 
+**Repeats are counted, not repeated.** The keyboard sends an identical 28-byte status
+message about every 2 s (`docs/PROTOCOL_NOTES.md`). Logged in full, that was ~300 KB/h
+and pushed older upload history out of the 3 × 5 MB rotation. A notification identical
+to the one logged just before it (same characteristic, same bytes) is counted instead.
+The count goes out as one line when a different notification arrives, before every
+`UPLOAD START`, `UPLOAD COMPLETE` and `UPLOAD FAILED`, and before the uploader exits:
+
+```
+NOTIFY repeated 61 more times char=1f400002 len=28 value=88 00 00 00 00 00 14 2a … first=2026-10-18T13:11:40Z last=2026-10-18T13:14:09Z
+```
+
+After a summary, the same value keeps being counted from zero. Each summary therefore
+covers the time since the previous line about it, and every upload's lines show whether
+the message kept coming during it. Any notification that differs is logged at once, in
+full, as before.
+
 ### The session marker
 
 `extracted\session_01_bulk_stream.bin.session` is written just before CONTROL2,
