@@ -782,6 +782,10 @@ trait Radio {
     async fn pause(&mut self, d: Duration);
     /// Start a fresh scan window: `elapsed` counts from zero again.
     async fn rescan(&mut self);
+    /// Stop scanning. Called once a device has qualified (connected, media service
+    /// present): from then on this run never needs to scan again, and a running scan
+    /// would compete with the upload for radio time.
+    async fn stop_scan(&mut self);
 }
 
 const SCAN_ROUNDS: u32 = 2;
@@ -909,6 +913,7 @@ async fn select_device<R: Radio>(radio: &mut R, cached: Option<&str>) -> Result<
                     s.name,
                     tried.len()
                 );
+                radio.stop_scan().await;
                 return Ok(Chosen { address: s.address, name: s.name, dev: s.dev, link });
             }
             Probe::Unreachable(why) => {
@@ -1051,6 +1056,15 @@ impl Radio for BleRadio<'_> {
             log!("warning: could not restart the scan: {e}");
         }
         self.started = Instant::now();
+    }
+
+    async fn stop_scan(&mut self) {
+        // Best effort: if it fails, the upload runs with the scan on, as it always did
+        // before this was added.
+        match self.adapter.stop_scan().await {
+            Ok(()) => log!("Scan stopped: connected to the keyboard; this run needs no further scan"),
+            Err(e) => log!("warning: could not stop the scan (the upload continues with it running): {e}"),
+        }
     }
 }
 
@@ -1213,7 +1227,9 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     }
     adapter.start_scan(ScanFilter::default()).await.class(Failure::Unreachable)?;
     let mut radio = BleRadio { adapter, started: Instant::now() };
-    // The scan is left running, as it always has been during uploads.
+    // select_device stops the scan once a device qualifies (UPLOAD_FAILURES_2026-10-18,
+    // proposal B). Until 2026-10-18 it ran through every upload. Nothing after this
+    // point scans: any failure ends the process, and the next run starts a fresh scan.
     let Chosen { address, name, dev: peripheral, link } = select_device(&mut radio, cached.as_deref()).await?;
     let GattLink { control, notify1, bulk, notify2 } = link;
     log!("Found keyboard at {address}");
@@ -1621,6 +1637,8 @@ mod tests {
         clock: Duration,
         scan_started: Duration,
         rescans: u32,
+        scanning: bool,
+        scan_stops: u32,
         probed: Vec<String>,
     }
 
@@ -1633,6 +1651,8 @@ mod tests {
                 clock: Duration::ZERO,
                 scan_started: Duration::ZERO,
                 rescans: 0,
+                scanning: true,
+                scan_stops: 0,
                 probed: Vec::new(),
             }
         }
@@ -1674,6 +1694,12 @@ mod tests {
         async fn rescan(&mut self) {
             self.rescans += 1;
             self.scan_started = self.clock;
+            self.scanning = true;
+        }
+
+        async fn stop_scan(&mut self) {
+            self.scan_stops += 1;
+            self.scanning = false;
         }
     }
 
@@ -1689,6 +1715,33 @@ mod tests {
 
     fn select(radio: &mut FakeRadio, cached: Option<&str>) -> Result<String, Failed> {
         futures::executor::block_on(select_device(radio, cached)).map(|c| c.address)
+    }
+
+    #[test]
+    fn scan_stops_once_a_device_qualifies() {
+        // Selected straight from the cache.
+        let mut r = FakeRadio::new(&[(0, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, Some(GOOD)).unwrap(), GOOD);
+        assert_eq!((r.scanning, r.scan_stops), (false, 1));
+        // A rejected candidate does not stop it; the one that qualifies does, once.
+        let mut r = FakeRadio::new(&[(0, BAD), (300, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!((r.scanning, r.scan_stops), (false, 1));
+        // Found only after a rescan: still scanning while it is needed, stopped after.
+        let mut r = FakeRadio::new(&[(0, BAD), (8000, GOOD)], &[GOOD]);
+        assert_eq!(select(&mut r, None).unwrap(), GOOD);
+        assert_eq!((r.rescans, r.scanning, r.scan_stops), (1, false, 1));
+    }
+
+    #[test]
+    fn scan_keeps_running_when_nothing_qualifies() {
+        // The run then ends with 10 or 11; the next run's scan starts fresh.
+        let mut r = FakeRadio::new(&[(0, BAD)], &[GOOD]);
+        let _ = select(&mut r, None).unwrap_err();
+        assert_eq!((r.scanning, r.scan_stops), (true, 0));
+        let mut r = FakeRadio::new(&[], &[]);
+        let _ = select(&mut r, None).unwrap_err();
+        assert_eq!(r.scan_stops, 0);
     }
 
     #[test]
