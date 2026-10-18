@@ -1686,7 +1686,7 @@ In PROJECT_HISTORY §7.1 sixth part (on `feature/sudden-retry`):
   first block never gets PROGRESS after this change, revert it.
 - Tests: cargo 42, all others pass.
 
-## PR #27: `feature/sudden-retry` (the bug A policy change you approved)
+## PR #28: `feature/sudden-retry` (the bug A policy change you approved)
 
 - **Uploader:** on a code 20 it logs `SIGNATURE sudden|slowing|unclassified` and writes
   `signature=` into the exit record.
@@ -1731,10 +1731,12 @@ In PROJECT_HISTORY §7.1 sixth part (on `feature/sudden-retry`):
 
 ## Merge order and conflicts
 
-- #25, #26 and #27 all touch `tiga_stream_watch_flow.rs` in different places. Whichever
-  merges second or third may need a trivial rebase. #25 and #27 also both add to
+- #25, #26 and #28 all touch `tiga_stream_watch_flow.rs` in different places. Whichever
+  merges second or third may need a trivial rebase. #25 and #28 also both add to
   `RETRY_RECOVERY.md`, in different sections.
-- My suggested order: #25 (logging), then #27 (retry), then #26 on its own afterwards.
+- #27 (relicensing, `docs/gpl-and-wired-setup`, opened during this run and not mine)
+  also edits `README.md`. If it merges first, #28's README hunks may need a rebase.
+- My suggested order: #25 (logging), then #28 (retry), then #26 on its own afterwards.
   #26 changes the radio's behaviour, so it's best judged in a period without other
   changes.
 
