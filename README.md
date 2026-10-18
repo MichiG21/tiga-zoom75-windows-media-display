@@ -1,7 +1,7 @@
 # TIGA Windows Media Display
 
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-GPL--2.0-blue)
 ![Hardware](https://img.shields.io/badge/Hardware-Zoom75%20TIGA-7A5AF8)
 ![Status](https://img.shields.io/badge/Status-Public%20Beta-orange)
 ![Release](https://img.shields.io/github/v/release/MichiG21/tiga-zoom75-windows-media-display?include_prereleases&label=release)
@@ -80,13 +80,17 @@ While a new custom frame is being committed, the TIGA may briefly show its built
 
 ## Quick start
 
-### 1. Pair the keyboard
+### 1. Connect the keyboard
 
-Make sure Bluetooth is enabled and the keyboard is visible to Windows as:
+Plug the Zoom75 TIGA into the PC with its **USB-C cable**. This is how it's used on the development unit: it types over the cable, in wired mode. The wireless typing modes (Bluetooth, 2.4 GHz) haven't been tested with this project.
+
+The PC also needs **Bluetooth turned on**. The images for the screen are not sent over the cable: they go over Bluetooth Low Energy to the keyboard's display, which advertises itself as:
 
 ```text
 Zoom75 Tiga
 ```
+
+**You don't need to pair it in Windows' Bluetooth settings.** The app finds the display by itself and connects to it directly. On the development PC the keyboard isn't paired at all. The keyboard may also show up as `Zoom75 Tiga BT1`; that's its Bluetooth typing connection, and the app ignores it.
 
 ### 2. Install
 
@@ -481,8 +485,10 @@ This project is not affiliated with, sponsored by, or endorsed by Meletrix or Wu
 
 ## License
 
-TIGA Windows Media Display is released under the **MIT License**.
+TIGA Windows Media Display is licensed under the **GNU General Public License, version 2** (GPL-2.0-only). That's the license of [meletricks](https://github.com/athdesk/meletricks) by hdesk / athdesk, whose code-loading work on the TIGA's display MCU this project plans to build on. Using the same license keeps that combination possible.
 
-See [`LICENSE`](LICENSE).
+See [`LICENSE`](LICENSE) for the full text.
+
+Releases up to and including **v0.2.0-beta.1** were published under the MIT License, and those copies remain MIT. Everything after that is GPL-2.0.
 
 Some reference material has its own copyright or license terms. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
