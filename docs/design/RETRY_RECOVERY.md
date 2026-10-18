@@ -3,7 +3,9 @@
 **Status:** implemented on `fix/a-retry-recovery` and merged. The interrupted-transfer
 halt (step 2's outcome, from a real PROGRESS timeout rather than a kill) was seen on
 hardware on 2026-10-15; the rest of the plan below has not been run. The slow retry for
-10 and 11 (below) was added on `fix/device-selection` and is tested offline only.
+10 and 11 (below) was added on `fix/device-selection` and is tested offline only. The
+**automatic retry after a sudden code 20** (below) was added on `feature/sudden-retry`,
+2026-10-18, with Michi's approval; tested offline only.
 
 ## The rule
 
@@ -15,6 +17,27 @@ upload on top of it is what led to the broken-LCD states recorded in the history
 CONTROL2 write that reports an error still counts, because a WriteWithoutResponse may
 have gone out anyway.
 
+**Exception since 2026-10-18: the sudden failure.** A code 20 whose transfer ran at a
+normal pace and then simply got no PROGRESS (the *sudden* signature, PROJECT_HISTORY
+§7.1) is retried automatically: 120 s later, up to 3 times per incident, with the
+session marker removed first. If all three fail, the uploader halts exactly as before.
+The evidence (`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`, PR #24):
+
+- Uploads that followed a failure failed **5 of 12**; uploads whose previous upload had
+  completed failed **4 of 12**. That's the same rate: a first upload on a connection
+  fails about 1 time in 3 whatever came before.
+- Retries with no power-off worked **2 of 4** (2026-10-18 13:42 and 14:11), and the
+  13:42 connection then completed five more uploads. A keyboard that needed a power-off
+  could not have done that.
+- In the 6 logged retries without a proper reset, none damaged the LCD; each failure
+  was an ordinary code 20.
+- Under that rate, one retry clears about 6 halts in 10, three about 95 %.
+
+The rule still holds for everything else. **Slowing** failures (sustained slow blocks
+before the stall; the back-to-back pair at block 11 on 2026-10-15 is the one hint of a
+state that persists), failures the uploader can't classify, **21**, and a session marker
+without this run's exit record (a killed or crashed uploader) halt at once.
+
 ## Uploader exit codes (`tiga_stream_watch_flow`)
 
 | Code | Class | Supervisor |
@@ -22,7 +45,7 @@ have gone out anyway.
 | 0 | success (only with `--once`; watch mode normally never exits) | restart |
 | 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff, then every 5 min; **never halts** |
 | 11 | connected, but the media service was missing or unusable: every candidate was reached and none qualified (issue #14), or subscribing to its notifications failed | retry with backoff, then every 5 min; **never halts** |
-| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | **halt, power-cycle** |
+| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | signature `sudden`: **automatic retry after 120 s, up to 3 per incident**, then halt. Otherwise **halt, power-cycle** |
 | 21 | every block ACKed, COMPLETE never arrived | **halt, power-cycle** |
 | 30 | bad arguments, missing or invalid stream, internal error | halt, no power cycle |
 | other | crashed or killed | decided by the session marker (below) |
@@ -30,6 +53,18 @@ have gone out anyway.
 Each exit is logged as one line in `ble.log` and `ble_error.log`:
 `EXIT code=20 (transfer interrupted after CONTROL2; …): timed out waiting for PROGRESS after 4K block 18/53 (last ACKed block 17/53) frame=…`.
 The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
+
+For code 20 the uploader also logs `SIGNATURE sudden|slowing|unclassified frame=…` and
+writes `signature=` to the exit record:
+
+- **sudden:** the keyboard stopped sending PROGRESS (a block timeout), and the pace was
+  normal: block median ≤ 500 ms and at most one block over 1000 ms. One slow block just
+  before the stall still counts (2026-10-18 14:09: block 6 took 1860 ms, then nothing;
+  a plain retry 2.5 minutes later worked).
+- **slowing:** median over 500 ms, or two or more blocks over 1000 ms (2026-10-15 22:44
+  and 22:46, 2026-10-16 18:49).
+- **unclassified:** not a block timeout (link lost, write error, CONTROL2 ACK missing),
+  no block ACKed at all, or the marker of an earlier run.
 
 ### Block timeout
 
@@ -113,15 +148,31 @@ shut down mid-transfer.
 - **Retryable, then give up** (an unexplained exit with no marker): restart after 8, 16,
   32, 60 s; the 5th consecutive failure halts as `gave-up`, no power cycle needed.
 - A frame delivered during a run resets the count.
-- **Halt** (marker present, 20, 21, 30, or an unexplained exit's retries exhausted): the uploader is not
-  restarted. `logs\uploader_halted.json` records the time, code, meaning, class,
+- **Sudden-failure retry** (20 with `signature=sudden` in this run's exit record): the
+  supervisor logs `Sudden failure (code 20, signature sudden, last ACKed block N):
+  automatic retry 1 of 3 at HH:MM:SS, in 120s.` When the time comes it removes the session marker and logs
+  `Automatic retry 1 of 3: session marker removed; starting the BLE uploader (no
+  power-off).` The outcome is logged as `Automatic retry 1 of 3 SUCCEEDED` (a frame was
+  delivered, even while the uploader keeps running) or `Automatic retry 1 of 3 FAILED
+  (code 20, signature …)`. A code 10/11 during a retry doesn't use up a retry: the normal
+  reconnect backoff runs and the attempt still counts as the same retry. A delivered
+  frame ends the incident and resets the count to 0. After the third failed retry, the
+  halt below, with `auto_retries: 3` and the signature in the halt file. A retry that was
+  waiting when the supervisor stopped is not resumed (its marker makes the next start
+  halt, as before).
+- **Halt** (marker present, 20 other than sudden, 20 after 3 retries, 21, 30, or an
+  unexplained exit's retries exhausted): the uploader is not restarted. `logs\uploader_halted.json` records the time, code, meaning, class,
   frame ID, last ACKed block, the uploader's detail line, and an instruction. The
   renderer keeps running.
 - **Clearing:** only `START_STACK.ps1` (the "Start Display" shortcut), run by hand. It
   deletes the marker and then the halt file. A running supervisor notices within one
   poll (2 s) and starts the uploader again; otherwise `Start-ScheduledTask` starts a
   fresh one. Nothing clears it on a timer.
-- `STATUS_STACK.ps1` shows `HALTED - …` with the instruction, in red.
+- `STATUS_STACK.ps1` shows `HALTED - …` with the instruction, in red. While a retry is
+  waiting or running it shows `RETRYING - sudden upload failure; automatic retry 1 of 3
+  at HH:MM:SS`, and an `Auto-retry` line with the last events from
+  `logs\uploader_retry.json`. A halt after retries adds the signature and the number of
+  retries used.
 
 ## Hardware test plan: run with Michi present, eyes on the keyboard
 

@@ -101,7 +101,9 @@ function Stop-LoggedProcess {
 # class code and keeps <stream>.session while a media session is open on the keyboard:
 #
 #   10 unreachable, 11 GATT          -> retry with backoff, then every 5 min, never halt
-#   20 interrupted, 21 no completion -> halt: the keyboard needs a power cycle
+#   20 with the "sudden" signature   -> automatic retry after 120 s, up to 3 per incident,
+#                                       then halt as below
+#   20 otherwise, 21 no completion   -> halt: the keyboard needs a power cycle
 #   30 bad arguments / stream        -> halt: configuration problem
 #   anything else, no marker         -> retry with backoff, then give up
 #
@@ -109,16 +111,29 @@ function Stop-LoggedProcess {
 # off, asleep or out of range (11: no candidate had the media service, issue #14).
 # Halting on those meant a dead display the next morning until START_STACK.ps1.
 #
-# A surviving session marker means "halt, power-cycle" whatever the exit code: a
-# killed or crashed uploader cannot report its own class.
+# The sudden-failure retry (approved by Michi on 2026-10-18; evidence in
+# docs/investigations/UPLOAD_FAILURES_2026-10-18.md, PR #24): a code 20 whose exit
+# record says signature=sudden (a normal pace, then no PROGRESS) is not a stuck
+# keyboard. Uploads after such a failure failed 5 of 12, the same rate as any first
+# upload on a connection (4 of 12), and plain retries without a power-off worked 2 of 4.
+# So the supervisor removes the session marker and starts the uploader again after
+# 120 s, at most 3 times per incident; a delivered frame ends the incident. Slowing or
+# unclassified failures, 21, and a marker without this run's exit record still halt
+# at once: the slowing pair of 2026-10-15 is the one hint of a state that persists.
+#
+# A surviving session marker otherwise means "halt, power-cycle" whatever the exit
+# code: a killed or crashed uploader cannot report its own class.
 #
 # Halting writes logs\uploader_halted.json and leaves the renderer running.
 # START_STACK.ps1 deletes the halt file (and the marker); a running supervisor notices
-# and starts the uploader again. Nothing clears it on a timer.
+# and starts the uploader again. Nothing clears a halt on a timer. Retry progress is
+# written to logs\uploader_retry.json for STATUS_STACK.ps1.
 
 $BleRetryDelays       = @(8, 16, 32, 60)  # seconds before retries 1..4
 $BleSlowRetryDelay    = 300               # 10 and 11 after the backoff: every 5 min, indefinitely
 $BleSlowRetryCodes    = @(10, 11)
+$BleSuddenRetryDelay  = 120               # seconds before each automatic retry after a sudden code 20
+$BleSuddenRetryMax    = 3                 # automatic retries per incident before halting
 $RendererRestartDelay = 8
 
 $UploaderExitMeanings = @{
@@ -164,17 +179,32 @@ function New-UploaderDecision {
 function Get-UploaderDecision {
     # What to do after the uploader exited. No side effects.
     # $Attempt counts consecutive failed runs including this one; a successful upload resets it.
-    param([int]$ExitCode, $Session, [int]$Attempt)
+    # $Signature is this run's exit record's signature (sudden, slowing, unclassified or "");
+    # $SuddenRetries is how many automatic retries this incident has already used.
+    param([int]$ExitCode, $Session, [int]$Attempt, [string]$Signature = "", [int]$SuddenRetries = 0)
 
     $meaning = Get-UploaderExitMeaning $ExitCode
 
+    if ($ExitCode -eq 20 -and $Signature -eq "sudden") {
+        if ($SuddenRetries -lt $BleSuddenRetryMax) {
+            $n = $SuddenRetries + 1
+            return New-UploaderDecision retry "sudden-retry" $false $BleSuddenRetryDelay `
+                "code ${ExitCode}: $meaning; signature sudden: automatic retry $n of $BleSuddenRetryMax in $BleSuddenRetryDelay s" ""
+        }
+        return New-UploaderDecision halt "session-open" $true 0 `
+            ("uploader exited (code ${ExitCode}: $meaning) while a media session was open on the keyboard; " +
+             "signature sudden, and all $BleSuddenRetryMax automatic retries have failed") `
+            $PowerCycleInstruction
+    }
+
+    $why = if ($ExitCode -eq 20 -and $Signature) { "; signature $Signature, so no automatic retry" } else { "" }
     if ($null -ne $Session) {
         return New-UploaderDecision halt "session-open" $true 0 `
-            "uploader exited (code ${ExitCode}: $meaning) while a media session was open on the keyboard" `
+            "uploader exited (code ${ExitCode}: $meaning) while a media session was open on the keyboard$why" `
             $PowerCycleInstruction
     }
     if ($ExitCode -eq 20 -or $ExitCode -eq 21) {
-        return New-UploaderDecision halt "session-open" $true 0 "code ${ExitCode}: $meaning" $PowerCycleInstruction
+        return New-UploaderDecision halt "session-open" $true 0 "code ${ExitCode}: $meaning$why" $PowerCycleInstruction
     }
     if ($ExitCode -eq 30) {
         return New-UploaderDecision halt "fatal" $false 0 "code ${ExitCode}: $meaning" `
@@ -195,8 +225,52 @@ function Get-UploaderDecision {
     return New-UploaderDecision retry "retryable" $false $BleRetryDelays[$index] "code ${ExitCode}: $meaning" ""
 }
 
+function Get-RetryStatePath {
+    param([string]$HaltFile)
+    return Join-Path (Split-Path -Parent $HaltFile) "uploader_retry.json"
+}
+
+function Write-RetryState {
+    # logs\uploader_retry.json: where the current sudden-failure incident stands, plus the
+    # last 20 retry events, for STATUS_STACK.ps1. Status: waiting, running, succeeded,
+    # failed (one retry failed; the next decision follows), exhausted (halted), abandoned.
+    param([string]$HaltFile, [string]$Status, [int]$Retry, [string]$Event, [string]$LastFailure = "", $NextAttemptAt = $null)
+    $path = Get-RetryStatePath $HaltFile
+    $events = @()
+    $previousFailure = ""
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $old = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+            if ($old.events) { $events = @($old.events) }
+            if ($old.last_failure) { $previousFailure = [string]$old.last_failure }
+        } catch {}
+    }
+    $events += ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Event)
+    if ($events.Count -gt 20) { $events = $events[($events.Count - 20)..($events.Count - 1)] }
+    $state = [ordered]@{
+        updated_at      = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+        status          = $Status
+        retry           = $Retry
+        max_retries     = $BleSuddenRetryMax
+        next_attempt_at = if ($NextAttemptAt) { ([datetime]$NextAttemptAt).ToString("yyyy-MM-ddTHH:mm:sszzz") } else { $null }
+        last_failure    = if ($LastFailure) { $LastFailure } else { $previousFailure }
+        events          = $events
+    }
+    [System.IO.File]::WriteAllText($path, ($state | ConvertTo-Json), $Utf8NoBom)
+}
+
+function Complete-SuddenRetry {
+    # A frame was delivered by the uploader started as automatic retry N: the incident is over.
+    param($State, [string]$HaltFile)
+    $n = $State.RetryInFlight
+    Write-SupervisorLog "Automatic retry $n of $BleSuddenRetryMax SUCCEEDED: a frame was delivered. Automatic-retry count reset."
+    Write-RetryState -HaltFile $HaltFile -Status "succeeded" -Retry $n -Event "retry $n of $BleSuddenRetryMax succeeded (frame delivered)"
+    $State.RetryInFlight = 0
+    $State.SuddenRetries = 0
+}
+
 function Write-UploaderHaltState {
-    param([string]$Path, $Decision, [int]$ExitCode, $Session, $ExitRecord, [int]$Attempts)
+    param([string]$Path, $Decision, [int]$ExitCode, $Session, $ExitRecord, [int]$Attempts, [int]$AutoRetries = 0)
     $source = if ($null -ne $Session) { $Session } elseif ($null -ne $ExitRecord) { $ExitRecord } else { @{} }
     $block = $source["last_acked_block"]
     $state = [ordered]@{
@@ -210,7 +284,9 @@ function Write-UploaderHaltState {
         last_acked_block  = if ($block) { [int]$block } else { $null }
         total_blocks      = if ($Session -and $Session["total_blocks"]) { [int]$Session["total_blocks"] } else { $null }
         detail            = if ($ExitRecord) { $ExitRecord["detail"] } else { $null }
+        signature         = if ($ExitRecord -and $ExitRecord["signature"]) { $ExitRecord["signature"] } else { $null }
         attempts          = $Attempts
+        auto_retries      = $AutoRetries
         instruction       = $Decision.Instruction
     }
     [System.IO.File]::WriteAllText($Path, ($state | ConvertTo-Json), $Utf8NoBom)
@@ -221,6 +297,8 @@ function New-SupervisorState {
         Renderer = $null; Uploader = $null
         NextRendererStart = [datetime]::MinValue; NextUploaderStart = [datetime]::MinValue
         Attempts = 0; Halted = $false; RendererStarts = 0; UploaderStarts = 0
+        # Sudden-failure retries: used in this incident, one waiting to start, one running.
+        SuddenRetries = 0; RetryPending = $false; RetryInFlight = 0
     }
 }
 
@@ -239,18 +317,57 @@ function Resolve-UploaderExit {
     if ($delivered -and $delivered.LastWriteTime -gt $proc.TigaStartedAt) {
         if ($State.Attempts -gt 0) { Write-SupervisorLog "Uploader delivered a frame during this run; retry counter reset." }
         $State.Attempts = 0
+        if ($State.RetryInFlight -gt 0) {
+            Complete-SuddenRetry -State $State -HaltFile $HaltFile
+        } elseif ($State.SuddenRetries -gt 0) {
+            Write-SupervisorLog "Uploader delivered a frame during this run; automatic-retry count reset."
+            $State.SuddenRetries = 0
+        }
     }
     if ($code -ne 0) { $State.Attempts++ }
 
+    $signature = if ($exitRecord) { [string]$exitRecord["signature"] } else { "" }
     $detail = if ($exitRecord) { " Detail: $($exitRecord["detail"])" } else { "" }
-    Write-SupervisorLog "BLE uploader exited with code $code ($(Get-UploaderExitMeaning $code)).$detail"
+    $sigText = if ($signature) { " Signature: $signature." } else { "" }
+    Write-SupervisorLog "BLE uploader exited with code $code ($(Get-UploaderExitMeaning $code)).$detail$sigText"
 
-    $d = Get-UploaderDecision -ExitCode $code -Session $session -Attempt $State.Attempts
+    if ($State.RetryInFlight -gt 0) {
+        $n = $State.RetryInFlight
+        if ($BleSlowRetryCodes -contains $code) {
+            # No session was opened; the retry is still pending its outcome.
+            Write-SupervisorLog "Automatic retry $n of $BleSuddenRetryMax has not reached the keyboard yet (code $code); the normal reconnect backoff applies and it still counts as retry $n."
+        } else {
+            $what = if ($signature) { "code $code, signature $signature" } else { "code $code" }
+            Write-SupervisorLog "Automatic retry $n of $BleSuddenRetryMax FAILED ($what)."
+            Write-RetryState -HaltFile $HaltFile -Status "failed" -Retry $n -Event "retry $n of $BleSuddenRetryMax failed ($what)"
+            $State.RetryInFlight = 0
+        }
+    }
+
+    $d = Get-UploaderDecision -ExitCode $code -Session $session -Attempt $State.Attempts `
+        -Signature $signature -SuddenRetries $State.SuddenRetries
     if ($d.Action -eq "halt") {
+        $auto = $State.SuddenRetries
         Write-UploaderHaltState -Path $HaltFile -Decision $d -ExitCode $code -Session $session `
-            -ExitRecord $exitRecord -Attempts $State.Attempts
+            -ExitRecord $exitRecord -Attempts $State.Attempts -AutoRetries $auto
         $State.Halted = $true
+        if ($auto -gt 0) {
+            $why = if ($signature -eq "sudden") { "all $BleSuddenRetryMax automatic retries failed" } else { "after automatic retry $auto, code $code$(if ($signature) { ", signature $signature" })" }
+            Write-RetryState -HaltFile $HaltFile -Status "exhausted" -Retry $auto -Event "halted: $why"
+        }
         Write-SupervisorLog "BLE uploader HALTED ($($d.Class)): $($d.Reason). $($d.Instruction) The renderer keeps running."
+    } elseif ($d.Class -eq "sudden-retry") {
+        $State.SuddenRetries++
+        $State.RetryPending = $true
+        $at = (Get-Date).AddSeconds($d.Delay)
+        $State.NextUploaderStart = $at
+        $n = $State.SuddenRetries
+        $block = if ($exitRecord -and $exitRecord["last_acked_block"]) { ", last ACKed block $($exitRecord["last_acked_block"])" } else { "" }
+        $failure = "code 20, signature sudden$block"
+        Write-SupervisorLog (("Sudden failure ($failure): automatic retry $n of $BleSuddenRetryMax at {0:HH:mm:ss}, in $($d.Delay)s. " -f $at) +
+            "No power-off for this retry (policy since 2026-10-18); the uploader halts as before if all $BleSuddenRetryMax retries fail.")
+        Write-RetryState -HaltFile $HaltFile -Status "waiting" -Retry $n -NextAttemptAt $at -LastFailure $failure `
+            -Event ("sudden failure ($failure); retry $n of $BleSuddenRetryMax scheduled for {0:HH:mm:ss}" -f $at)
     } else {
         $State.NextUploaderStart = (Get-Date).AddSeconds($d.Delay)
         $slow = if ($d.Class -eq "slow-retry") { " Keyboard still not reachable; retrying every $($d.Delay)s until it is (no halt)." } else { "" }
@@ -275,6 +392,18 @@ function Invoke-SupervisorLoop {
         $State.Halted = $true
         Write-SupervisorLog "BLE uploader is halted ($HaltFile); not starting it. Disconnect the keyboard's battery for at least 30 s (there is no power switch; unplugging USB doesn't count), then run START_STACK.ps1."
     }
+    # A retry that was waiting or running when the previous supervisor stopped is not
+    # resumed: if its session marker is still there, the uploader refuses to start and
+    # the supervisor halts, as before the retry existed.
+    $retryPath = Get-RetryStatePath $HaltFile
+    if (Test-Path -LiteralPath $retryPath) {
+        try { $old = [System.IO.File]::ReadAllText($retryPath) | ConvertFrom-Json } catch { $old = $null }
+        if ($old -and ($old.status -eq "waiting" -or $old.status -eq "running")) {
+            Write-RetryState -HaltFile $HaltFile -Status "abandoned" -Retry ([int]$old.retry) `
+                -Event "retry $($old.retry) of $BleSuddenRetryMax abandoned: the supervisor restarted"
+            Write-SupervisorLog "An automatic retry ($($old.retry) of $BleSuddenRetryMax) was $($old.status) when the previous supervisor stopped; it is not resumed."
+        }
+    }
 
     $i = 0
     while (($MaxIterations -eq 0) -or ($i -lt $MaxIterations)) {
@@ -295,13 +424,34 @@ function Invoke-SupervisorLoop {
         if (($null -ne $State.Uploader) -and $State.Uploader.HasExited) {
             Resolve-UploaderExit -State $State -HaltFile $HaltFile -StreamPath $StreamPath
         }
+        # An automatic retry succeeds while its uploader keeps running (watch mode).
+        if (($State.RetryInFlight -gt 0) -and ($null -ne $State.Uploader) -and -not $State.Uploader.HasExited) {
+            $delivered = Get-Item -LiteralPath "$StreamPath.delivered" -ErrorAction SilentlyContinue
+            if ($delivered -and $delivered.LastWriteTime -gt $State.Uploader.TigaStartedAt) {
+                Complete-SuddenRetry -State $State -HaltFile $HaltFile
+            }
+        }
         if ($State.Halted -and -not (Test-Path -LiteralPath $HaltFile)) {
             Write-SupervisorLog "Halt cleared ($HaltFile removed); starting the BLE uploader again."
             $State.Halted = $false
             $State.Attempts = 0
+            $State.SuddenRetries = 0
+            $State.RetryPending = $false
+            $State.RetryInFlight = 0
             $State.NextUploaderStart = [datetime]::MinValue
         }
         if ((-not $State.Halted) -and ($null -eq $State.Uploader) -and ((Get-Date) -ge $State.NextUploaderStart)) {
+            if ($State.RetryPending) {
+                # The uploader refuses to start while the marker exists, so the retry removes
+                # it, as START_STACK.ps1 does by hand.
+                $marker = "$StreamPath.session"
+                $removed = if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force; "session marker removed; " } else { "" }
+                $State.RetryPending = $false
+                $State.RetryInFlight = $State.SuddenRetries
+                $n = $State.RetryInFlight
+                Write-SupervisorLog "Automatic retry $n of ${BleSuddenRetryMax}: ${removed}starting the BLE uploader (no power-off)."
+                Write-RetryState -HaltFile $HaltFile -Status "running" -Retry $n -Event "retry $n of $BleSuddenRetryMax started"
+            }
             $State.Uploader = & $StartUploader
             $State.UploaderStarts++
         }

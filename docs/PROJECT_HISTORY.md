@@ -428,6 +428,12 @@ The uploader exits on a progress/completion timeout and explicitly says to power
 retrying. **Both supervisors restart it automatically after 8 seconds.** An interrupted
 transfer can therefore enter a retry loop against a keyboard still in an incomplete transfer
 state.
+*Policy revised 2026-10-18 (Michi's decision, `feature/sudden-retry`):* the fix (#4) halts
+on every code 20. Since then, a code 20 with the **sudden** signature is retried
+automatically after 120 s, at most 3 times per incident, then halts as before; slowing
+failures and code 21 still halt at once. Evidence: §7.1 sixth part and
+`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`. That is a bounded retry, not the
+unbounded 8-second loop this bug was about.
 
 **B. Already-playing media can stay on standby indefinitely — reproduced.**
 The freshness gate releases only on changed media identity, a non-playing→playing transition,
@@ -1163,6 +1169,21 @@ A:** if independence holds, a bounded automatic retry after a *sudden* code 20 (
 most halts without a power-off. That revises bug A's "never retry after CONTROL2" and is
 Michi's decision. The proposal and the confirming experiment (retry-first recovery on
 the next 6–8 halts) are in `docs/investigations/UPLOAD_FAILURES_2026-10-18.md`.
+*Decided later on 2026-10-18:* Michi approved an automatic retry after a sudden code 20:
+120 s, up to 3 retries, then the halt as before (`feature/sudden-retry`; see the note
+under bug A in §7).
+
+**Answers to run F's questions (Michi, 2026-10-18):**
+
+- **The delay between reconnecting at 13:41 and START_STACK is not known.** So "the
+  keyboard wasn't settled yet after power-on" can neither be confirmed nor ruled out for
+  the 13:41 failure. To test it, note that delay at future power-offs.
+- **The LCD showed the roar at every failure today** (13:20, 13:41, 14:03, 14:09). The
+  roar is the stock firmware's upload state, entered at CONTROL2 (§4.1). So at each stall
+  the keyboard was still in the transfer it had accepted, not reset, crashed or showing
+  the previous image. That fits the uploader's view (an open session, PROGRESS stopped).
+  It also fits 13:42 and 14:11: a new CONTROL1/CONTROL2 on a keyboard still in that state
+  started a transfer that completed.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
