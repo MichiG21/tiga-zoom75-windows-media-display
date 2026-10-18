@@ -1548,3 +1548,95 @@ RELEASE_CHECKLIST, plus the test that asserts it. I haven't changed it.
   (22:49 and 23:06 on 10-15; 18:54 and 21:14 on 10-16). Shorter: **0 of 2** (10–15 s at
   22:44 on 10-15; 25 s without key presses at 21:09 on 10-16). 21:15 on 10-15 also
   worked, but its length isn't known.
+
+---
+
+# Run F (TASKS_F.md), 2026-10-18, about 14:00–14:30: why do uploads fail?
+
+Branch `investigate/upload-failures`, off `origin/main` (`0c57230`). Analysis only:
+nothing was sent to the keyboard, the live stack wasn't touched, and nothing was posted
+on issues. PR into `main` is open, **not merged**. Read
+`docs/investigations/UPLOAD_FAILURES_2026-10-18.md` first.
+
+## Questions only you can answer
+
+1. **13:41: how long between reconnecting (battery + USB-C) and START_STACK?** On
+   2026-10-16 20:51 the keyboard advertised before its GATT table was complete (code 11).
+   If 13:41 came within seconds of power-on, "not settled yet" is a candidate cause.
+   That would explain why a power-off was followed by a failure.
+2. **When Windows is shut down, does the USB-C port keep powering the keyboard?** If the
+   keyboard ran on battery for the 38 h before 13:20, its state at the first upload
+   differs from a normal restart.
+3. **At each failure today (13:20, 13:41, 14:03, 14:09), what did the LCD show?** The
+   roar or upload animation, the previous image, or something broken? And at 13:42 and
+   14:11, before the upload: was it still showing the roar?
+4. **The halt policy (decision, not a fact):** would you accept a bounded automatic retry
+   after a *sudden* code 20 (wait 60–120 s, at most two retries, then halt as now;
+   slowing failures halt at once)? Not implemented; see "What it means for bug A" below.
+   I'd suggest collecting 6–8 more halts by hand first (experiment 1).
+5. Minor: anything heavy on 2.4 GHz (the iPad streaming) during today's failures?
+
+## Findings in plain words
+
+- **The table:** `docs/investigations/upload_attempts.csv`, one row per upload, built by
+  `tools/upload_attempts.py` (stdlib only, with a test). The context it can't get from
+  logs (how each stack start came about, battery disconnects) is in
+  `stack_events_context.csv`, which you can correct or extend. As read at 14:15:
+  **115 uploads, 12 failed, all code 20.** All at pace 0 ms.
+- **The first upload on a connection is the risky one:** 9 of 24 failed, against 3 of
+  91 later uploads.
+- **Your question: independent failures or a stuck keyboard? The data favour
+  independence.** Uploads that followed a failure failed **5 of 12**; uploads whose
+  previous upload had completed failed **4 of 12**. That's the same rate. Retries with
+  no power-off: 2 of 4 worked (13:42, 14:11); retries after a full power-off: 5 of 6.
+  Both fit "each first upload is a ~1-in-3 coin flip" (the 5/6 vs 2/4 difference is
+  within chance). "Stuck until a power-off" is ruled out by 13:42 and 14:11, and the
+  13:42 connection then did five more uploads normally. **The one exception:** the two
+  slowing failures at block 11 back to back on 2026-10-15 (22:44, 22:46). That looks
+  like a real stuck state, but only for the slowing kind.
+- **What it means for bug A:** the halt assumes a retry into a partial session fails or
+  breaks the LCD. For sudden failures, 6 logged retries without a proper reset gave 2
+  completions and 4 clean failures, with no recorded damage. If independence holds, one
+  delayed retry would clear about 6 halts in 10, and two retries about 85 %, with no
+  power-off. That's a safety-rule change, so it's your call; it's written up as a
+  proposal only.
+- **The wait doesn't matter.** Failures after 116 s to 65 min; successes after 49 s and
+  ~2.5 min.
+- **A power-off isn't a guarantee.** "Every reset of 30 s or more worked" is corrected
+  in §7.1. The old "30 s works, shorter doesn't" record (4 of 4, 0 of 2) could have
+  happened by chance at a 1-in-3 failure rate.
+- **Nothing else separates failures:** not RSSI (−55 failed, −79 worked), time of day,
+  image (two CRCs both failed and completed), trigger, renderer activity, CONTROL ACK
+  times (so no early warning before CONTROL2 is possible), or the time into the transfer.
+  Failure blocks: 3, 5, 5, 6, 7, 11, 11, 27, 37, 41, 41, 52. Only one is at the
+  frame-1/frame-2 boundary (block 27, 13:20). 5 of 12 fall in blocks 3–7, which is worth
+  watching, but I picked that window after looking.
+- **Pace 0 ms has never been varied.** The archive (PDF pp. 297–299) planned 2 → 1 → 0 ms,
+  "each separately". The only recorded result is "0 ms klappt ohne Probleme", 7.68 s,
+  so 0 ms rests on one upload. A lost write fits the sudden signature exactly; untested.
+- **Two blind spots in the uploader:** notifications other than PROGRESS/COMPLETE are
+  discarded without logging, and the BLE scan keeps running during uploads.
+- **Recorded in §7.1 (sixth part):** resets are full power-offs including a USB-C
+  unplug; typing goes over USB-C; #7 verified (2026-10-16 23:07: upload completed 23:07:13,
+  Windows shut down 23:07:27) and closed; today's timeline 13:20–14:11. Corrections where
+  today contradicts earlier text. `RETRY_RECOVERY.md`'s "LCD broken after recovery" row
+  now also names "a new failure". **README and the halt instruction are unchanged:** the
+  evidence doesn't yet clearly support new advice.
+
+## Proposed experiments, in order
+
+1. **Retry-first recovery on the halts that happen anyway.** Sudden code 20: wait ~2 min,
+   START_STACK without a power-off, once more if needed, power off only after two failed
+   retries. Slowing: power off as now. 6–8 halts. Costs nothing extra, and decides
+   question 4.
+2. **Notification logging** (code proposal A, then normal use): see what, if anything,
+   the keyboard says when it stalls. No active time.
+3. **Pace 2 ms vs 0 ms on first uploads:** 10–12 deliberate STOP/START restarts at 2 ms.
+   0 failures would be strong evidence (chance ~1 %). Costs about 2.5 s per upload and a
+   power-off per failure.
+4. **First upload after a cold boot:** just note it each time; n = 2 so far (1 failed).
+
+## Not done / blocked
+
+- The fallback's logs (`tiga_ble_re_tools\logs`) can't be tabulated: no timestamps, and
+  overwritten per run. Summarised in `upload_attempts.md` only.
