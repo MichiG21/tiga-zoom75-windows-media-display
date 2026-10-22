@@ -5,7 +5,8 @@ halt (step 2's outcome, from a real PROGRESS timeout rather than a kill) was see
 hardware on 2026-10-15; the rest of the plan below has not been run. The slow retry for
 10 and 11 (below) was added on `fix/device-selection` and is tested offline only. The
 **automatic retry after a sudden code 20** (below) was added on `feature/sudden-retry`,
-2026-10-18, with Michi's approval; tested offline only.
+2026-10-18, with Michi's approval. It first ran on hardware on 2026-10-22 21:23–21:25 and
+recovered a sudden failure without a power-off (PROJECT_HISTORY §7.1, seventh part).
 
 ## The rule
 
@@ -36,7 +37,10 @@ The evidence (`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`, PR #24):
 The rule still holds for everything else. **Slowing** failures (sustained slow blocks
 before the stall; the back-to-back pair at block 11 on 2026-10-15 is the one hint of a
 state that persists), failures the uploader can't classify, **21**, and a session marker
-without this run's exit record (a killed or crashed uploader) halt at once.
+without this run's exit record (a killed or crashed uploader) halt at once. (On
+2026-10-22 22:24 a slowing failure halted as designed, and a plain START_STACK without a
+power-off then completed. That is the first slowing failure recovered without a reset; one
+case, so the rule is unchanged.)
 
 ## Uploader exit codes (`tiga_stream_watch_flow`)
 
@@ -62,7 +66,7 @@ writes `signature=` to the exit record:
   before the stall still counts (2026-10-18 14:09: block 6 took 1860 ms, then nothing;
   a plain retry 2.5 minutes later worked).
 - **slowing:** median over 500 ms, or two or more blocks over 1000 ms (2026-10-15 22:44
-  and 22:46, 2026-10-16 18:49).
+  and 22:46, 2026-10-16 18:49, 2026-10-22 22:24).
 - **unclassified:** not a block timeout (link lost, write error, CONTROL2 ACK missing),
   no block ACKed at all, or the marker of an earlier run.
 
@@ -92,7 +96,7 @@ about 0.15 s. Nothing below changes a write, a timeout or an exit code.
 
 - `SLOW block 7/53 took 1834 ms (elapsed=4.21s)` for any block over 1000 ms.
 - `WARNING first upload is slow (block 5 at 2.42 s; healthy 0.7–0.85 s)` when the first
-  upload on a connection reaches block 5 after more than 1.5 s. All three slowing
+  upload on a connection reaches block 5 after more than 1.5 s. All four slowing
   failures so far were at 2.35–2.97 s. It comes after CONTROL2, so it warns; it cannot
   prevent anything.
 - After every `UPLOAD COMPLETE` and `UPLOAD FAILED`:
