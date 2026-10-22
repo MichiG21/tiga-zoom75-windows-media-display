@@ -1861,3 +1861,62 @@ In stop 1 the supervisor logged nothing of its own: STOP_STACK stopped the task 
   for never cutting an upload in half, whatever the first-upload numbers show.
 - The ≥ 10-restart comparison is still to do, and D (failure after a reset) is new data
   for PROJECT_HISTORY §7.1.
+
+# 2026-10-22 evening: runtime lab sessions 1–3, and the live-install log (PR #31)
+
+Claude ran nothing against the keyboard. Every read session was run by Michi with
+`capture.py --live`; Claude only analysed the dump files. No START/STOP_STACK, no install
+script, no scheduled-task change. Details of the lab work are in
+`tiga-runtime-lab/docs/LAB_NOTES.md` (private repo `MichiG21/tiga-runtime-lab`, branch
+`experiment/tiga-runtime-smoke`).
+
+## Runtime lab: what the read sessions established
+
+| Session | Time | Read | Result |
+|---|---|---|---|
+| 1 | 20:58:13–20:58:24 | tick window `0x110014C0`, GUI veneers | **F2 is not an instruction** (middle of a `push.w`). **F4 is `ldr r6, [pc, #0x3f8]`**, a PC-relative literal load. Upstream TweakLoader would refuse to hook there |
+| 2, 2b | 21:14, 21:18 | — | refused before connecting: "Target name mismatch" (WinRT's first advertisement has no name). Nothing sent. Fixed in `capture.py` (identity by name **or** the media service UUID, 15 s) |
+| 2c | 21:22:55–21:23:15 | literal pool, rest of the function, r6 struct | **The F4 literal is `0x110038D4`**, as §6 says. The hooked function is a message dispatcher: a pending flag at `0x110038D5` (0 = idle), commands from the main MCU at `0x11005D2C` |
+| 3 | 22:23:56–22:24:08 | function tail, vector table, veneer table | The function ends at `0x110019DA`; **no branch into the hook bytes** anywhere in it. No veneer points at it. The UART handler is at `0x1100146E` in RAM (not yet read) |
+
+All dumps were identical across three passes, with no memory writes. You saw no LCD
+reaction in sessions 1 and 3.
+
+**What an F4 hook needs:** the trampoline must set r6 = `0x110038D4` itself, replay
+`ldrb r0, [r6, #1]` and return to `0x110014F8`. In PSRAM (next to the payload at
+`0x220E0000`) it would need an 8- or 10-byte patch instead of 4, because `b.w` reaches only
+±16 MB.
+
+**Session 3 is only partly analysed.** Claude's responses on it were stopped twice by an
+automated safety check on Anthropic's side, although the work is read-only analysis of your
+own keyboard's firmware. At your request only the established facts were recorded. The
+trampoline comparison and recommendation were **not** done.
+
+## Live install (PR #31, not merged)
+
+PR #31 adds §7.1's seventh part from the live logs: clean stops at 21:11 and 22:23; the
+21:23 sudden failure, recovered by the automatic retry at 21:25 without a power-off; the
+22:24 slowing failure, which halted, and the plain START_STACK at 22:27 that completed
+in 8.53 s. That is the first slowing failure recovered without a reset. RETRY_RECOVERY.md now
+counts four slowing failures.
+
+**Correction made after opening the PR:** it first called 21:11 and 21:25 the *first* clean
+stops and the *first* automatic retry. The PR #20 test at 20:30–20:49 (above) came first, on
+`tiga-dev`. The PR now says "on the live install", points to that test, and the retry tally
+counts start D: retries without a power-off **5 of 7**; after a sudden failure 4 of 5.
+
+**Observation only:** both evening failures were first uploads with the stack started 7–8 s
+after a RAM read session ended (after session 1: ~29 s, first upload ~68 s, no failure).
+Two of three, no control, at the normal 1-in-3 first-upload failure rate.
+
+## Open for Michi
+
+- **Read sessions:** wait a minute or more before START_STACK and note the gap. That tests
+  the observation above cheaply.
+- **Next lab read, if wanted:** the UART handler, `0x11001460–0x110014BF`, 18 requests over
+  three passes. It needs a new `capture.py` range.
+- **Trampoline placement:** SRAM at `0x11008A60` (needs a free-RAM argument), PSRAM next to
+  the payload (needs an 8/10-byte patch that can't be written atomically), or a small SRAM
+  stub that jumps on to PSRAM. Undecided; see LAB_NOTES 2026-10-22 "night, final".
+- **PR #31:** review and merge when ready.
+- **v0.3.0-beta.1 release task:** received, not started.
