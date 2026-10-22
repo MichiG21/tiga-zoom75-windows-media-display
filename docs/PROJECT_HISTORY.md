@@ -1185,18 +1185,26 @@ under bug A in §7).
   It also fits 13:42 and 14:11: a new CONTROL1/CONTROL2 on a keyboard still in that state
   started a transfer that completed.
 
-#### Seventh part: 2026-10-22, clean stops, the first automatic retry, a slowing halt, 21:11–22:27
+#### Seventh part: 2026-10-22, clean stops and automatic retry on the live install, a slowing halt, 21:11–22:27
 
 Source: `logs\startup_supervisor.log`, `logs\ble.log` and `logs\uploader_retry.json` of the
 live install (`tiga-fresh-test`, `main`). Times are local (UTC+2); `ble.log` stamps are UTC.
 
-**Clean stop live (#20): worked both times.** 21:11:24 and 22:23:41: `STOP_STACK: BLE
+Earlier the same evening, 20:30–20:49, Michi tested PR #20 with the task pointed at
+`tiga-dev` (`feature/clean-stop`). That test had four clean stops (idle, mid-upload, during
+a retry wait, idle) and the **first automatic retry on hardware** (start D: a sudden failure
+at block 7, recovered by retry 1 in 8.73 s, no power-off). Its record is in
+`docs/NOTES_FOR_MICHI.md`, "Hardware test of PR #20 (clean stop), 2026-10-22"; its logs were
+in `tiga-dev`, not in the live install's logs used below. Everything below is the first time
+on the live install, after #20 and #28 were merged.
+
+**Clean stop on the live install (#20): worked both times.** 21:11:24 and 22:23:41: `STOP_STACK: BLE
 uploader exited on request after 0,3 s.` `ble.log`: `STOP requested; no upload in progress,
 disconnecting.` At 22:23:41 the supervisor also logged code 0 (success), reset the retry
 counter (a frame had been delivered), and `not restarting it while the request stands`.
 Neither stop came during an upload.
 
-**First automatic retry on hardware (#28): a sudden failure recovered without a power-off.**
+**First automatic retry on the live install (#28): a sudden failure recovered without a power-off.**
 
 | Time | Event |
 |---|---|
@@ -1238,10 +1246,12 @@ unknown value, no `1f400004` traffic.
   reset. One case does not refute that; the policy (slowing halts at once) is unchanged.
 - **Slowing failures now 4.** This one's block 5 came at 2.97 s, inside the 2.35–2.97 s
   range of the earlier three.
-- **The automatic retry worked the first time it ran** (1 of 1). Retries without a
-  power-off, all sources (the sixth part's 2 of 4 plus today): **4 of 6**. After a sudden
-  failure 3 of 4 (2026-10-18 13:42 and 14:11, today 21:25; 14:09 failed); after a slowing
-  failure 1 of 2 (2026-10-15 22:46 failed, today 22:27).
+- **The automatic retry worked both times it ran to completion** (2 of 2: start D at
+  20:30–20:49 on `tiga-dev`, and 21:25 here; start C's retry was cancelled by a stop and
+  doesn't count). Retries without a power-off, all sources (the sixth part's 2 of 4 plus
+  today's three): **5 of 7**. After a sudden failure 4 of 5 (2026-10-18 13:42 and 14:11,
+  today start D and 21:25; 14:09 failed); after a slowing failure 1 of 2 (2026-10-15 22:46
+  failed, today 22:27).
 
 **Observation only: both failures were first uploads shortly after a RAM read
 session.** Michi ran read-only memory sessions from the runtime lab (meletricks, §5–6)

@@ -5,7 +5,8 @@ halt (step 2's outcome, from a real PROGRESS timeout rather than a kill) was see
 hardware on 2026-10-15; the rest of the plan below has not been run. The slow retry for
 10 and 11 (below) was added on `fix/device-selection` and is tested offline only. The
 **automatic retry after a sudden code 20** (below) was added on `feature/sudden-retry`,
-2026-10-18, with Michi's approval. It first ran on hardware on 2026-10-22 21:23–21:25 and
+2026-10-18, with Michi's approval. It first ran on hardware on 2026-10-22 (20:30–20:49,
+the PR #20 test on `tiga-dev`), then on the live install at 21:23–21:25; both times it
 recovered a sudden failure without a power-off (PROJECT_HISTORY §7.1, seventh part).
 
 ## The rule

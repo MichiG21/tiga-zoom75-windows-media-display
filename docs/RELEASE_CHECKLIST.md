@@ -1,4 +1,4 @@
-# Release checklist — v0.2.0-beta.2
+# Release checklist — v0.3.0-beta.1
 
 **This one is for you, by hand.** Not a Claude Code task file. Every step needs either
 your eyes on the keyboard screen or a decision only you can make.
@@ -243,29 +243,64 @@ the notes — write down exactly what you saw.
 
 Only once the phases above are clean.
 
-- [ ] Update `CHANGELOG.md` — bug A, B, C, E, F, G, and the Unicode crash
+- [ ] `CHANGELOG.md` has a `v0.3.0-beta.1` section (done in the release PR); change
+      "(not yet tagged)" to the release date
 - [ ] Tag and push:
 
 ```
-git tag v0.2.0-beta.2
-git push origin v0.2.0-beta.2
+git tag v0.3.0-beta.1
+git push origin v0.3.0-beta.1
 ```
 
 - [ ] Wait for the installer workflow to build
+- [ ] Paste Part 2 of `docs/RELEASE_NOTES_v0.3.0-beta.1.md` as the release text, after
+      replacing its two *(update before publishing)* notes with the Phase 8 result
 - [ ] Mark the release as **latest** (not pre-release) if you want people to get it by default
-- [ ] Close issues #4, #5, #6, #8, #9, #10 — and tick the #10 checklist
-- [ ] Leave #7 open (shutdown ack) unless that got merged too
+- [ ] Issues: nothing to close; #4–#10, #14 and #15 were all closed by 2026-10-18
 
 ---
 
 ## Phase 8 — The real end-to-end test
 
-- [ ] Download the installer from your own release page
-- [ ] Run it
-- [ ] Confirm it works without you touching PowerShell
-
 This is what a user actually experiences. Worth doing even though you just tested from
-source — the installer path is different code.
+source — the installer path is different code. Do it before Phase 7 with the release PR's
+CI artifact (`TIGA-Windows-Media-Display-Setup-vpr-<N>`), and once more afterwards with
+the file from the release page.
+
+**What the installer does** (`installer/TIGA-Windows-Media-Display.iss`), which shapes
+the test:
+
+- Installs per user to `%LOCALAPPDATA%\Programs\TIGA Windows Media Display` (no admin).
+  The AppId is unchanged since v0.2.0-beta.1, so it upgrades an installed v0.2.0-beta.1
+  in place.
+- **Copies files first, then runs its own `STOP_STACK.ps1`** (`CloseApplications=no`). If
+  an older version is running, its executables may be locked during the copy. Untested.
+- Then runs `install_tiga_startup.ps1` and **starts the task. The task name is the same as
+  the development install's** ("TIGA Windows Media Display"), so installing takes the
+  task over from `tiga-fresh-test`.
+- **The packaged STOP_STACK stops any process with these names**, the dev stack's too.
+  Its stop request goes to the installed folder, which a dev uploader doesn't watch, so a
+  running dev uploader is force-killed after 30 s, possibly mid-upload. **Stop the dev
+  stack with its own `STOP_STACK.ps1` first.**
+- Logs are in `<install folder>\logs`. Start menu: *Display Control*, *Start Display*,
+  *Stop Display*, *Status*.
+- **Uninstall stops the stack and unregisters the task.** Afterwards nothing starts at
+  sign-in until the dev install re-registers it. Runtime files (`logs\`, the stream) are
+  not removed by the uninstaller.
+
+Checks:
+
+- [ ] Install v0.2.0-beta.1, then this release **over** it while v0.2 is running; note any
+      "file in use" message
+- [ ] An upload completes (`ble.log`: `UPLOAD COMPLETE`); *Status* shows `OK` and a "Last
+      delivered" frame
+- [ ] A Japanese title displays as glyphs, not boxes (`renderer.log`: `FONT fallbacks: …`)
+- [ ] It works without you touching PowerShell (Start menu shortcuts only)
+- [ ] Uninstall, then re-register the dev install's task (`install_tiga_startup.ps1`
+      in the dev folder) and start it
+
+Step-by-step for this release: `docs/NOTES_FOR_MICHI.md`, "Phase 8 test steps for
+v0.3.0-beta.1".
 
 ---
 
