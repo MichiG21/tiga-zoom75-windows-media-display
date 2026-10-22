@@ -1185,6 +1185,79 @@ under bug A in §7).
   It also fits 13:42 and 14:11: a new CONTROL1/CONTROL2 on a keyboard still in that state
   started a transfer that completed.
 
+#### Seventh part: 2026-10-22, clean stops, the first automatic retry, a slowing halt, 21:11–22:27
+
+Source: `logs\startup_supervisor.log`, `logs\ble.log` and `logs\uploader_retry.json` of the
+live install (`tiga-fresh-test`, `main`). Times are local (UTC+2); `ble.log` stamps are UTC.
+
+**Clean stop live (#20): worked both times.** 21:11:24 and 22:23:41: `STOP_STACK: BLE
+uploader exited on request after 0,3 s.` `ble.log`: `STOP requested; no upload in progress,
+disconnecting.` At 22:23:41 the supervisor also logged code 0 (success), reset the retry
+counter (a frame had been delivered), and `not restarting it while the request stands`.
+Neither stop came during an upload.
+
+**First automatic retry on hardware (#28): a sudden failure recovered without a power-off.**
+
+| Time | Event |
+|---|---|
+| 21:23:23 | Stack started. Cached address seen with an empty name |
+| 21:23:29 | First upload on the connection |
+| 21:23:33 | **Failed after 4.02 s**: no PROGRESS for block 5/53 (last ACKed 4). `median=171ms p90=608ms max=608ms`, `control1_ack=21ms control2_ack=77ms`. `SIGNATURE sudden`, code 20 |
+| 21:23:33 | Supervisor: `automatic retry 1 of 3 at 21:25:33, in 120s. No power-off` |
+| 21:25:34 | `Automatic retry 1 of 3: session marker removed; starting the BLE uploader (no power-off).` |
+| 21:25:47 | **Completed in 8.61 s**, `median=150ms max=187ms`. 21:25:48 `Automatic retry 1 of 3 SUCCEEDED` |
+| 22:23:18 | The next upload on that connection also completed (9.86 s) |
+
+During the 21:23 stall the 28-byte status notification came **10 times in about 3 s**
+(19:23:30, then 9 repeats 19:23:31–33), much faster than its usual ~2 s interval. One
+case; noted, not interpreted.
+
+**22:24: a slowing failure, halted as designed.**
+
+| Time | Event |
+|---|---|
+| 22:24:15 | Stack started |
+| 22:24:17 | First upload on the connection |
+| 22:24:20–24 | `SLOW` blocks 5, 6, 7: **1845, 2355, 1470 ms**. `WARNING first upload is slow (block 5 at 2.97 s)` |
+| 22:24:27 | **Failed after 9.72 s**: no PROGRESS for block 8/53 (last ACKed 7). `median=645ms p90=2355ms`, `control1_ack=31ms control2_ack=71ms`. `SIGNATURE slowing`, code 20 |
+| 22:24:27 | `BLE uploader HALTED (session-open) … signature slowing, so no automatic retry.` Renderer kept running |
+| 22:27:08 | Halt cleared by `START_STACK`; **no power-off** (Michi) |
+| 22:27:12 | **Completed in 8.53 s**, `median=150ms p90=165ms max=187ms` |
+
+**The keyboard kept sending its 28-byte status notification during the stall:** once at
+22:24:18, then 3 repeats 22:24:21–25, about every 2 s, as between uploads. It is not
+stall-specific: the healthy 22:27 upload received it 4 times too. So during this slowing
+stall the keyboard was not silent on `1f400002`, but it sent nothing new either: no
+unknown value, no `1f400004` traffic.
+
+**What this changes:**
+
+- **A slowing failure recovered without a power-off** for the first time: 22:27, ~2.7 min
+  after the halt, one plain START_STACK. Until now the slowing failures (2026-10-15
+  22:44/22:46, 2026-10-16 18:49) were the one hint of a state that persists until a
+  reset. One case does not refute that; the policy (slowing halts at once) is unchanged.
+- **Slowing failures now 4.** This one's block 5 came at 2.97 s, inside the 2.35–2.97 s
+  range of the earlier three.
+- **The automatic retry worked the first time it ran** (1 of 1). Retries without a
+  power-off, all sources (the sixth part's 2 of 4 plus today): **4 of 6**. After a sudden
+  failure 3 of 4 (2026-10-18 13:42 and 14:11, today 21:25; 14:09 failed); after a slowing
+  failure 1 of 2 (2026-10-15 22:46 failed, today 22:27).
+
+**Observation only: both failures were first uploads shortly after a RAM read
+session.** Michi ran read-only memory sessions from the runtime lab (meletricks, §5–6)
+with the stack stopped. They send memory-read requests (`0x08`) to the `fe00` service, no
+writes. Times from the lab's `summary.json` files:
+
+| RAM session | Ended | Stack started | First upload | Result |
+|---|---|---|---|---|
+| 1 | 20:58:24 | 20:58:53 (+29 s) | 20:59:32 (+68 s) | completed |
+| 2 | 21:23:15 | 21:23:23 (+8 s) | 21:23:29 (+14 s) | **sudden failure** |
+| 3 | 22:24:08 | 22:24:15 (+7 s) | 22:24:17 (+9 s) | **slowing failure** |
+
+Two of three, with no control: first uploads fail about 1 time in 3 anyway (sixth part),
+and the two failures have different signatures. Not a finding. To test it, wait a minute
+or more after a RAM session before START_STACK, and note the gap at every session.
+
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
 Two separate fixes, easy to conflate:
