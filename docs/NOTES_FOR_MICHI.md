@@ -1817,3 +1817,47 @@ describes the automatic retry after a sudden failure. It also lists
 
 `tiga-fresh-test` still has the files at the root until you pull. Pulling moves them;
 nothing that runs depends on them.
+
+# Hardware test of PR #20 (clean stop), 2026-10-22, 20:30–20:49
+
+Run by Michi with Claude guiding. The task was pointed at `tiga-dev` (`feature/clean-stop`
+at `10f1e69`, origin/main unmoved since the rebase), then back at `tiga-fresh-test`
+(`main`, `5c1237a`). Claude ran no START/STOP_STACK or install script.
+
+## Stop path: works as designed in all three cases
+
+| Stop | Situation | STOP_STACK line | ble.log |
+|---|---|---|---|
+| 1 | idle | `exited on request after 0,3 s` | summary, `STOP requested`, `Disconnected cleanly.`, `EXIT code=0` |
+| 2 | ~3 s into an upload (f0003, after a skip) | `exited on request after 6,9 s` | `UPLOAD COMPLETE` 9.78 s, then the same three lines |
+| 3 | during the 120 s retry wait | `no BLE uploader was running.` + `automatic retry 1 of 3 was waiting; cancelled.` | nothing (no uploader); `uploader_retry.json` → `cancelled` |
+| 4 | idle | `exited on request after 0,3 s` | as stop 1; supervisor also logged `stopped on request … not restarting` |
+
+No request file left after any stop. The session marker stayed after stop 3, as designed.
+In stop 1 the supervisor logged nothing of its own: STOP_STACK stopped the task within
+0.3 s, probably before the supervisor's next poll. Stop 4 shows the classification works.
+
+## First uploads: the hypothesis is not supported (yet)
+
+| Start | Before it | Visible after | First upload |
+|---|---|---:|---|
+| A | battery reset | 1 s | completed 8.76 s |
+| B | clean idle stop (1) | 2 s | completed 8.55 s |
+| C | clean stop during upload (2) | 2 s | **failed** block 5, 3.84 s, code 20 sudden |
+| D | battery reset (~30–40 s) | 0 s | **failed** block 7 (block 6 `SLOW` 2385 ms), 6.31 s, code 20 sudden; automatic retry 1 completed 8.73 s, no power-off |
+| E | clean idle stop (4), `main` stack | 2 s | completed 8.55 s |
+
+- No invisible periods and no code-10 exits at all (baseline: 4 of 9, 19–67 s).
+- Start D failed **after a battery reset**, which the baseline never saw (0 of 4). So
+  a failed first upload is not only a stale-link effect; C should not be blamed on the
+  clean stop with confidence either.
+- #28 worked on hardware: a sudden failure was recovered by retry 1 without a power-off.
+- Too few starts (2 clean-stop restarts, both via `tiga-dev`) to compare with the
+  baseline; the plan asks for ≥ 10.
+
+## Open for Michi
+
+- Merge PR #20 on the stop-path result alone? The design says the change is worth keeping
+  for never cutting an upload in half, whatever the first-upload numbers show.
+- The ≥ 10-restart comparison is still to do, and D (failure after a reset) is new data
+  for PROJECT_HISTORY §7.1.

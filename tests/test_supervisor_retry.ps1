@@ -76,6 +76,11 @@ Assert-True ((Decide 21 1 $marker "sudden" 0).Action -eq "halt") "code 21 halts 
 Assert-True ((Decide 1 1 $marker "sudden" 0).Action -eq "halt") "a killed uploader (code 1) with a marker halts, even with a stray signature"
 Assert-True ((Decide 20 1 $null "sudden" 0).Action -eq "retry") "sudden code 20 retries even if the marker is already gone"
 Assert-True ((Decide 0 0).Action -eq "retry") "a clean exit is restarted"
+$d = Get-UploaderDecision -ExitCode 0 -Session $null -Attempt 0 -StopRequested
+Assert-True ($d.Action -eq "stop" -and $d.Class -eq "stopped-on-request" -and -not $d.NeedsPowerCycle) "a clean exit after a stop request is not restarted"
+Assert-True ((Get-UploaderDecision -ExitCode 10 -Session $null -Attempt 1 -StopRequested).Action -eq "stop") "code 10 after a stop request (disconnect failed) is not retried"
+Assert-True ((Get-UploaderDecision -ExitCode 20 -Session $null -Attempt 1 -StopRequested).Action -eq "halt") "an upload that failed on its way out still halts"
+Assert-True ((Get-UploaderDecision -ExitCode 1 -Session @{ frame_id = "r-f0001" } -Attempt 1 -StopRequested).Class -eq "session-open") "a session marker still halts when a stop was requested"
 
 # ---- Loop with dummy children --------------------------------------------------------
 
@@ -90,6 +95,13 @@ if "check" in actions and os.path.exists(stream + ".session"):
 def put(ext, text):
     with open(stream + ext, "w") as f:
         f.write(text)
+if "wait-stop" in actions:  # like the real uploader: run until <stream>.stop appears
+    for _ in range(600):
+        if os.path.exists(stream + ".stop"):
+            break
+        time.sleep(0.05)
+if "ignore-stop" in actions:  # an uploader that never honours it (an old build, or stuck)
+    time.sleep(60)
 if "deliver" in actions:
     time.sleep(0.05)
     put(".delivered", "frame_id=r-f0009\ncrc32=00000000\nrun_id=%s\n" % run_id)
@@ -118,7 +130,7 @@ function Invoke-Scenario {
     # $Plan: one entry per uploader start: @(<exit code>, <actions...>); the last repeats.
     param([string]$Name, [object[]]$Plan, [int]$Iterations, [switch]$Halted)
     Write-Host "== $Name"
-    foreach ($ext in ".session", ".exit", ".delivered") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
+    foreach ($ext in ".session", ".exit", ".delivered", ".stop") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Get-RetryStatePath $haltFile) -ErrorAction SilentlyContinue
     if (-not $Halted) { Remove-Item -LiteralPath $haltFile -ErrorAction SilentlyContinue }
     Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
@@ -292,6 +304,165 @@ $r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
 Assert-True ($r.status -eq "abandoned" -and (Get-Content -Raw $SupervisorLog) -match "it is not resumed" -and $state.RetryInFlight -eq 0) "marked abandoned and logged; the new supervisor starts fresh"
 Remove-Item -LiteralPath (Get-RetryStatePath $haltFile)
 
+# ---- Clean stop (docs/design/CLEAN_STOP.md) ------------------------------------------
+
+function Invoke-StopScenario {
+    # Runs the real loop while a background job plays STOP_STACK.ps1's part on <stream>.stop.
+    param([string]$Name, [object[]]$Plan, [int]$Iterations, [scriptblock]$Job, [switch]$StaleRequest)
+    Write-Host "== $Name"
+    foreach ($ext in ".session", ".exit", ".delivered", ".stop") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $haltFile, (Get-RetryStatePath $haltFile) -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+    if ($StaleRequest) { Set-Content -LiteralPath "$stream.stop" -Value "requested_at=yesterday" -Encoding ASCII }
+
+    $state = New-SupervisorState
+    $starts = New-Object System.Collections.ArrayList
+    $startUploader = {
+        $step = @($Plan[[Math]::Min($starts.Count, $Plan.Count - 1)])
+        [void]$starts.Add((Get-Date))
+        Start-LoggedProcess -Name "ble" -FilePath $python -Arguments (@($dummy, $stream) + ($step | ForEach-Object { "$_" })) `
+            -WorkingDirectory $work -StdOut (Join-Path $logs "ble.log") -StdErr (Join-Path $logs "ble_error.log")
+    }
+    $startRenderer = {
+        Start-LoggedProcess -Name "renderer" -FilePath $python -Arguments @($sleeper) `
+            -WorkingDirectory $work -StdOut (Join-Path $logs "renderer.log") -StdErr (Join-Path $logs "renderer_error.log")
+    }
+    $bg = if ($Job) { Start-Job -ScriptBlock $Job -ArgumentList "$stream.stop" }
+    try {
+        Invoke-SupervisorLoop -State $state -StartRenderer $startRenderer -StartUploader $startUploader `
+            -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations $Iterations
+        $state | Add-Member -NotePropertyName RendererAlive -NotePropertyValue (-not $state.Renderer.HasExited)
+    } finally {
+        foreach ($p in @($state.Renderer, $state.Uploader)) { try { Stop-LoggedProcess $p } catch {} }
+        if ($bg) { Remove-Job $bg -Force }
+        Remove-Item -LiteralPath "$stream.stop" -ErrorAction SilentlyContinue
+    }
+    return $state
+}
+
+# Wait until the uploader is running, then request the stop.
+$requestStop = { param($f) Start-Sleep -Milliseconds 500; Set-Content -LiteralPath $f -Value "requested_at=now" -Encoding ASCII }
+
+$s = Invoke-StopScenario "stop requested while idle" -Plan @(, @(0, "wait-stop")) -Iterations 60 -Job $requestStop -StaleRequest
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($log -match "Removed a stale stop request") "a stop request left at supervisor start is removed and logged"
+Assert-True ($s.UploaderStarts -eq 1) "uploader started once and not restarted after its requested exit (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "exited with code 0" -and $log -match "stopped on request") "supervisor logs the requested stop"
+Assert-True ($log -notmatch "Restarting BLE uploader") "no restart is scheduled"
+Assert-True (-not $s.Halted -and $null -eq (Read-Halt)) "a requested stop is not a halt"
+Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer untouched"
+
+$s = Invoke-StopScenario "stop requested; the upload in progress fails on its way out" `
+    -Plan @(, @(20, "wait-stop", "marker", "record")) -Iterations 60 -Job $requestStop
+$h = Read-Halt
+Assert-True ($s.UploaderStarts -eq 1 -and $s.Halted -and $h.class -eq "session-open" -and $h.needs_power_cycle) "it still halts and asks for a power cycle"
+
+$withdraw = { param($f) Start-Sleep -Milliseconds 500; Set-Content -LiteralPath $f -Value "x" -Encoding ASCII; Start-Sleep -Milliseconds 2500; Remove-Item -LiteralPath $f }
+$s = Invoke-StopScenario "stop request withdrawn while the supervisor still runs" -Plan @(, @(0, "wait-stop")) -Iterations 110 -Job $withdraw
+Assert-True ($s.UploaderStarts -eq 2) "uploader started again once the request was gone (starts: $($s.UploaderStarts))"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "Stop request withdrawn") "withdrawal is logged"
+
+# Clean stop meets the automatic retry (#28).
+$stopLater = { param($f) Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath $f -Value "requested_at=now" -Encoding ASCII }
+$s = Invoke-StopScenario "stop while an automatic retry is running" `
+    -Plan @(@(20, "marker", "record", "sudden"), @(0, "check", "wait-stop")) -Iterations 50 -Job $stopLater
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt)) "retry 1 started, then stopped on request; no halt (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "Automatic retry 1 of 3 ended by a stop request before it delivered a frame; not counted as a failure" -and $log -notmatch "Automatic retry 1 of 3 FAILED") "the exit on request is not a failed retry"
+Assert-True ($s.SuddenRetries -eq 1 -and $s.RetryInFlight -eq 0 -and -not $s.RetryPending -and $r.status -eq "cancelled") "count unchanged, nothing pending, retry state cancelled"
+Assert-True ($log -notmatch "Restarting BLE uploader" -and $s.Attempts -eq 1) "no restart, and the stop added no failed attempt"
+
+$BleSuddenRetryDelay = 3
+$stopSoon = { param($f) Start-Sleep -Milliseconds 800; Set-Content -LiteralPath $f -Value "requested_at=now" -Encoding ASCII }
+$s = Invoke-StopScenario "stop during the wait for an automatic retry" -Plan @(, @(20, "marker", "record", "sudden")) -Iterations 50 -Job $stopSoon
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($s.UploaderStarts -eq 1 -and $s.RetryPending) "the waiting retry did not start while the request stood (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "Stop requested while automatic retry 1 of 3 is waiting; it will not start while the request stands") "the hold is logged"
+$msg = Stop-PendingSuddenRetry -HaltFile $haltFile
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($msg -match "automatic retry 1 of 3 was waiting; cancelled" -and $r.status -eq "cancelled" -and @($r.events)[-1] -match "cancelled by STOP_STACK") "STOP_STACK's cleanup records the cancelled wait"
+Assert-True ($null -eq (Stop-PendingSuddenRetry -HaltFile $haltFile)) "cancelling twice does nothing"
+$BleSuddenRetryDelay = 0.4
+
+$s = Invoke-StopScenario "stop requested; the upload in progress fails suddenly on its way out" `
+    -Plan @(, @(20, "wait-stop", "marker", "record", "sudden")) -Iterations 40 -Job $requestStop
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($s.UploaderStarts -eq 1 -and -not $s.Halted -and $s.RetryPending -and $s.SuddenRetries -eq 1) "a real sudden failure is still scheduled for its retry, held by the request"
+Assert-True ($log -match "automatic retry 1 of 3 at" -and $log -notmatch "stopped on request") "logged as the sudden failure it is"
+
+# Invoke-StackStop is STOP_STACK.ps1's logic. The task and the force-kill are stand-ins:
+# nothing here touches the real scheduled task or kills anything but its own dummies.
+Write-Host "== Invoke-StackStop"
+function Start-Dummy {
+    param([string[]]$Actions)
+    $argLine = (@($dummy, $stream, "0") + $Actions | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $p = Start-Process -FilePath $python -ArgumentList $argLine -WindowStyle Hidden -PassThru
+    $null = $p.Handle
+    Start-Sleep -Milliseconds 300
+    return $p
+}
+Remove-Item -LiteralPath "$stream.stop" -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+
+$p = Start-Dummy @("wait-stop")
+$calls = New-Object System.Collections.ArrayList
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } `
+    -StopTask { [void]$calls.Add("task(uploader exited: $($p.HasExited))") } -ForceKillAll { [void]$calls.Add("kill") } `
+    -TimeoutSeconds 15 -PollSeconds 0.1 6>$null
+Assert-True ($r.Outcome -eq "clean" -and $p.HasExited -and $p.ExitCode -eq 0) "a cooperating uploader exits 0 on request ($($r.Outcome), $('{0:n1}' -f $r.Seconds) s)"
+Assert-True (($calls -join ",") -eq "task(uploader exited: True),kill") "task stopped and force-kill run only after the uploader exited: $($calls -join ',')"
+Assert-True (-not (Test-Path "$stream.stop")) "the request is withdrawn afterwards"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "STOP_STACK: BLE uploader exited on request after") "clean exit logged"
+
+$p = Start-Dummy @("ignore-stop")
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } -StopTask {} `
+    -ForceKillAll { Stop-Process -Id $p.Id -Force } -TimeoutSeconds 1 -PollSeconds 0.1 6>$null
+[void]$p.WaitForExit(5000)
+Assert-True ($r.Outcome -eq "timeout" -and $r.Seconds -ge 1 -and @($r.ProcessIds) -contains $p.Id) "an uploader that ignores the request times out"
+Assert-True ($p.HasExited) "and is force-killed afterwards"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "did not exit within 1 s; force-killing it \(pid $($p.Id)\)") "fallback logged with the pid"
+Assert-True (-not (Test-Path "$stream.stop")) "the request is withdrawn after a timeout too"
+
+$sawFile = $null
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { @() } `
+    -StopTask { $script:sawFile = Test-Path "$stream.stop" } -ForceKillAll {} -TimeoutSeconds 5 6>$null
+Assert-True ($r.Outcome -eq "not-running" -and $sawFile -eq $false) "no uploader: no request written, no wait"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "no BLE uploader was running") "that is logged too"
+
+# The uploader exits while asked, but by failing the upload it was finishing.
+Remove-Item -LiteralPath "$stream.exit" -ErrorAction SilentlyContinue
+$p = Start-Dummy @("wait-stop", "record", "sudden")
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } -StopTask {} -ForceKillAll {} -TimeoutSeconds 15 -PollSeconds 0.1 6>$null
+Assert-True ($r.Outcome -eq "failed" -and $r.Signature -eq "sudden") "an exit that wrote an exit record after the request is reported as failed ($($r.Outcome))"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "exited after .* s, but not on request: the upload it was finishing failed \(code 0, signature sudden: PROGRESS timeout") "and logged as such, not as 'exited on request'"
+$p = Start-Dummy @("wait-stop")
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { $p.Id } -StopTask {} -ForceKillAll {} -TimeoutSeconds 15 -PollSeconds 0.1 6>$null
+Assert-True ($r.Outcome -eq "clean") "an older exit record does not make a later clean exit look failed"
+Remove-Item -LiteralPath "$stream.exit" -ErrorAction SilentlyContinue
+
+# A waiting automatic retry is cancelled by the stop (the supervisor that held it is gone).
+Write-RetryState -HaltFile $haltFile -Status "waiting" -Retry 2 -Event "retry 2 of 3 scheduled"
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+$r = Invoke-StackStop -StreamPath $stream -GetUploaderProcessIds { @() } -StopTask {} -ForceKillAll {} -HaltFile $haltFile -TimeoutSeconds 5 6>$null
+$rs = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($r.Outcome -eq "not-running" -and $rs.status -eq "cancelled") "a stop during a retry wait cancels it"
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "STOP_STACK: automatic retry 2 of 3 was waiting; cancelled") "and says so"
+Remove-Item -LiteralPath (Get-RetryStatePath $haltFile)
+
+# STOP_STACK.ps1 itself would stop the real scheduled task, so its text is checked instead.
+Write-Host "== STOP_STACK.ps1"
+foreach ($script in @("STOP_STACK.ps1", "installer\runtime\STOP_STACK.ps1")) {
+    $text = Get-Content -Raw (Join-Path $RepoRoot $script)
+    $invoke = $text.IndexOf("Invoke-StackStop")
+    Assert-True ($invoke -ge 0) "$script uses Invoke-StackStop"
+    $first = $text.IndexOf("Stop-ScheduledTask")
+    $kill = $text.IndexOf("Stop-Process")
+    Assert-True ($first -gt $invoke -and $kill -gt $invoke) "$script stops the task and kills only inside Invoke-StackStop's stand-ins"
+    Assert-True ($text -match "session_01_bulk_stream\.bin") "$script names the stream the uploader watches"
+    Assert-True ($text -match '-HaltFile \(Join-Path \$Logs "uploader_halted\.json"\)') "$script passes the halt file, so a waiting retry is cancelled"
+}
+
 # STATUS_STACK.ps1 (dev layout) shows the halt prominently. It only reads, so a copy
 # can run against a fake install root.
 Write-Host "== STATUS_STACK.ps1"
@@ -354,6 +525,8 @@ foreach ($script in @("START_STACK.ps1", "installer\runtime\START_STACK.ps1")) {
     $clear = $text.IndexOf("Clear-UploaderHalt")
     $start = $text.IndexOf("Start-ScheduledTask")
     Assert-True ($clear -ge 0 -and $clear -lt $start) "$script clears the halt before Start-ScheduledTask"
+    $clearStop = $text.IndexOf("Clear-UploaderStopRequest")
+    Assert-True ($clearStop -ge 0 -and $clearStop -lt $start) "$script withdraws a leftover stop request before Start-ScheduledTask"
 }
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

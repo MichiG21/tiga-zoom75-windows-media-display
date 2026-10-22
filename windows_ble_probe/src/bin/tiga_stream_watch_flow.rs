@@ -296,6 +296,17 @@ fn write_sidecar(stream_path: &Path, ext: &str, text: &str) {
     }
 }
 
+// ---- Stop request (docs/design/CLEAN_STOP.md) --------------------------------------
+//
+// STOP_STACK.ps1 writes `<stream>.stop` and waits for the uploader to exit. The
+// uploader checks for it only between uploads: an upload in progress is always
+// finished (or fails the normal way) first, because abandoning one is what leaves the
+// keyboard needing its battery disconnected. It then disconnects and exits 0.
+
+fn stop_requested(stream_path: &Path) -> bool {
+    sidecar_path(stream_path, ".stop").exists()
+}
+
 fn record_delivery(stream_path: &Path, frame_id: &str, crc: &str, elapsed_s: f64, timing: Option<&TimingSummary>) {
     write_sidecar(
         stream_path,
@@ -1453,6 +1464,14 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         return Ok(());
     }
 
+    if stop_requested(stream_path) {
+        log!(
+            "STOP requested before connecting ({} exists); not connecting.",
+            sidecar_path(stream_path, ".stop").display()
+        );
+        return Ok(());
+    }
+
     let manager = Manager::new().await.class(Failure::Unreachable)?;
     let adapters = manager.adapters().await.class(Failure::Unreachable)?;
     let adapter = adapters.first().ok_or("No Bluetooth adapter found").class(Failure::Unreachable)?;
@@ -1489,6 +1508,13 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut stream_ended = false;
 
     loop {
+        // Only here, between uploads: never in the middle of one.
+        if stop_requested(stream_path) {
+            flush_notification_repeats();
+            log!("STOP requested; no upload in progress, disconnecting.");
+            break;
+        }
+
         let stream = fs::read(stream_path).class(Failure::Fatal)?;
         validate_stream(&stream, allow_single_frame).class(Failure::Fatal)?;
 
@@ -1565,6 +1591,23 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_request_is_a_sidecar() {
+        let dir = std::env::temp_dir().join(format!("tiga_stop_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        assert!(!stop_requested(&stream));
+        fs::write(sidecar_path(&stream, ".stop"), "requested_at=2026-10-16T20:00:00Z
+").unwrap();
+        assert!(stop_requested(&stream));
+        // Other sidecars are not a stop request.
+        fs::remove_file(sidecar_path(&stream, ".stop")).unwrap();
+        fs::write(sidecar_path(&stream, ".session"), "frame_id=x
+").unwrap();
+        assert!(!stop_requested(&stream));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn median_and_p90() {
