@@ -1918,5 +1918,172 @@ Two of three, no control, at the normal 1-in-3 first-upload failure rate.
 - **Trampoline placement:** SRAM at `0x11008A60` (needs a free-RAM argument), PSRAM next to
   the payload (needs an 8/10-byte patch that can't be written atomically), or a small SRAM
   stub that jumps on to PSRAM. Undecided; see LAB_NOTES 2026-10-22 "night, final".
-- **PR #31:** review and merge when ready.
-- **v0.3.0-beta.1 release task:** received, not started.
+- **PR #31:** merged (2026-10-22 20:41 UTC). This section reached `main` later, via PR #32.
+- **v0.3.0-beta.1 release task:** done later the same evening; see the next section.
+
+# v0.3.0-beta.1 release preparation, 2026-10-22 late evening (PR #32)
+
+Branch `release/v0.3.0-beta.1` off `origin/main` (`8b2011a`, after #31). Docs only. Claude
+ran no install, START_STACK, STOP_STACK or scheduled-task command.
+
+## What the PR does
+
+- **First commit, cherry-picked:** `5ec7430` → `e2da0a7`. It was pushed to
+  `docs/hardware-log-2026-10-22` after #31 was merged, so it never reached `main`. It holds
+  the §7.1 "first retry" corrections and the previous section of these notes. It applied
+  without conflicts.
+- **`docs/RELEASE_NOTES_v0.3.0-beta.1.md`:** finished blockers removed (version name,
+  CHANGELOG, #7, issues, #20); #25–#31 added to the release text; #7 under "verified"; the
+  failure-rate text uses the 2026-10-18 figures.
+- **`CHANGELOG.md`:** a full `v0.3.0-beta.1 (not yet tagged)` section, including the
+  license change MIT → GPL-2.0-only.
+- **`docs/RELEASE_CHECKLIST.md`:** title and Phase 7 tag `v0.3.0-beta.1`; Phase 7's
+  "close issues" items replaced (all closed already); Phase 8 rewritten against the
+  installer script.
+
+**Dates for #7, to avoid confusion:** verified on hardware 2026-10-16 23:07, closed on
+GitHub 2026-10-18 11:31 UTC.
+
+## Installer facts found while checking Phase 8
+
+1. **The installer takes over your scheduled task.** It registers "TIGA Windows Media
+   Display", the same name the dev install uses, pointing at
+   `%LOCALAPPDATA%\Programs\TIGA Windows Media Display`, and starts it.
+2. **Its STOP_STACK kills the dev stack too, uncleanly.** The packaged `STOP_STACK.ps1`
+   matches processes by name. Its stop request goes to the installed folder, which the
+   `tiga-fresh-test` uploader doesn't watch, so a running dev uploader is force-killed after
+   30 s, possibly mid-upload. **Stop the dev stack with its own STOP_STACK first.**
+3. **Files are copied before anything is stopped** (`CloseApplications=no`). Installing over
+   a running v0.2.0-beta.1 may hit locked executables. That's what the test is for.
+4. **Uninstall unregisters the task** and leaves `logs\` behind.
+5. **v0.2.0-beta.1 has no bug A fix.** If one of its uploads fails, it retries every 8 s
+   against a keyboard stuck mid-transfer, the pattern that broke the LCD before. Keep its
+   part of the test short.
+
+## Phase 8 test steps for v0.3.0-beta.1
+
+All commands are for PowerShell. Each install starts the stack and uploads to the keyboard.
+
+**0. Before you start**
+
+- The keyboard is on, wired over USB-C, and showing an image; no halt is pending
+  (`C:\Users\Regal\source\tiga-fresh-test\STATUS_STACK.ps1` shows no `HALTED`).
+- Pick a track with a **Japanese title** for step 6 (e.g. `トーキョーレギー`, used on
+  2026-10-15).
+
+**1. Stop the live stack cleanly**
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\STOP_STACK.ps1
+```
+
+Expect `exited on request after … s` or `no BLE uploader was running`. If it reports a
+force-kill, check the keyboard before you start the test.
+
+**2. Download both installers**
+
+```
+$d = "$env:USERPROFILE\Downloads\tiga-phase8"; New-Item -ItemType Directory -Force $d | Out-Null
+gh release download v0.2.0-beta.1 -R MichiG21/tiga-zoom75-windows-media-display -p "TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe" -D $d
+$run = gh run list -R MichiG21/tiga-zoom75-windows-media-display --branch release/v0.3.0-beta.1 --workflow installer.yml --status success --limit 1 --json databaseId -q ".[0].databaseId"
+gh run download $run -R MichiG21/tiga-zoom75-windows-media-display -n TIGA-Windows-Media-Display-Setup-vpr-32 -D $d
+Get-ChildItem $d
+```
+
+Expect `TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe` (13,210,661 bytes) and
+`TIGA-Windows-Media-Display-Setup-vpr-32.exe`. `$run` is the newest successful installer
+build of the PR; every push builds a new one. Without `gh`: PR #32 → Checks → *Build
+Windows installer* → Artifacts.
+
+Check that no packaged version is installed yet:
+`Test-Path "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display"` → `False`. If `True`,
+note it: that is an earlier install, and step 3 becomes an upgrade too.
+
+**3. Install v0.2.0-beta.1**
+
+1. Run `TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe`. SmartScreen: *More info → Run
+   anyway*. Leave "Open TIGA Display Control" unticked; *Finish*.
+2. Check the task now points at the installed copy:
+   `(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.Arguments` contains
+   `AppData\Local\Programs\TIGA Windows Media Display`.
+3. Wait for the LCD to show the current track (about 20–30 s; play something if nothing is
+   playing). Then **don't change tracks** and go straight to step 4.
+4. **If v0.2's upload doesn't complete** (LCD stuck on the roar, or nothing after a minute):
+   Start menu → *Stop Display* at once, battery disconnect ≥ 30 s, reconnect, then continue
+   with step 4. Note it; it's a v0.2 behaviour, not this release's.
+
+**4. Install the new build over it, while v0.2 is running**
+
+1. Run `TIGA-Windows-Media-Display-Setup-vpr-32.exe`, same SmartScreen step.
+2. **Watch for a "file in use" / "unable to write" / "DeleteFile failed" message.** If one
+   appears, write down the file name and take a screenshot. Click *Retry* once; if it
+   comes back, run v0.2's Start menu → *Stop Display*, then *Retry*. This is the untested
+   point the checklist asks about.
+3. The installer's status text shows "Stopping any previous TIGA display session...",
+   "Installing automatic startup task...", "Starting TIGA Windows Media Display...".
+   The stop may take up to 30 s.
+4. Keep the setup log:
+   `Get-ChildItem $env:TEMP -Filter "Setup Log*.txt" | Sort-Object LastWriteTime | Select-Object -Last 1`
+   and copy it to `$d`.
+5. Settings → Apps → *TIGA Windows Media Display* shows version `pr-32`. The task arguments
+   (step 3.2) still point at the installed folder.
+
+**5. An upload works, and Status**
+
+1. Change track. Within about 20 s the LCD shows it.
+2. `$l = "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\logs"`, then
+   `Get-Content "$l\ble.log" -Tail 40`. Expect `Scan stopped: connected to the keyboard`,
+   `UPLOAD COMPLETE frame=… in ~8–10s` and a `TIMING` line.
+   - If the first upload fails with `SIGNATURE sudden`, that's the known first-upload
+     failure. The packaged build should retry after 120 s by itself, and *Status* shows
+     `RETRYING`. Wait for it, and note it: it's the first packaged run of #28.
+3. Start menu → *Status*. Expect `OK - the keyboard shows the newest rendered frame` and
+   `Last delivered: <frame id> <time> in <s>s`, and no `HALTED`.
+
+**6. A Japanese title**
+
+1. Play the Japanese-titled track. The LCD shows the characters, not empty boxes.
+2. `Select-String -Path "$l\renderer.log" -Pattern "FONT" | Select-Object -Last 5`.
+   Expect `FONT fallbacks: …` listing Windows fonts, and **no** `FONT no font has U+…` for
+   the title's characters.
+
+**7. Optional: the packaged clean stop**
+
+Start menu → *Stop Display*, while no upload is running. Expect it to finish quickly; then
+*Start Display*, and the current track comes back. That's #20 on the packaged layout.
+
+**8. Uninstall**
+
+1. Copy the logs first: `Copy-Item -Recurse $l "$d\logs-packaged"`.
+2. Settings → Apps → *TIGA Windows Media Display* → Uninstall.
+3. Check the task is gone: `Get-ScheduledTask -TaskName "TIGA Windows Media Display"` gives
+   an error ("No MSFT_ScheduledTask objects found"). The install folder may remain with
+   `logs\` in it; delete it by hand once the logs are saved.
+
+**9. Point the task back at `tiga-fresh-test`**
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\install_tiga_startup.ps1
+(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.Arguments
+```
+
+The arguments must contain `C:\Users\Regal\source\tiga-fresh-test`. The script registers
+the task but doesn't start it. Start the stack:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\START_STACK.ps1
+```
+
+and check `C:\Users\Regal\source\tiga-fresh-test\logs\ble.log` for `UPLOAD COMPLETE`.
+
+**10. Record the result**
+
+For the release notes: whether step 4 hit a locked file, and whether the packaged upload,
+Status and Japanese title worked, plus anything odd. Then the two *(update before
+publishing)* notes in Part 2 can be replaced, and Phase 7 can go ahead.
+
+## Open for Michi
+
+- Review and merge PR #32 after Phase 8 (or before; it's docs only, and the notes'
+  placeholders say what's still pending).
+- Whether the Phase 4 killed-uploader test must pass before the release (Part 1, item 2).
