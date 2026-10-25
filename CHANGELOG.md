@@ -30,6 +30,12 @@
   supervisor doesn't restart an uploader that stopped on request (PR #20).
 - The block timeout is back to 2500 ms (it was 10000 ms for a day on `main`; it never
   rescued an upload) (PR #18).
+- **No more red/green template upload at startup.** A stream with no `.frame` sidecar at
+  all, which only the seeded template is, is held (`UPLOAD HELD`, logged once) until the
+  renderer writes its first frame, then that frame is uploaded. On the first packaged start
+  the template went out for 64 s while the renderer took 36 s to its first frame (Phase 8,
+  2026-10-25). A sidecar that exists but doesn't match is handled as before.
+  `--allow-no-sidecar` uploads the template anyway, for a manual test.
 
 ### Renderer and display
 
