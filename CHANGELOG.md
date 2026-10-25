@@ -68,6 +68,14 @@
   uploader was waiting for (PR #25). An identical repeat is counted and summarised in one
   line instead of logged again (PR #30).
 
+### Installer
+
+- **Installing over a running version works.** Setup stops the installed version, with
+  that version's own `STOP_STACK.ps1`, before it copies any file, and waits until its
+  executables have exited. Installing over a running v0.2.0-beta.1 used to fail with
+  "DeleteFile failed; code 5. Access is denied" on `tiga_stream_watch_flow.exe`, because
+  the stop ran only after the copy (found in Phase 8, 2026-10-25).
+
 ### Other fixes
 
 - Development startup works when the checkout path contains spaces (#8).
