@@ -254,7 +254,8 @@ git push origin v0.3.0-beta.1
 
 - [ ] Wait for the installer workflow to build
 - [ ] Paste Part 2 of `docs/RELEASE_NOTES_v0.3.0-beta.1.md` as the release text, after
-      replacing its two *(update before publishing)* notes with the Phase 8 result
+      deleting its last *(Before publishing)* note, under "Installing", once the Phase 8
+      retest has passed (the other one got the 2026-10-25 result)
 - [ ] Mark the release as **latest** (not pre-release) if you want people to get it by default
 - [ ] Issues: nothing to close; #4–#10, #14 and #15 were all closed by 2026-10-18
 
@@ -273,8 +274,12 @@ the test:
 - Installs per user to `%LOCALAPPDATA%\Programs\TIGA Windows Media Display` (no admin).
   The AppId is unchanged since v0.2.0-beta.1, so it upgrades an installed v0.2.0-beta.1
   in place.
-- **Copies files first, then runs its own `STOP_STACK.ps1`** (`CloseApplications=no`). If
-  an older version is running, its executables may be locked during the copy. Untested.
+- **Stops an installed version before copying anything** (since `e0add1b`, 2026-10-25):
+  `PrepareToInstall` runs the installed `STOP_STACK.ps1` (v0.2's force-kills; later ones
+  stop cleanly) and waits until no uploader, renderer or media helper runs from the install
+  folder. After the copy it still runs its own `STOP_STACK.ps1` (`CloseApplications=no`).
+  Before the fix, installing over a running v0.2 failed on a locked
+  `tiga_stream_watch_flow.exe` (Phase 8 result below).
 - Then runs `install_tiga_startup.ps1` and **starts the task. The task name is the same as
   the development install's** ("TIGA Windows Media Display"), so installing takes the
   task over from `tiga-fresh-test`.
@@ -285,22 +290,44 @@ the test:
 - Logs are in `<install folder>\logs`. Start menu: *Display Control*, *Start Display*,
   *Stop Display*, *Status*.
 - **Uninstall stops the stack and unregisters the task.** Afterwards nothing starts at
-  sign-in until the dev install re-registers it. Runtime files (`logs\`, the stream) are
-  not removed by the uninstaller.
+  sign-in until the dev install re-registers it. The uninstaller leaves runtime files in
+  `app\` (the stream's sidecars, `session_01_bulk_stream.windows_nowplaying.bin`, the
+  thumbnail and preview) and all of `logs\`. A leftover `.frame` sidecar means a
+  reinstall's first upload is the template again (via the mismatched-sidecar path), so
+  delete the folder before installing again.
 
-Checks:
+Checks (results of the 2026-10-25 run with build `vpr-32` at `4d06fdf`):
 
 - [ ] Install v0.2.0-beta.1, then this release **over** it while v0.2 is running; note any
-      "file in use" message
-- [ ] An upload completes (`ble.log`: `UPLOAD COMPLETE`); *Status* shows `OK` and a "Last
-      delivered" frame
-- [ ] A Japanese title displays as glyphs, not boxes (`renderer.log`: `FONT fallbacks: …`)
-- [ ] It works without you touching PowerShell (Start menu shortcuts only)
-- [ ] Uninstall, then re-register the dev install's task (`install_tiga_startup.ps1`
-      in the dev folder) and start it
+      "file in use" message.
+      **2026-10-25: failed** with "DeleteFile failed; code 5. Access is denied" on
+      `app\_internal\tiga_stream_watch_flow.exe`; worked after v0.2's *Stop Display*.
+      Fixed in `e0add1b`. **Retest with a build that has the fix**; steps in
+      `docs/NOTES_FOR_MICHI.md`, "Phase 8 on hardware, 2026-10-25".
+- [x] An upload completes (`ble.log`: `UPLOAD COMPLETE`); *Status* shows `OK` and a "Last
+      delivered" frame. **2026-10-25: OK** (8.6–10.7 s). The first upload was the
+      red/green template (`frame=unknown(no-sidecar)`, 64 s) while the renderer took 36 s
+      to its first frame; fixed in `319b426`, to be seen in the retest.
+- [x] A Japanese title displays as glyphs, not boxes (`renderer.log`: `FONT fallbacks: …`).
+      **2026-10-25: OK** (`トーキョーレギー`; no `FONT no font has` line).
+- [ ] It works without you touching PowerShell (Start menu shortcuts only).
+      **2026-10-25: the *Start Display*, *Stop Display* and *Status* windows closed at
+      once**, so their output couldn't be read. Fixed in `7d086bc` (`-NoExit`); check in
+      the retest.
+- [x] The packaged clean stop: **2026-10-25: OK** (*Stop Display* at 09:41:21, uploader
+      exited on request after 0.3 s, `Disconnected cleanly`).
+- [x] The packaged automatic retry (not a planned check): **2026-10-25, first time on the
+      packaged build:** sudden failure at 09:50:44, retry 1 of 3 at 09:52:44 succeeded.
+- [x] Uninstall, then re-register the dev install's task (`install_tiga_startup.ps1`
+      in the dev folder) and start it. **2026-10-25: done**: the task points at
+      `tiga-fresh-test` again, and its stack (started 09:57) completes uploads. Runtime
+      files were left behind (see above).
+
+Also seen: v0.2.0-beta.1 crash-loops on Japanese titles (bug G, fixed in this release):
+its renderer exited 16 times in four minutes, and v0.2 completed 14 uploads meanwhile.
 
 Step-by-step for this release: `docs/NOTES_FOR_MICHI.md`, "Phase 8 test steps for
-v0.3.0-beta.1".
+v0.3.0-beta.1"; for the retest, "Phase 8 on hardware, 2026-10-25".
 
 ---
 
