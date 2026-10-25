@@ -81,6 +81,8 @@
   executables have exited. Installing over a running v0.2.0-beta.1 used to fail with
   "DeleteFile failed; code 5. Access is denied" on `tiga_stream_watch_flow.exe`, because
   the stop ran only after the copy (found in Phase 8, 2026-10-25).
+- The Start menu's *Start Display*, *Stop Display* and *Status* windows stay open, so
+  their output can be read; they used to close at once. Close them by hand.
 
 ### Other fixes
 

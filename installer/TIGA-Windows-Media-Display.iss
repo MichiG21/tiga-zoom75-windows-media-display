@@ -32,9 +32,10 @@ Source: "staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs creat
 
 [Icons]
 Name: "{autoprograms}\TIGA Windows Media Display\Display Control"; Filename: "{app}\app\_internal\tiga_display_control.exe"
-Name: "{autoprograms}\TIGA Windows Media Display\Start Display"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\START_STACK.ps1"""; WorkingDir: "{app}"
-Name: "{autoprograms}\TIGA Windows Media Display\Stop Display"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\STOP_STACK.ps1"""; WorkingDir: "{app}"
-Name: "{autoprograms}\TIGA Windows Media Display\Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\STATUS_STACK.ps1"""; WorkingDir: "{app}"
+; -NoExit keeps the window open so the script's output can be read.
+Name: "{autoprograms}\TIGA Windows Media Display\Start Display"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\START_STACK.ps1"""; WorkingDir: "{app}"
+Name: "{autoprograms}\TIGA Windows Media Display\Stop Display"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\STOP_STACK.ps1"""; WorkingDir: "{app}"
+Name: "{autoprograms}\TIGA Windows Media Display\Status"; Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\STATUS_STACK.ps1"""; WorkingDir: "{app}"
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\STOP_STACK.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Stopping any previous TIGA display session..."
