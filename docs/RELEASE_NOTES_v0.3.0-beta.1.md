@@ -36,7 +36,8 @@ Written 2026-10-16 against `main` at `e8f7211` (after #17); updated the same eve
      retried.
    - **Two more problems, fixed:** the first upload after install was the red/green
      template (`frame=unknown(no-sidecar)`, crc32 `57e8e0cf`, 64 s), because the packaged
-     renderer took 36 s to its first frame (fixed in `319b426`); and the Start menu
+     renderer took 36 s to its first frame (fixed in `319b426`; for upgrades and
+     reinstalls too since Setup deletes a leftover `.frame`); and the Start menu
      shortcuts *Start Display*, *Stop Display* and *Status* closed their window at once
      (fixed in `7d086bc`). Neither is retested on hardware yet; the same retest covers
      both.
@@ -137,8 +138,9 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 >
 > - Setup stops the running display software before it replaces any file. Installing over
 >   a running version used to fail with "DeleteFile failed; code 5. Access is denied".
-> - When the display software starts, the keyboard no longer gets the red/green test image
->   first; the first upload is the first real screen.
+> - When the display software starts, including after an install or update, the keyboard
+>   no longer gets the red/green test image first; the first upload is the first real
+>   screen.
 > - The Start menu's *Start Display*, *Stop Display* and *Status* windows stay open, so you
 >   can read what they say. Close them when you're done.
 >

@@ -27,6 +27,13 @@ UninstallDisplayIcon={app}\app\_internal\tiga_display_control.exe
 SetupLogging=yes
 CloseApplications=no
 
+[InstallDelete]
+; [Files] puts the template back as the active stream, so a .frame left by an earlier
+; install would name a frame that is no longer there, and the uploader would send the
+; template as unknown(sidecar-is-...). Without it the uploader holds the template until
+; the renderer's first frame, as on a first install.
+Type: files; Name: "{app}\app\_internal\extracted\session_01_bulk_stream.bin.frame"
+
 [Files]
 Source: "staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

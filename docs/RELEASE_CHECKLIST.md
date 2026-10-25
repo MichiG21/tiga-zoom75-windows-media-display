@@ -292,9 +292,9 @@ the test:
 - **Uninstall stops the stack and unregisters the task.** Afterwards nothing starts at
   sign-in until the dev install re-registers it. The uninstaller leaves runtime files in
   `app\` (the stream's sidecars, `session_01_bulk_stream.windows_nowplaying.bin`, the
-  thumbnail and preview) and all of `logs\`. A leftover `.frame` sidecar means a
-  reinstall's first upload is the template again (via the mismatched-sidecar path), so
-  delete the folder before installing again.
+  thumbnail and preview) and all of `logs\`. Setup deletes a leftover `.frame` sidecar
+  before copying (`[InstallDelete]`), so after a reinstall or upgrade the uploader holds
+  the template until the renderer's first frame, as on a first install.
 
 Checks (results of the 2026-10-25 run with build `vpr-32` at `4d06fdf`):
 

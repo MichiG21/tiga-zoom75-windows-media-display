@@ -2192,6 +2192,8 @@ leftovers. Options:
   survive an upgrade (the uploader then resends the last frame);
 - (c) leave it.
 
+**Decided the same day: (a), done.** See "Option (a) for fix 2" below.
+
 ## Fix 3: shortcut windows (`7d086bc`)
 
 *Start Display*, *Stop Display* and *Status* run `powershell.exe -NoExit …`. I checked
@@ -2206,14 +2208,21 @@ From "Phase 8 test steps for v0.3.0-beta.1" above: **0 (prep), 1, 2, 3, 4, 5.1�
 9**. Skip 6 and 7: they passed, and the fixes don't touch them. Fixes 2 and 3 are checked
 along the way at no extra cost. Changes against the original steps:
 
-- **Before step 1: delete the leftover install folder.** Your logs are already in
-  `Downloads\tiga-phase8\logs-packaged`. Otherwise its old `.frame` makes the first upload
-  the template again (see fix 2, "Not covered") and step 3 isn't a clean v0.2 install:
-  `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display"`
+- **Before step 1: delete only `logs\` from the leftover install folder; keep `app\`.**
+  *(Updated after option (a); this bullet first said to delete the whole folder.)* Your
+  logs are already in `Downloads\tiga-phase8\logs-packaged`, and deleting them keeps the
+  retest's logs separate:
+  `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\logs"`.
+  The leftover `app\_internal\extracted\session_01_bulk_stream.bin.frame`
+  (`frame_id=renderer-20261025-094434-4600cb-f0003`, `crc32=7bf63ef9`) stays on purpose.
+  v0.2 neither reads nor writes it, so it is still there at step 4, which then also tests
+  option (a). Check before step 3:
+  `Test-Path "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\app\_internal\extracted\session_01_bulk_stream.bin.frame"`
+  → `True`.
 - **Step 2: the new build only, into a new folder.** The artifact still has the old name
   (`…-vpr-32.exe`), so keep the two apart. The v0.2 setup is already in
-  `Downloads\tiga-phase8`. Any successful installer run at `7d086bc` or later has all three
-  fixes:
+  `Downloads\tiga-phase8`. Use the newest successful installer run of the PR (step 2's
+  `$run` line picks it); it must include the `[InstallDelete]` commit:
   `$d = "$env:USERPROFILE\Downloads\tiga-phase8-retest"` and then step 2's
   `New-Item`, `$run = …` and `gh run download …` lines with this `$d`.
 - **Step 3: play a Latin-titled track, not a Japanese one** (v0.2 crash-loops and uploads
@@ -2228,10 +2237,12 @@ along the way at no extra cost. Changes against the original steps:
   `STOP_STACK.ps1 exit code: 0` and `No TIGA stack process runs from … (waited N ms)`,
   **all before** `Starting the installation process`. If Setup instead stops with "…is
   still running…", screenshot it and keep the log: that is the new 15 s wait giving up.
-- **Step 5 adds two checks.** In `ble.log`, the first `UPLOAD START` is **not**
-  `frame=unknown(no-sidecar)`. You may see `UPLOAD HELD … crc32=57e8e0cf` and
-  `RENDERER sidecar appeared after …` (only if the renderer is slower than the connect;
-  36 s last time). The *Status* window stays open (fix 3).
+- **Step 5 adds two checks.** In `ble.log`, the first `UPLOAD START` is **neither**
+  `frame=unknown(no-sidecar)` **nor** `frame=unknown(sidecar-is-renderer-20261025-094434-4600cb-f0003)`.
+  The second would mean the leftover `.frame` survived, so option (a) didn't work. You may
+  see `UPLOAD HELD … crc32=57e8e0cf` and `RENDERER sidecar appeared after …` (only if the
+  renderer is slower than the connect; 36 s last time). The *Status* window stays open
+  (fix 3).
 - **Steps 8 and 9 as before.** Copy the logs to `$d\logs-packaged` first. Afterwards
   delete the install folder by hand.
 
@@ -2249,5 +2260,29 @@ along the way at no extra cost. Changes against the original steps:
 
 - **The fix 1 retest** above; then delete the last *(Before publishing)* note in Part 2 of
   the release notes ("Installing") and go on to Phase 7.
-- **Fix 2's leftover-sidecar case:** (a), (b) or (c) above.
+- **Fix 2's leftover-sidecar case:** (a), (b) or (c) above. *Decided: (a), see below.*
 - PR #32 is no longer docs only: it carries the installer and uploader fixes. Not merged.
+
+# Option (a) for fix 2, 2026-10-25 (PR #32)
+
+Michi chose (a). One commit on `release/v0.3.0-beta.1`: `[InstallDelete]` removes
+`{app}\app\_internal\extracted\session_01_bulk_stream.bin.frame` before `[Files]` puts
+the template back as the active stream. Inno runs `[InstallDelete]` after
+`PrepareToInstall`, so the stack has already been stopped and no renderer can write a new
+`.frame` in between. On a first install the file isn't there, and nothing happens. After an
+upgrade or reinstall the uploader now finds no sidecar and holds the template until the
+renderer's first frame, the same path as a first install. `.delivered`, `.device` and
+`.exit` stay. Until the first frame *Status* says `UNKNOWN - nothing rendered yet`, with
+the old "Last delivered".
+
+Also updated: the CHANGELOG fix 2 entry, the checklist's uninstall bullet (no more
+"delete the folder before installing again"), the two release-notes lines about the
+template, and the retest steps above: keep `app\` so the leftover `.frame` tests (a), and
+look in step 5 for `unknown(sidecar-is-…)` too.
+
+Claude installed nothing and sent nothing to the keyboard. The `[InstallDelete]` entry is
+only compiled by CI; the retest is its first run.
+
+## Open for Michi
+
+- **The Phase 8 retest** (steps above), with an installer run that includes this commit.

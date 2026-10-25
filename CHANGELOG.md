@@ -35,7 +35,8 @@
   renderer writes its first frame, then that frame is uploaded. On the first packaged start
   the template went out for 64 s while the renderer took 36 s to its first frame (Phase 8,
   2026-10-25). A sidecar that exists but doesn't match is handled as before.
-  `--allow-no-sidecar` uploads the template anyway, for a manual test.
+  `--allow-no-sidecar` uploads the template anyway, for a manual test. Setup deletes a
+  `.frame` left by an earlier install, so this also holds after an upgrade or reinstall.
 
 ### Renderer and display
 
