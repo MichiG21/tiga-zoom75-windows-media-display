@@ -4,61 +4,70 @@
 release today. Part 2 is the release text for users, ready to paste once Part 1 is done.
 
 Written 2026-10-16 against `main` at `e8f7211` (after #17); updated the same evening for
-`main` at `56c3825` (after #18 and #22). The newest release is still `v0.2.0-beta.1`
-(2026-09-09).
+`main` at `56c3825` (after #18 and #22); brought up to date on 2026-10-22 for `main` at
+`8b2011a` (after #31); Phase 8 results and the three fixes they led to added on
+2026-10-25. The version name is Michi's choice. The newest release is still
+`v0.2.0-beta.1` (2026-09-09).
 
 ---
 
 ## Part 1 — What blocks v0.3.0-beta.1 today
 
-In the order to do them. **(M)** needs Michi's decision; **(H)** needs the keyboard;
-**(C)** Claude Code can do it once told to.
+**(H)** needs the keyboard; **(M)** needs Michi's decision.
 
-1. **Done: the 2500 ms block timeout (#18) and the per-block timing (#19, merged to `main`
-   as #22).** Both are live on hardware since 2026-10-16 20:51: `Block timeout   : 2500 ms`
-   and a `TIMING` line after every upload (PROJECT_HISTORY §7.1, fourth part).
-2. **(M) Version name.** `RELEASE_CHECKLIST.md` is still titled `v0.2.0-beta.2`, and its
-   Phase 7 tags `v0.2.0-beta.2`. The task and these notes call it `v0.3.0-beta.1`. Pick
-   one; then the checklist's title and Phase 7 tag command need that one word changed.
-3. **(C) CHANGELOG.** `## Unreleased` lists the font fallback, the Morse subtitle, the
-   2500 ms block timeout and the per-block timing. Bugs A–G, device selection, the halt
-   instruction and the display-control fixes (#11–#16) are not in it yet. Part 2 below is
-   a complete list to copy from.
-4. **(H) Hardware, from the checklist,** on the build you will release:
-   - **Phase 3, Display Control: verified on 2026-10-16 except Standby + Shut Down.**
-     Lock Standby, Lock Standby again and Resume Automatic were each confirmed by the
-     renderer and uploaded (PROJECT_HISTORY §7.1, fourth part), which covers bug C from
-     the GUI and #15. **Still to do:** one Standby + Shut Down, whose ack-then-shutdown
-     path (#7) has never completed on hardware.
-   - **Phase 4, killed uploader:** `Stop-Process -Name tiga_stream_watch_flow -Force` about
-     3 s into an upload, by hand. Expect HALTED from the session marker. Never run on
-     hardware (every real halt so far was a code 20). **It leaves the keyboard needing a
-     battery disconnect**, so do it last in a session.
-   - **Phase 3, bug B:** music already playing → STOP_STACK → START_STACK. It has only ever
-     released through the old path; that's still a pass for the release.
-   - **Phase 8, the installer end to end.** The packaged supervisor, START/STOP/STATUS and
-     the PyInstaller renderer have had every change since September (bug A policy, halt
-     file, device selection, fonts) but **have never run on this keyboard**; only the dev
-     layout has. CI builds the installer on every PR but can't run it. The font fallback
-     uses the PC's own `%WINDIR%\Fonts`, so nothing to bundle, but check a Japanese title
-     on the packaged build once. Also install it **over** v0.2.0-beta.1 once: the
-     installer runs STOP_STACK only after copying files (`CloseApplications=no`), so
-     whether running old executables block the copy is untested.
-5. **Done: the three "turn the keyboard off" spots** (README, RETRY_RECOVERY step 4,
-   RELEASE_CHECKLIST Phase 4). They now say: with no power switch, "off" means
-   disconnecting the battery from the PCB; do it only when no upload is running; for the
-   unreachable-keyboard test, keep it disconnected for 1–2 minutes, then expect an upload
-   within 5 minutes with no START_STACK. Halt recovery is kept separate (at least 30 s).
-6. **Done: issues.** #4, #5, #6, #8, #9, #10, #14 and #15 were closed on 2026-10-16
-   (about 21:00), with comments (`docs/TRIAGE_2026-10-16.md`). Only #7 is open, pending
-   the Standby + Shut Down in step 4.
-7. **Not for this release:** #20 (clean stop). It changes the stop path and needs its own
-   hardware test (`docs/design/CLEAN_STOP.md`). Release without it and say so under
-   "Known problems".
+1. **(H) Phase 8, the installer end to end: run on 2026-10-25; one retest left.** Build
+   `vpr-32` (installer CI run 39853101947, `4d06fdf`), installed over a running
+   v0.2.0-beta.1 on this keyboard. Results:
+   - **Upgrade lock found, and fixed but not yet retested.** Installing over the running
+     v0.2 failed with "DeleteFile failed; code 5. Access is denied" on
+     `app\_internal\tiga_stream_watch_flow.exe`: `[Files]` copied before the `[Run]` step
+     that stops the stack. After v0.2's *Stop Display*, Setup ran through (09:33). Fixed in
+     `e0add1b`: Setup now runs the installed version's `STOP_STACK.ps1` before copying
+     anything and waits until its executables have exited. **The retest of this fix on
+     hardware is the one Phase 8 item left**; steps in `docs/NOTES_FOR_MICHI.md`,
+     "Phase 8 on hardware, 2026-10-25".
+   - **Worked on the packaged build:** uploads (`UPLOAD COMPLETE`, 8.6–10.7 s), *Status*,
+     a Japanese title (`トーキョーレギー`, glyphs; `FONT fallbacks: YuGothB.ttc, …`, no
+     missing characters), and a clean *Stop Display* (09:41:21, uploader exited on request
+     after 0.3 s).
+   - **First packaged automatic retry:** a sudden failure at 09:50:44 (block 5, last ACKed
+     4) was retried at 09:52:44 and succeeded; the frame was delivered at 09:52:55. The
+     start before it (09:44) had halted on a slowing failure, which by design is not
+     retried.
+   - **Two more problems, fixed:** the first upload after install was the red/green
+     template (`frame=unknown(no-sidecar)`, crc32 `57e8e0cf`, 64 s), because the packaged
+     renderer took 36 s to its first frame (fixed in `319b426`; for upgrades and
+     reinstalls too since Setup deletes a leftover `.frame`); and the Start menu
+     shortcuts *Start Display*, *Stop Display* and *Status* closed their window at once
+     (fixed in `7d086bc`). Neither is retested on hardware yet; the same retest covers
+     both.
+   - **v0.2.0-beta.1 crash-loops on Japanese titles:** its renderer exited 16 times between
+     09:27:29 and 09:31:00, each time restarted after 8 s, and v0.2 completed 14 uploads in
+     those minutes. That is bug G, fixed in this release; it matters for the upgrade advice
+     in Part 2.
+   - **The uninstaller leaves runtime files** in `app\` (the stream's sidecars,
+     `session_01_bulk_stream.windows_nowplaying.bin`, the thumbnail and preview) and all
+     of `logs\`. Listed under "Known problems" in Part 2.
+2. **(H, optional) Phase 4, killed uploader:** `Stop-Process -Name tiga_stream_watch_flow
+   -Force` about 3 s into an upload. Expect HALTED from the session marker. Never run on
+   hardware. **It leaves the keyboard needing a battery disconnect**, so do it last in a
+   session. **(M)** whether it must pass before release; the marker path is covered by
+   offline tests.
+3. **(M) After the Phase 8 retest:** delete the one remaining *(before publishing)* note in
+   Part 2, under "Installing". The other one, under "Verified on the keyboard", now has
+   the 2026-10-25 result.
 
-Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and every build uses
-`--locked`, the installer workflow builds on a `v*` tag push, and the stale text fixed on
-2026-10-16 (codes 10/11 never halt; Phase 5 decided; test counts) is in the checklist.
+**Done since the first draft:** the version name (v0.3.0-beta.1; the checklist's title and
+Phase 7 tag now say so); `CHANGELOG.md` is complete; **#7 verified on hardware on
+2026-10-16 at 23:07** (Standby + Shut Down waited for the upload, then shut Windows down;
+PROJECT_HISTORY §7.1) and **closed on 2026-10-18**; every issue is closed (none open);
+**#20 clean stop merged and verified live on 2026-10-22** (PROJECT_HISTORY §7.1, seventh
+part), so it is now in this release instead of under "Known problems". Earlier: the
+2500 ms block timeout and per-block timing (#18, #19/#22), and the "turn the keyboard off"
+wording.
+
+Already fine: CI is green on `main`, `Cargo.lock` is committed and every build uses
+`--locked`, the installer workflow builds on a `v*` tag push and uploads to the release.
 
 ---
 
@@ -71,14 +80,23 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 > setup file below; no Python, Rust or Visual Studio needed. **Beta:** it has been
 > tested on one keyboard and one PC.
 >
+> **License change:** from this release the project is licensed **GPL-2.0-only**, the
+> license of [meletricks](https://github.com/athdesk/meletricks), which the planned
+> on-keyboard work builds on. v0.1.0 and v0.2.0-beta.1 remain under MIT.
+>
 > #### What's new since v0.2.0-beta.1
 >
 > **Uploads that fail no longer make things worse**
 >
-> - If an upload to the keyboard is interrupted, the uploader now **stops and tells
->   you**, instead of retrying every 8 seconds against a keyboard stuck mid-transfer.
->   *Status* shows `HALTED`, with the frame and block it stopped at and what to do. The
->   Now Playing renderer keeps running. (#4)
+> - If an upload to the keyboard is interrupted, the uploader no longer retries every 8
+>   seconds against a keyboard stuck mid-transfer. (#4)
+> - **Most interrupted uploads now recover by themselves.** When an upload simply stops
+>   at a normal pace, the display software waits 2 minutes and tries again, up to 3 times,
+>   without you doing anything. In testing this recovered the display without resetting
+>   the keyboard.
+> - When an upload slows down before it stops, or the retries don't help, the uploader
+>   **stops and tells you**: *Status* shows `HALTED`, with the frame and block it stopped
+>   at and what to do. The Now Playing renderer keeps running.
 > - If the keyboard just can't be reached (asleep, out of range, Bluetooth off), the
 >   uploader keeps trying: after 8, 16, 32 and 60 s, then every 5 minutes. It picks the
 >   display up again by itself; you don't need to restart anything.
@@ -86,6 +104,10 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 >   name. A TIGA also paired as a Bluetooth *keyboard* shows up as a second device,
 >   `Zoom75 Tiga BT1`, which used to be picked by mistake about half the time. It also
 >   remembers the device that worked last. (#14)
+> - Once connected, the uploader stops scanning for Bluetooth devices, so the scan no
+>   longer runs alongside uploads.
+> - **Stop Display finishes an upload in progress** before it stops (up to 30 s), instead
+>   of cutting it off halfway. (#20)
 >
 > **The display**
 >
@@ -112,6 +134,16 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 >   time, it asks first (default: don't shut down); if the command never reached the
 >   display software, it cancels and says why. (#7)
 >
+> **Installer and startup**
+>
+> - Setup stops the running display software before it replaces any file. Installing over
+>   a running version used to fail with "DeleteFile failed; code 5. Access is denied".
+> - When the display software starts, including after an install or update, the keyboard
+>   no longer gets the red/green test image first; the first upload is the first real
+>   screen.
+> - The Start menu's *Start Display*, *Stop Display* and *Status* windows stay open, so you
+>   can read what they say. Close them when you're done.
+>
 > **Diagnostics**
 >
 > - Logs in `logs\` keep their history across restarts and rotate at 5 MB. Every frame
@@ -120,30 +152,47 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 > - `ble.log` records how long every block of an upload took, flags any block over 1 s
 >   as `SLOW`, warns when the first upload after connecting starts slowly, and writes a
 >   `TIMING` summary after every upload. Please include these lines in a bug report.
+> - `ble.log` also records anything else the keyboard sends during and between uploads;
+>   its regular status message is logged once and then counted, so the log stays small.
 > - The uploader waits up to 2.5 s for each block's confirmation, as in v0.2.0-beta.1. A
 >   longer wait was tried for a day and helped nothing.
 >
+> **Documentation**
+>
+> - Quick start corrected: the keyboard is used **wired over USB-C**, and the display is
+>   reached over Bluetooth LE **without pairing**.
+> - A shorter front page; architecture, build-from-source and recovery details moved to
+>   `docs/`.
+>
 > #### Verified on the keyboard
 >
-> On 2026-10-15/16, on one TIGA: more than 70 completed uploads, 8.4–10.4 s each; six real interrupted
-> uploads that each halted correctly and recovered after a reset; the uploader rejecting
-> `Zoom75 Tiga BT1` and remembering the right device; recovery on its own after the
-> keyboard was briefly unreachable; logs with history and frame IDs; a 34-character title
-> wrapping; Japanese text and the Morse-code band displaying; the per-block timing lines.
-> Display Control's "did it arrive" check was verified on 2026-10-16: Lock Standby, the
-> same button again, and Resume Automatic were each confirmed and reached the keyboard.
+> On one TIGA, 2026-10-15 to 2026-10-22: more than 100 completed uploads, about 8.5–11 s each;
+> real interrupted uploads that each halted correctly; the automatic retry recovering two
+> interrupted uploads without a keyboard reset; Stop Display stopping cleanly six times,
+> including once in the middle of an upload, which it let finish; the uploader rejecting
+> `Zoom75 Tiga BT1` and remembering the right device, and stopping its scan once
+> connected; recovery on its own after the keyboard was briefly unreachable; logs with
+> history and frame IDs; a 34-character title wrapping; Japanese text and the Morse-code
+> band displaying; the per-block timing and notification lines. Display Control: Lock
+> Standby, the same button again and Resume Automatic were each confirmed and reached the
+> keyboard, and **Standby + Shut Down** waited for the upload and then shut Windows down.
 >
-> **Not yet verified on the keyboard:** the full Standby + Shut Down sequence; the
-> 15-second rule for players that never report their position moving (no such player is
-> known); the installer build itself on this release *(update before publishing)*.
+> On 2026-10-25 a test build of this installer ran on the same keyboard, installed over
+> v0.2.0-beta.1: uploads, *Status*, a Japanese title, *Stop Display*, and an automatic retry
+> that recovered an interrupted upload by itself. The three installer and startup fixes
+> above come from that test.
+>
+> **Not yet verified on the keyboard:** the 15-second rule for players that never report
+> their position moving (no such player is known).
 >
 > #### Known problems
 >
 > - **Uploads are occasionally interrupted, cause unknown.** It happens most often on the
->   **first upload after the display software restarts** without the keyboard being reset
->   (3 of 9 such restarts in testing, against 0 of 4 after a reset). A restart happens
->   when you sign in, after *Stop Display* / *Start Display*, and after an update. If the
->   first song after a restart doesn't appear, check *Status*.
+>   **first upload after the display software starts** (about 1 in 3 in testing, against
+>   about 1 in 30 for later uploads), whether or not the keyboard was reset. A start
+>   happens when you sign in, after *Start Display*, and after an update. Most of these now
+>   recover through the automatic retry within a few minutes; if the first song after a
+>   start doesn't appear, check *Status*.
 > - **After a restart the keyboard can be invisible for 20–70 s.** The uploader keeps
 >   trying and finds it; nothing to do.
 > - **The only way to reset a stuck keyboard is to disconnect its battery.** The TIGA has
@@ -151,11 +200,15 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 >   battery). See below.
 > - Each update takes 8–10 s to reach the keyboard, and there is no live progress bar.
 >   Both are limits of the keyboard's upload protocol, not bugs.
+> - **Uninstalling leaves files behind** in
+>   `%LOCALAPPDATA%\Programs\TIGA Windows Media Display`: the logs in `logs\` and a few
+>   runtime files in `app\`. Delete the folder by hand afterwards (keep `logs\` first if
+>   you want to report a problem).
 >
 > #### If the display stops updating and Status says HALTED
 >
-> An upload was interrupted, and the keyboard may be holding a half-finished transfer.
-> The software deliberately doesn't retry.
+> An upload was interrupted in a way the software doesn't retry by itself (or three
+> retries didn't help), and the keyboard may be holding a half-finished transfer.
 >
 > 1. Open the keyboard's case and **disconnect the battery from the PCB for at least
 >    30 s**, pressing a few keys while it's disconnected. 10–15 s was not enough in
@@ -169,7 +222,17 @@ Already fine: CI is green on `main` after #22, `Cargo.lock` is committed and eve
 > #### Installing
 >
 > Download `TIGA-Windows-Media-Display-Setup-v0.3.0-beta.1.exe` and run it. It installs
-> for your user only (no admin) and starts at sign-in. The installer is not code-signed,
-> so Windows SmartScreen may warn; choose *More info → Run anyway*.
-> *(Before publishing: confirm that installing over v0.2.0-beta.1 works, and add a line
-> here.)*
+> for your user only (no admin) and starts at sign-in. Plug the keyboard in over USB-C as
+> usual; the display is reached over Bluetooth LE, with no pairing needed. The installer
+> is not code-signed, so Windows SmartScreen may warn; choose *More info → Run anyway*.
+>
+> To update, run the new setup file over the installed version. It stops the running
+> version first, which can take up to 30 s. *(Before publishing: delete this note once the
+> Phase 8 retest has shown it working over a running v0.2.0-beta.1.)*
+>
+> **Updating from v0.2.0-beta.1:** v0.2 can only be stopped abruptly, and stopping it in
+> the middle of an upload can leave the keyboard needing a battery disconnect (see above).
+> Run Setup while nothing is being sent: the keyboard shows the current song and it hasn't
+> changed for 15 s. If a Japanese, Chinese or Korean title is playing, pause or play
+> something else first and wait a minute: v0.2 keeps restarting on such titles, sending
+> a new image each time (fixed in this release).

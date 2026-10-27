@@ -1861,3 +1861,428 @@ In stop 1 the supervisor logged nothing of its own: STOP_STACK stopped the task 
   for never cutting an upload in half, whatever the first-upload numbers show.
 - The ≥ 10-restart comparison is still to do, and D (failure after a reset) is new data
   for PROJECT_HISTORY §7.1.
+
+# 2026-10-22 evening: runtime lab sessions 1–3, and the live-install log (PR #31)
+
+Claude ran nothing against the keyboard. Every read session was run by Michi with
+`capture.py --live`; Claude only analysed the dump files. No START/STOP_STACK, no install
+script, no scheduled-task change. Details of the lab work are in
+`tiga-runtime-lab/docs/LAB_NOTES.md` (private repo `MichiG21/tiga-runtime-lab`, branch
+`experiment/tiga-runtime-smoke`).
+
+## Runtime lab: what the read sessions established
+
+| Session | Time | Read | Result |
+|---|---|---|---|
+| 1 | 20:58:13–20:58:24 | tick window `0x110014C0`, GUI veneers | **F2 is not an instruction** (middle of a `push.w`). **F4 is `ldr r6, [pc, #0x3f8]`**, a PC-relative literal load. Upstream TweakLoader would refuse to hook there |
+| 2, 2b | 21:14, 21:18 | — | refused before connecting: "Target name mismatch" (WinRT's first advertisement has no name). Nothing sent. Fixed in `capture.py` (identity by name **or** the media service UUID, 15 s) |
+| 2c | 21:22:55–21:23:15 | literal pool, rest of the function, r6 struct | **The F4 literal is `0x110038D4`**, as §6 says. The hooked function is a message dispatcher: a pending flag at `0x110038D5` (0 = idle), commands from the main MCU at `0x11005D2C` |
+| 3 | 22:23:56–22:24:08 | function tail, vector table, veneer table | The function ends at `0x110019DA`; **no branch into the hook bytes** anywhere in it. No veneer points at it. The UART handler is at `0x1100146E` in RAM (not yet read) |
+
+All dumps were identical across three passes, with no memory writes. You saw no LCD
+reaction in sessions 1 and 3.
+
+**What an F4 hook needs:** the trampoline must set r6 = `0x110038D4` itself, replay
+`ldrb r0, [r6, #1]` and return to `0x110014F8`. In PSRAM (next to the payload at
+`0x220E0000`) it would need an 8- or 10-byte patch instead of 4, because `b.w` reaches only
+±16 MB.
+
+**Session 3 is only partly analysed.** Claude's responses on it were stopped twice by an
+automated safety check on Anthropic's side, although the work is read-only analysis of your
+own keyboard's firmware. At your request only the established facts were recorded. The
+trampoline comparison and recommendation were **not** done.
+
+## Live install (PR #31, not merged)
+
+PR #31 adds §7.1's seventh part from the live logs: clean stops at 21:11 and 22:23; the
+21:23 sudden failure, recovered by the automatic retry at 21:25 without a power-off; the
+22:24 slowing failure, which halted, and the plain START_STACK at 22:27 that completed
+in 8.53 s. That is the first slowing failure recovered without a reset. RETRY_RECOVERY.md now
+counts four slowing failures.
+
+**Correction made after opening the PR:** it first called 21:11 and 21:25 the *first* clean
+stops and the *first* automatic retry. The PR #20 test at 20:30–20:49 (above) came first, on
+`tiga-dev`. The PR now says "on the live install", points to that test, and the retry tally
+counts start D: retries without a power-off **5 of 7**; after a sudden failure 4 of 5.
+
+**Observation only:** both evening failures were first uploads with the stack started 7–8 s
+after a RAM read session ended (after session 1: ~29 s, first upload ~68 s, no failure).
+Two of three, no control, at the normal 1-in-3 first-upload failure rate.
+
+## Open for Michi
+
+- **Read sessions:** wait a minute or more before START_STACK and note the gap. That tests
+  the observation above cheaply.
+- **Next lab read, if wanted:** the UART handler, `0x11001460–0x110014BF`, 18 requests over
+  three passes. It needs a new `capture.py` range.
+- **Trampoline placement:** SRAM at `0x11008A60` (needs a free-RAM argument), PSRAM next to
+  the payload (needs an 8/10-byte patch that can't be written atomically), or a small SRAM
+  stub that jumps on to PSRAM. Undecided; see LAB_NOTES 2026-10-22 "night, final".
+- **PR #31:** merged (2026-10-22 20:41 UTC). This section reached `main` later, via PR #32.
+- **v0.3.0-beta.1 release task:** done later the same evening; see the next section.
+
+# v0.3.0-beta.1 release preparation, 2026-10-22 late evening (PR #32)
+
+Branch `release/v0.3.0-beta.1` off `origin/main` (`8b2011a`, after #31). Docs only. Claude
+ran no install, START_STACK, STOP_STACK or scheduled-task command.
+
+## What the PR does
+
+- **First commit, cherry-picked:** `5ec7430` → `e2da0a7`. It was pushed to
+  `docs/hardware-log-2026-10-22` after #31 was merged, so it never reached `main`. It holds
+  the §7.1 "first retry" corrections and the previous section of these notes. It applied
+  without conflicts.
+- **`docs/RELEASE_NOTES_v0.3.0-beta.1.md`:** finished blockers removed (version name,
+  CHANGELOG, #7, issues, #20); #25–#31 added to the release text; #7 under "verified"; the
+  failure-rate text uses the 2026-10-18 figures.
+- **`CHANGELOG.md`:** a full `v0.3.0-beta.1 (not yet tagged)` section, including the
+  license change MIT → GPL-2.0-only.
+- **`docs/RELEASE_CHECKLIST.md`:** title and Phase 7 tag `v0.3.0-beta.1`; Phase 7's
+  "close issues" items replaced (all closed already); Phase 8 rewritten against the
+  installer script.
+
+**Dates for #7, to avoid confusion:** verified on hardware 2026-10-16 23:07, closed on
+GitHub 2026-10-18 11:31 UTC.
+
+## Installer facts found while checking Phase 8
+
+1. **The installer takes over your scheduled task.** It registers "TIGA Windows Media
+   Display", the same name the dev install uses, pointing at
+   `%LOCALAPPDATA%\Programs\TIGA Windows Media Display`, and starts it.
+2. **Its STOP_STACK kills the dev stack too, uncleanly.** The packaged `STOP_STACK.ps1`
+   matches processes by name. Its stop request goes to the installed folder, which the
+   `tiga-fresh-test` uploader doesn't watch, so a running dev uploader is force-killed after
+   30 s, possibly mid-upload. **Stop the dev stack with its own STOP_STACK first.**
+3. **Files are copied before anything is stopped** (`CloseApplications=no`). Installing over
+   a running v0.2.0-beta.1 may hit locked executables. That's what the test is for.
+4. **Uninstall unregisters the task** and leaves `logs\` behind.
+5. **v0.2.0-beta.1 has no bug A fix.** If one of its uploads fails, it retries every 8 s
+   against a keyboard stuck mid-transfer, the pattern that broke the LCD before. Keep its
+   part of the test short.
+
+## Phase 8 test steps for v0.3.0-beta.1
+
+All commands are for PowerShell. Each install starts the stack and uploads to the keyboard.
+
+**0. Before you start**
+
+- The keyboard is on, wired over USB-C, and showing an image; no halt is pending
+  (`C:\Users\Regal\source\tiga-fresh-test\STATUS_STACK.ps1` shows no `HALTED`).
+- Pick a track with a **Japanese title** for step 6 (e.g. `トーキョーレギー`, used on
+  2026-10-15).
+
+**1. Stop the live stack cleanly**
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\STOP_STACK.ps1
+```
+
+Expect `exited on request after … s` or `no BLE uploader was running`. If it reports a
+force-kill, check the keyboard before you start the test.
+
+**2. Download both installers**
+
+```
+$d = "$env:USERPROFILE\Downloads\tiga-phase8"; New-Item -ItemType Directory -Force $d | Out-Null
+gh release download v0.2.0-beta.1 -R MichiG21/tiga-zoom75-windows-media-display -p "TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe" -D $d
+$run = gh run list -R MichiG21/tiga-zoom75-windows-media-display --branch release/v0.3.0-beta.1 --workflow installer.yml --status success --limit 1 --json databaseId -q ".[0].databaseId"
+gh run download $run -R MichiG21/tiga-zoom75-windows-media-display -n TIGA-Windows-Media-Display-Setup-vpr-32 -D $d
+Get-ChildItem $d
+```
+
+Expect `TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe` (13,210,661 bytes) and
+`TIGA-Windows-Media-Display-Setup-vpr-32.exe`. `$run` is the newest successful installer
+build of the PR; every push builds a new one. Without `gh`: PR #32 → Checks → *Build
+Windows installer* → Artifacts.
+
+Check that no packaged version is installed yet:
+`Test-Path "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display"` → `False`. If `True`,
+note it: that is an earlier install, and step 3 becomes an upgrade too.
+
+**3. Install v0.2.0-beta.1**
+
+1. Run `TIGA-Windows-Media-Display-Setup-v0.2.0-beta.1.exe`. SmartScreen: *More info → Run
+   anyway*. Leave "Open TIGA Display Control" unticked; *Finish*.
+2. Check the task now points at the installed copy:
+   `(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.Arguments` contains
+   `AppData\Local\Programs\TIGA Windows Media Display`.
+3. Wait for the LCD to show the current track (about 20–30 s; play something if nothing is
+   playing). Then **don't change tracks** and go straight to step 4.
+4. **If v0.2's upload doesn't complete** (LCD stuck on the roar, or nothing after a minute):
+   Start menu → *Stop Display* at once, battery disconnect ≥ 30 s, reconnect, then continue
+   with step 4. Note it; it's a v0.2 behaviour, not this release's.
+
+**4. Install the new build over it, while v0.2 is running**
+
+1. Run `TIGA-Windows-Media-Display-Setup-vpr-32.exe`, same SmartScreen step.
+2. **Watch for a "file in use" / "unable to write" / "DeleteFile failed" message.** If one
+   appears, write down the file name and take a screenshot. Click *Retry* once; if it
+   comes back, run v0.2's Start menu → *Stop Display*, then *Retry*. This is the untested
+   point the checklist asks about.
+3. The installer's status text shows "Stopping any previous TIGA display session...",
+   "Installing automatic startup task...", "Starting TIGA Windows Media Display...".
+   The stop may take up to 30 s.
+4. Keep the setup log:
+   `Get-ChildItem $env:TEMP -Filter "Setup Log*.txt" | Sort-Object LastWriteTime | Select-Object -Last 1`
+   and copy it to `$d`.
+5. Settings → Apps → *TIGA Windows Media Display* shows version `pr-32`. The task arguments
+   (step 3.2) still point at the installed folder.
+
+**5. An upload works, and Status**
+
+1. Change track. Within about 20 s the LCD shows it.
+2. `$l = "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\logs"`, then
+   `Get-Content "$l\ble.log" -Tail 40`. Expect `Scan stopped: connected to the keyboard`,
+   `UPLOAD COMPLETE frame=… in ~8–10s` and a `TIMING` line.
+   - If the first upload fails with `SIGNATURE sudden`, that's the known first-upload
+     failure. The packaged build should retry after 120 s by itself, and *Status* shows
+     `RETRYING`. Wait for it, and note it: it's the first packaged run of #28.
+3. Start menu → *Status*. Expect `OK - the keyboard shows the newest rendered frame` and
+   `Last delivered: <frame id> <time> in <s>s`, and no `HALTED`.
+
+**6. A Japanese title**
+
+1. Play the Japanese-titled track. The LCD shows the characters, not empty boxes.
+2. `Select-String -Path "$l\renderer.log" -Pattern "FONT" | Select-Object -Last 5`.
+   Expect `FONT fallbacks: …` listing Windows fonts, and **no** `FONT no font has U+…` for
+   the title's characters.
+
+**7. Optional: the packaged clean stop**
+
+Start menu → *Stop Display*, while no upload is running. Expect it to finish quickly; then
+*Start Display*, and the current track comes back. That's #20 on the packaged layout.
+
+**8. Uninstall**
+
+1. Copy the logs first: `Copy-Item -Recurse $l "$d\logs-packaged"`.
+2. Settings → Apps → *TIGA Windows Media Display* → Uninstall.
+3. Check the task is gone: `Get-ScheduledTask -TaskName "TIGA Windows Media Display"` gives
+   an error ("No MSFT_ScheduledTask objects found"). The install folder may remain with
+   `logs\` in it; delete it by hand once the logs are saved.
+
+**9. Point the task back at `tiga-fresh-test`**
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\install_tiga_startup.ps1
+(Get-ScheduledTask -TaskName "TIGA Windows Media Display").Actions.Arguments
+```
+
+The arguments must contain `C:\Users\Regal\source\tiga-fresh-test`. The script registers
+the task but doesn't start it. Start the stack:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Regal\source\tiga-fresh-test\START_STACK.ps1
+```
+
+and check `C:\Users\Regal\source\tiga-fresh-test\logs\ble.log` for `UPLOAD COMPLETE`.
+
+**10. Record the result**
+
+For the release notes: whether step 4 hit a locked file, and whether the packaged upload,
+Status and Japanese title worked, plus anything odd. Then the two *(update before
+publishing)* notes in Part 2 can be replaced, and Phase 7 can go ahead.
+
+## Open for Michi
+
+- Review and merge PR #32 after Phase 8 (or before; it's docs only, and the notes'
+  placeholders say what's still pending).
+- Whether the Phase 4 killed-uploader test must pass before the release (Part 1, item 2).
+
+# Phase 8 on hardware, 2026-10-25: three fixes (PR #32)
+
+Michi ran Phase 8 in the morning with build `vpr-32` (installer CI run 39853101947, at
+`4d06fdf`); logs in `C:\Users\Regal\Downloads\tiga-phase8\`. Claude read them, made three
+fixes on `release/v0.3.0-beta.1`, one commit each, and recorded the results. Claude
+installed nothing, sent nothing to the keyboard, and ran no START/STOP_STACK or
+scheduled-task command. The only uploader run was a dry run (no Bluetooth) on a copy of
+the template in the scratchpad.
+
+## Commits
+
+| Commit | What |
+|---|---|
+| `e0add1b` | Installer: stop the installed version before copying files (the blocker) |
+| `319b426` | Uploader: hold a stream with no `.frame` sidecar until the renderer writes one |
+| `7d086bc` | Installer: keep the Start/Stop/Status shortcut windows open (`-NoExit`) |
+| docs commit | Phase 8 results in the release notes and the checklist; this section |
+
+Tests after the three code commits: Python 73 OK, Rust 54 passed (51 + 3 new), PowerShell logging 19 and
+retry 138 checks passed. The installer workflow on `7d086bc` compiled the new `[Code]`
+section with Inno Setup 6.7.1. Its only warning, about RunOnceId in `[UninstallRun]`, was
+there before. **The Pascal code has never run**, because CI only compiles it. The retest
+below is its first run.
+
+## What the logs show, in order (local time)
+
+- **09:26** v0.2.0-beta.1 installed (`%TEMP%\Setup Log 2026-10-25 #001.txt`, not in the
+  Downloads folder). **09:27:29–09:31:00:** its renderer exited 16 times, each time
+  restarted after 8 s; v0.2 completed 14 uploads (8.3–9.3 s) in those minutes. Michi:
+  the crash loop came from a Japanese title (bug G, fixed in v0.3).
+- **The "DeleteFile failed; code 5" error is not in any of the three setup logs.** #002
+  (09:30:20–09:30:56) ends with "Exit Setup? Yes" before "Starting the installation
+  process", and #003 installed all 78 entries at 09:33:00, after v0.2 had been stopped
+  (the `[Run]` STOP_STACK at 09:33:02 found "no BLE uploader was running"). The cause
+  doesn't depend on the log: `[Files]` always ran before the `[Run]` stop.
+- **09:33:06** v0.3 stack started. The renderer's first frame came at **09:33:42 (36 s)**.
+  The uploader had connected at 09:33:23 and sent the template meanwhile:
+  `UPLOAD START frame=unknown(no-sidecar) crc32=57e8e0cf` (the tracked template's CRC,
+  checked), **64.08 s**, every block `SLOW` (median 1140 ms, max 2407 ms), but complete.
+- 09:34:28 the standby frame failed with code 10 (`control ACK pair timed out`); restarted
+  after 8 s, it completed at 09:34:49 in 8.83 s. Then `OH! TENGO SUERTE` (10.72 s) and
+  `トーキョーレギー` (9.62 s, glyphs; `FONT fallbacks: YuGothB.ttc, msyhbd.ttc,
+  msjhbd.ttc, malgunbd.ttf, seguisym.ttf; not installed: meiryo.ttc`).
+- **09:41:21** *Stop Display*: `exited on request after 0,3 s`, `Disconnected cleanly`.
+- **09:44:34** *Start Display*. First upload: slowing failure at block 9 → **HALTED**
+  (correct: slowing is never retried).
+- **09:50:36** halt cleared (Start Display). First upload: **sudden** failure at block 5 →
+  retry 1 of 3 at **09:52:44** → **succeeded**, delivered 09:52:55 (8.64 s). The first
+  automatic retry on the packaged build.
+- Uninstall, then the task re-pointed at `tiga-fresh-test`; that stack started at 09:57
+  and is completing uploads (checked in its `ble.log`).
+
+## Fix 1: the upgrade lock (`e0add1b`)
+
+`PrepareToInstall` runs before `[Files]`. If `{app}\STOP_STACK.ps1` exists, it runs it
+hidden and waits (a progress page says "Stopping TIGA Windows Media Display"). That is the
+**installed** version's script, so v0.2 is stopped with v0.2's force-kill, and later
+versions with their clean stop. Then it waits up to 15 s until no
+`tiga_stream_watch_flow.exe`, `tiga_windows_nowplaying.exe` or
+`tiga_windows_media_snapshot.exe` runs **from the install folder** (WMI,
+`ExecutablePath`). `Stop-Process` returns before a killed process is gone, and v0.2's
+script doesn't wait. If one is still running after 15 s, Setup stops on the Preparing page
+("…is still running… Nothing has been changed… Stop Display, then run Setup again")
+instead of failing halfway. The `[Run]` steps are unchanged. Everything is in the setup
+log, before "Starting the installation process".
+
+Not covered, by design or for later:
+
+- **Display Control** isn't part of the stack and STOP_STACK leaves it running. If its
+  window is open during an upgrade, `tiga_display_control.exe` is still locked and Inno's
+  own Retry dialog comes up: close the window, then click Retry.
+- **v0.2 is still stopped by force.** If it's mid-upload when Setup runs, the keyboard may
+  need a battery disconnect. That was true of the old `[Run]` step too. The release text
+  now says to run Setup while nothing is being sent, and not while a Japanese title plays
+  on v0.2.
+- If Setup is cancelled after the stop, the old version stays stopped until *Start
+  Display* or the next sign-in.
+
+## Fix 2: no template upload at startup (`319b426`)
+
+In watch mode the uploader now holds a stream that has **no** `<stream>.frame` at all.
+It logs one `UPLOAD HELD frame=unknown(no-sidecar) crc32=…: no ….frame yet, …` line,
+then looks again every 250 ms, and the stop request is still checked on every look. When
+the sidecar appears it logs `RENDERER sidecar appeared after N s; uploading its frame`
+and takes one more look before uploading, because the renderer writes the sidecar just
+before it replaces the stream. A sidecar that exists but doesn't match is uploaded exactly
+as before (`unknown(sidecar-is-…)`). `--allow-no-sidecar` uploads the template anyway
+(manual tests; `docs/BUILD_AND_RECOVERY.md` says so), and a dry run prints a note when a
+live run would hold. The first upload of the connection is now the renderer's frame, so
+the first-upload warning applies to it.
+
+**Not covered (your call): reinstall or upgrade over leftover files.** The installer
+copies the template over `session_01_bulk_stream.bin` on every install but leaves the old
+`.frame`. The CRCs then don't match, the template goes out once through the
+mismatched-sidecar path you asked to keep, and the hold doesn't apply. That will happen on
+every upgrade from v0.3.0-beta.1 onward, and on a reinstall into a folder that still has
+leftovers. Options:
+
+- (a) an `[InstallDelete]` entry for `{app}\app\_internal\extracted\session_01_bulk_stream.bin.frame`,
+  so the hold covers it (my suggestion: a few lines, and it reuses this fix);
+- (b) install the stream with `onlyifdoesntexist`, so the last frame and its sidecar
+  survive an upgrade (the uploader then resends the last frame);
+- (c) leave it.
+
+**Decided the same day: (a), done.** See "Option (a) for fix 2" below.
+
+## Fix 3: shortcut windows (`7d086bc`)
+
+*Start Display*, *Stop Display* and *Status* run `powershell.exe -NoExit …`. I checked
+that `-NoExit -File` runs a script and then stays at the prompt in Windows PowerShell 5.1.
+None of the three scripts calls `exit`, and no process match in STATUS_STACK or STOP_STACK
+matches the shortcut's own command line. An install creates the shortcuts again, so an
+upgrade gets the new ones.
+
+## Retest for fix 1: which Phase 8 steps to repeat
+
+From "Phase 8 test steps for v0.3.0-beta.1" above: **0 (prep), 1, 2, 3, 4, 5.1–5.3, 8,
+9**. Skip 6 and 7: they passed, and the fixes don't touch them. Fixes 2 and 3 are checked
+along the way at no extra cost. Changes against the original steps:
+
+- **Before step 1: delete only `logs\` from the leftover install folder; keep `app\`.**
+  *(Updated after option (a); this bullet first said to delete the whole folder.)* Your
+  logs are already in `Downloads\tiga-phase8\logs-packaged`, and deleting them keeps the
+  retest's logs separate:
+  `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\logs"`.
+  The leftover `app\_internal\extracted\session_01_bulk_stream.bin.frame`
+  (`frame_id=renderer-20261025-094434-4600cb-f0003`, `crc32=7bf63ef9`) stays on purpose.
+  v0.2 neither reads nor writes it, so it is still there at step 4, which then also tests
+  option (a). Check before step 3:
+  `Test-Path "$env:LOCALAPPDATA\Programs\TIGA Windows Media Display\app\_internal\extracted\session_01_bulk_stream.bin.frame"`
+  → `True`.
+- **Step 2: the new build only, into a new folder.** The artifact still has the old name
+  (`…-vpr-32.exe`), so keep the two apart. The v0.2 setup is already in
+  `Downloads\tiga-phase8`. Use the newest successful installer run of the PR (step 2's
+  `$run` line picks it); it must include the `[InstallDelete]` commit:
+  `$d = "$env:USERPROFILE\Downloads\tiga-phase8-retest"` and then step 2's
+  `New-Item`, `$run = …` and `gh run download …` lines with this `$d`.
+- **Step 3: play a Latin-titled track, not a Japanese one** (v0.2 crash-loops and uploads
+  every few seconds). Before step 4, wait until the LCD shows it and nothing has changed
+  for 15 s, so v0.2's force-kill doesn't land mid-upload.
+- **Step 4 is the check.** Expect **no** "DeleteFile failed" or "file in use" message. A
+  page "Stopping TIGA Windows Media Display" may show briefly. Then, in the newest setup log:
+  `$log = (Get-ChildItem $env:TEMP -Filter "Setup Log*.txt" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName`
+  and
+  `Select-String -Path $log -Pattern "Stopping the installed version|STOP_STACK.ps1 exit code|TIGA stack process|Still running|Could not|Starting the installation process"`.
+  Expect `Stopping the installed version before copying files: …`,
+  `STOP_STACK.ps1 exit code: 0` and `No TIGA stack process runs from … (waited N ms)`,
+  **all before** `Starting the installation process`. If Setup instead stops with "…is
+  still running…", screenshot it and keep the log: that is the new 15 s wait giving up.
+- **Step 5 adds two checks.** In `ble.log`, the first `UPLOAD START` is **neither**
+  `frame=unknown(no-sidecar)` **nor** `frame=unknown(sidecar-is-renderer-20261025-094434-4600cb-f0003)`.
+  The second would mean the leftover `.frame` survived, so option (a) didn't work. You may
+  see `UPLOAD HELD … crc32=57e8e0cf` and `RENDERER sidecar appeared after …` (only if the
+  renderer is slower than the connect; 36 s last time). The *Status* window stays open
+  (fix 3).
+- **Steps 8 and 9 as before.** Copy the logs to `$d\logs-packaged` first. Afterwards
+  delete the install folder by hand.
+
+## Also in the logs (observations, nothing changed)
+
+- **All three starts had a failed upload early:** 09:33, code 10 on the upload right after
+  the slow template; 09:44, slowing, halted; 09:50, sudden, retried OK. Plus a 64 s
+  template upload with every block slow that still **completed**: the slowing pattern
+  without a timeout. Candidates for an eighth part of PROJECT_HISTORY §7.1, which I didn't
+  edit.
+- **Between the 09:44 halt and the 09:50:36 Start Display**, the logs can't show whether
+  the battery was disconnected. Worth noting for the retry tally.
+
+## Open for Michi
+
+- **The fix 1 retest** above; then delete the last *(Before publishing)* note in Part 2 of
+  the release notes ("Installing") and go on to Phase 7.
+- **Fix 2's leftover-sidecar case:** (a), (b) or (c) above. *Decided: (a), see below.*
+- PR #32 is no longer docs only: it carries the installer and uploader fixes. Not merged.
+
+# Option (a) for fix 2, 2026-10-25 (PR #32)
+
+Michi chose (a). One commit on `release/v0.3.0-beta.1`: `[InstallDelete]` removes
+`{app}\app\_internal\extracted\session_01_bulk_stream.bin.frame` before `[Files]` puts
+the template back as the active stream. Inno runs `[InstallDelete]` after
+`PrepareToInstall`, so the stack has already been stopped and no renderer can write a new
+`.frame` in between. On a first install the file isn't there, and nothing happens. After an
+upgrade or reinstall the uploader now finds no sidecar and holds the template until the
+renderer's first frame, the same path as a first install. `.delivered`, `.device` and
+`.exit` stay. Until the first frame *Status* says `UNKNOWN - nothing rendered yet`, with
+the old "Last delivered".
+
+Also updated: the CHANGELOG fix 2 entry, the checklist's uninstall bullet (no more
+"delete the folder before installing again"), the two release-notes lines about the
+template, and the retest steps above: keep `app\` so the leftover `.frame` tests (a), and
+look in step 5 for `unknown(sidecar-is-…)` too.
+
+Claude installed nothing and sent nothing to the keyboard. The `[InstallDelete]` entry is
+only compiled by CI; the retest is its first run.
+
+## Open for Michi
+
+- **The Phase 8 retest** (steps above), with an installer run that includes this commit.

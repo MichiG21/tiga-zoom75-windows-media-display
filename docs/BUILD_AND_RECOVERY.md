@@ -53,6 +53,8 @@ From the `windows_ble_probe` folder after building. `extracted\session_01_bulk_s
 
 Leave out `--confirm-flow-watch` for a dry run: it validates the stream and opens no Bluetooth connection.
 
+A stream with no `.frame` sidecar next to it (the copied template, for example) is held until the renderer writes a frame (`UPLOAD HELD` in the log). Add `--allow-no-sidecar` to upload it anyway.
+
 ### Installing from source: troubleshooting
 
 Problems hit on a from-scratch install. None of them means the project is broken.
@@ -118,7 +120,7 @@ cargo build --release --locked --bin tiga_stream_watch_flow
 - `logs\uploader_halted.json` (present while the uploader is halted) and `logs\uploader_retry.json` (automatic retries after a sudden failure)
 - `extracted\session_01_bulk_stream.bin` (the active upload stream; seeded from `session_01_bulk_stream.redgreen-backup.bin`, then rewritten on every frame)
 - `extracted\session_01_bulk_stream.windows_nowplaying.bin`
-- `extracted\session_01_bulk_stream.bin.frame` (ID of the last rendered frame)
+- `extracted\session_01_bulk_stream.bin.frame` (ID of the last rendered frame; until it exists, the uploader holds the stream instead of sending the seeded template)
 - `extracted\session_01_bulk_stream.bin.delivered` (last frame the keyboard confirmed)
 - `extracted\session_01_bulk_stream.bin.device` (address of the keyboard that completed the last upload; the uploader tries it first. Delete it to force a full scan)
 

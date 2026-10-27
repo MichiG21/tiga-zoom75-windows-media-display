@@ -849,6 +849,61 @@ fn note_already_displayed(stream_path: &Path, last_crc: &str, last_frame_id: &mu
     true
 }
 
+// ---- Waiting for the renderer's first frame (Phase 8, 2026-10-25) -----------------
+//
+// A stream with no `<stream>.frame` at all was not written by the renderer: it is the
+// red/green template the installer or a supervisor seeded. On the first packaged start
+// the renderer took 36 s to write its first frame, and the uploader spent 64 s sending
+// the template meanwhile. Such a stream is now held, logged once, until the sidecar
+// appears. A sidecar that exists but names another CRC is uploaded as before
+// (`unknown(sidecar-is-…)`). `--allow-no-sidecar` is for a manual upload of the template.
+
+#[derive(Debug, PartialEq)]
+enum Gate {
+    Upload,
+    /// Don't upload yet: log the line, if any, and look again shortly.
+    Hold(Option<String>),
+}
+
+struct RendererGate {
+    allow_no_sidecar: bool,
+    /// When the current hold began, while a stream without a sidecar is held.
+    held_since: Option<Instant>,
+}
+
+impl RendererGate {
+    fn new(allow_no_sidecar: bool) -> Self {
+        RendererGate { allow_no_sidecar, held_since: None }
+    }
+
+    /// `crc` is the stream's, for the log line.
+    fn check(&mut self, stream_path: &Path, crc: &str) -> Gate {
+        let sidecar = sidecar_path(stream_path, ".frame");
+        let rendered = self.allow_no_sidecar || sidecar.exists();
+        match (rendered, self.held_since) {
+            (true, None) => Gate::Upload,
+            (false, Some(_)) => Gate::Hold(None),
+            (false, None) => {
+                self.held_since = Some(Instant::now());
+                Gate::Hold(Some(format!(
+                    "UPLOAD HELD frame=unknown(no-sidecar) crc32={crc}: no {} yet, so the renderer \
+                     hasn't written this stream (it is the seeded template); uploading once it has",
+                    sidecar.display()
+                )))
+            }
+            // The renderer writes the sidecar just before it replaces the stream: one more
+            // look, so that the upload reads its frame and not the template.
+            (true, Some(since)) => {
+                self.held_since = None;
+                Gate::Hold(Some(format!(
+                    "RENDERER sidecar appeared after {:.1}s; uploading its frame",
+                    since.elapsed().as_secs_f64()
+                )))
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn upload_stream<S>(
     peripheral: &btleplug::platform::Peripheral,
@@ -1342,6 +1397,7 @@ struct Opts {
     once: bool,
     live: bool,
     allow_single_frame: bool,
+    allow_no_sidecar: bool,
 }
 
 fn parse_opts(args: &[String]) -> Result<Opts, Failed> {
@@ -1366,6 +1422,7 @@ fn parse_opts(args: &[String]) -> Result<Opts, Failed> {
         once: args.iter().any(|a| a == "--once"),
         live: args.iter().any(|a| a == "--confirm-flow-watch"),
         allow_single_frame: args.iter().any(|a| a == "--allow-single-frame"),
+        allow_no_sidecar: args.iter().any(|a| a == "--allow-no-sidecar"),
     })
 }
 
@@ -1457,6 +1514,14 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         println!("WARNING: {detail}");
     }
 
+    if !opts.allow_no_sidecar && !sidecar_path(stream_path, ".frame").exists() {
+        println!(
+            "Note: no {} yet. A live run holds this stream until the renderer writes a frame \
+             (--allow-no-sidecar uploads it anyway).",
+            sidecar_path(stream_path, ".frame").display()
+        );
+    }
+
     if !opts.live {
         println!();
         println!("DRY RUN ONLY — no Bluetooth connection was opened.");
@@ -1506,6 +1571,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut device_recorded = false;
     let mut first_on_connection = true;
     let mut stream_ended = false;
+    let mut gate = RendererGate::new(opts.allow_no_sidecar);
 
     loop {
         // Only here, between uploads: never in the middle of one.
@@ -1525,8 +1591,17 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
             continue;
         }
 
-        let chunks = build_chunks(&stream, allow_single_frame).class(Failure::Fatal)?;
         let crc = format!("{:08x}", crc32(&stream));
+        if let Gate::Hold(line) = gate.check(stream_path, &crc) {
+            if let Some(line) = line {
+                flush_notification_repeats();
+                log!("{line}");
+            }
+            listen_between_uploads(&mut notifications, Duration::from_millis(250), &mut stream_ended).await;
+            continue;
+        }
+
+        let chunks = build_chunks(&stream, allow_single_frame).class(Failure::Fatal)?;
         let frame_id = frame_id_for(stream_path, &crc);
         println!();
         flush_notification_repeats();
@@ -1863,6 +1938,69 @@ mod tests {
         // Nothing uploaded yet: never recorded.
         assert!(!note_already_displayed(&stream, "", &mut String::new()));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn hold_line(gate: Gate) -> String {
+        match gate {
+            Gate::Hold(Some(line)) => line,
+            other => panic!("expected a hold with a line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_without_sidecar_is_held_until_the_renderer_writes_one() {
+        let dir = std::env::temp_dir().join(format!("tiga_gate_hold_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        let mut gate = RendererGate::new(false);
+
+        // Phase 8: the seeded template, before the renderer's first frame. Logged once.
+        let line = hold_line(gate.check(&stream, "57e8e0cf"));
+        assert!(line.starts_with("UPLOAD HELD frame=unknown(no-sidecar) crc32=57e8e0cf: no "), "{line}");
+        assert!(line.contains("s.bin.frame"), "{line}");
+        assert_eq!(gate.check(&stream, "57e8e0cf"), Gate::Hold(None));
+        assert_eq!(gate.check(&stream, "57e8e0cf"), Gate::Hold(None));
+
+        // The sidecar appears: one more look (the stream follows it), then upload.
+        fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0001\ncrc32=056ed3e6\n").unwrap();
+        let line = hold_line(gate.check(&stream, "57e8e0cf"));
+        assert!(line.starts_with("RENDERER sidecar appeared after "), "{line}");
+        assert_eq!(gate.check(&stream, "056ed3e6"), Gate::Upload);
+        assert_eq!(gate.check(&stream, "d91aebb3"), Gate::Upload);
+
+        // A sidecar that goes away later means holding again, with a new line.
+        fs::remove_file(sidecar_path(&stream, ".frame")).unwrap();
+        hold_line(gate.check(&stream, "d91aebb3"));
+        assert_eq!(gate.check(&stream, "d91aebb3"), Gate::Hold(None));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mismatched_sidecar_is_uploaded_as_before() {
+        let dir = std::env::temp_dir().join(format!("tiga_gate_mismatch_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        // A sidecar left from an earlier frame: not held, and named as before.
+        fs::write(sidecar_path(&stream, ".frame"), "frame_id=r-f0009\ncrc32=0badf00d\n").unwrap();
+        let mut gate = RendererGate::new(false);
+        assert_eq!(gate.check(&stream, "57e8e0cf"), Gate::Upload);
+        assert_eq!(frame_id_for(&stream, "57e8e0cf"), "unknown(sidecar-is-r-f0009)");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn allow_no_sidecar_uploads_the_template() {
+        let dir = std::env::temp_dir().join(format!("tiga_gate_allow_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream = dir.join("s.bin");
+        let mut gate = RendererGate::new(true);
+        assert_eq!(gate.check(&stream, "57e8e0cf"), Gate::Upload);
+        assert_eq!(frame_id_for(&stream, "57e8e0cf"), "unknown(no-sidecar)");
+        fs::remove_dir_all(&dir).unwrap();
+
+        let args: Vec<String> = ["--confirm-flow-watch", "--allow-no-sidecar"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_opts(&args).unwrap().allow_no_sidecar);
+        assert!(!parse_opts(&args[..1]).unwrap().allow_no_sidecar);
     }
 
     #[test]
