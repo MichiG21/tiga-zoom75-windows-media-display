@@ -1555,6 +1555,73 @@ scripts have only been built and checked offline. The v0.3.0-beta.1 setup file i
 and no install folder exists on this PC right now. The steps are at the top of
 `docs/RELEASE_CHECKLIST.md`.
 
+#### Twelfth part: 2026-11-02, the Bluetooth adapter, and the short-sample signature
+
+Source: `tiga-fresh-test\logs` (`ble.log`, `upload_soak.log`, `startup_supervisor.log`), read at
+19:31 (last upload 19:30). Times are local.
+
+**What Michi reported:** at about 18:20 he found the Bluetooth adapter lying right behind the PC
+case, instead of centred under the monitor, and put it back. The logs can't say when it got there.
+
+**What the logs show.** Signal at each connection, from the `CANDIDATE` lines:
+
+| Period | Readings (dBm) |
+|---|---|
+| 2026-10-15 to 2026-10-25 | -55 to -71, with -79 and -81 once each (36 readings) |
+| 2026-11-02, up to 18:19 | -72 to -96 |
+| 2026-11-02, 18:21:12 and 19:19:30 | -56, -57 |
+
+| 2026-11-02, live install | Uploads | Failed |
+|---|---:|---:|
+| Before the move (15:20–18:19) | 44 | 11 |
+| After the move (18:21–19:30) | 49 | 1 |
+| Whole day | 93 | 12 |
+
+- **`tools/upload_soak.ps1` delivered 30 of 30** from 19:22 to 19:29, each in 10.2–11.2 s.
+- **That was its second run after the move.** The first, from 18:30, delivered 11 and then halted at
+  upload 12, at 18:33:19, at -56 dBm. That halt rested on one block of 987 ms; see below. It was
+  cleared at 19:19:30, and the logs can't show whether the battery was disconnected.
+
+**What this does and doesn't show:**
+
+- The move came with a clear change: 11 of 44 failed before it, 1 of 49 after. The one failure
+  after it would not have been a halt under the new rule, though it would still have been a failure.
+- **30 of 30 is strong against the day's earlier rate, not against the older one.** Later uploads
+  before the move failed 8 of 32, about 1 in 4, and 30 in a row at that rate would be about 1 chance
+  in 5600. At the "about 1 in 30" of the release text, 30 in a row happens about 1 time in 3.
+- **The soak doesn't cover first uploads.** All 30 ran on one connection, back to back.
+- **A weak signal isn't the whole cause.** Failures on 2026-10-15 to 2026-10-25 came at -55 to -71
+  dBm, and first uploads failed about 1 in 3 then.
+- **The old-vs-new comparison in the eleventh part is confounded.** All 27 old-code uploads that day
+  and the first 17 new-code ones ran on the weak signal (5 of 27 and 6 of 17 failed). New code on
+  the good signal: 1 of 49. Same-signal old code hasn't been measured since the move.
+
+**Corrections to what the eleventh part's read could see:** the day ended at 12 of 93, not 10 of 40.
+Live-install totals from 2026-10-22 on, with the labels as logged: 11 recoveries, 3 failed retries,
+14 retries started, 7 slowing halts. Retries without a power-off, all sources: 16 of 21; after a
+sudden failure 15 of 19.
+
+**The short-sample signature.** Four of those halts rested on one or two ACKed blocks. Healthy
+uploads often start that slowly. Replaying the rule on every failure in `ble.log`, the old rule
+matches every logged `SIGNATURE` line. With a minimum of 5 blocks, 4 of the 27 PROGRESS timeouts
+with timing data change, all from slowing to sudden:
+
+| Failure | Blocks ACKed | Median | Next upload |
+|---|---:|---:|---|
+| 2026-10-25 11:04 | 2 | 502 ms | complete, 8 days later |
+| 2026-11-02 16:36 | 2 | 1019 ms (block 1: 1865 ms) | complete, 33 min later |
+| 2026-11-02 17:14 | 1 | 993 ms | failed sudden, 7 min later; the retry after it completed |
+| 2026-11-02 18:33 | 1 | 987 ms | complete, 46 min later |
+
+Those next uploads came after a manual clear, and whether the battery was disconnected isn't
+logged, so this doesn't prove a retry at 120 s would have worked. **Slowing failures, on the new
+rule: 7**, all with at least 7 ACKed blocks (2026-10-15 22:44 and 22:46, 2026-10-16 18:49,
+2026-10-22 22:24, the packaged 2026-10-25 09:44, 10:36, and 2026-11-02 17:44). The full table,
+and why 5, are in the PR that made the change and in `docs/design/RETRY_RECOVERY.md`.
+
+The new rule has not run on the keyboard: a short-sample stall can't be induced, and it takes
+effect on the live install only once it is merged and the uploader is rebuilt.
+
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
 Two separate fixes, easy to conflate:
