@@ -1,5 +1,15 @@
 # Bundle changelog
 
+## Unreleased
+
+### Uploads and recovery
+
+- **An upload that stalls before block 5 now counts as sudden, whatever its pace,** so it gets the
+  automatic retry instead of an immediate halt. One or two blocks can't show a sustained slowdown:
+  healthy uploads often start slowly, and two halts on 2026-11-02 rested on a single block of about
+  990 ms. From block 5 on, the rule is unchanged, and a real slowdown still halts. If an upload
+  stalls early on a keyboard that really is slow, it now gets up to 3 retries first (PR #41).
+
 ## v0.3.0-beta.1 (2026-11-02)
 
 ### License

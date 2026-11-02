@@ -2616,8 +2616,9 @@ after finding the Bluetooth adapter out of place (signal -72 to -96 all day, the
 # The Bluetooth adapter and the short-sample signature, 2026-11-02
 
 Claude changed the uploader's stall signature and recorded the adapter finding, on
-`fix/short-sample-signature`. PR open, not merged, no tag. Claude sent nothing to the keyboard and
-ran no stack script. `tiga-fresh-test\logs` was only read, at 19:31 and again at 19:36.
+`fix/short-sample-signature`. Merged as PR #41 at your request once its checks passed; no tag. Claude
+sent nothing to the keyboard and ran no stack script. `tiga-fresh-test\logs` was only read, at 19:31,
+19:36 and 20:37. The live install doesn't have this change until it is pulled and rebuilt.
 
 ## The adapter
 
@@ -2661,16 +2662,42 @@ and exit codes are untouched: the pin test passes unchanged, and no ACKed block 
 - **Not run on the keyboard.** A short-sample stall can't be induced. It reaches the live install only
   after a merge, a pull and a rebuild.
 
+## Three in a row on a good signal, 20:26–20:33
+
+**Three sudden failures in a row** at -56 and -57 dBm, from 20:26:45 to 20:31:08, last ACKed blocks 10,
+4 and 4. Automatic retry 3 of 3 then succeeded, at 20:33:23 (8.74 s). No halt, but it was the first time
+all 3 retries were used on the live install, and one more failure would have halted.
+
+**Recount since the second soak began (19:22:48), to 20:36:** 67 uploads, 3 failed. The 32 in the soak
+window and the next 28 all completed, then those three, then 4 completed. Since the adapter move: 83
+uploads, 4 failed. Whole day: 127 uploads, 15 failed.
+
+**A good signal didn't remove the failures.** It came with fewer: 4 of 83 against 11 of 44. But the
+adapter can't be the whole cause, and "can cause" in the README is as far as it goes.
+
+**This cluster questions the finding that failures are independent.** 62 completed in a row, then three
+failures in five minutes, looks like a bad period of some minutes. It doesn't overturn the finding:
+
+- two of the three were first uploads, and at about 1 in 3 two in a row happen about 1 time in 9;
+- over all of `ble.log`, first uploads failed 13 of 36 after a failure and 5 of 22 after a completed
+  upload (p = 0.38), which leans toward dependence but doesn't show it;
+- that check never tested for bunching in time, so it couldn't have seen a bad period.
+
+If bad periods are real, 120 s apart may be too short for three retries to clear one. The "about 95%" in
+`docs/design/RETRY_RECOVERY.md` assumes independence. I changed neither; the checklist now asks for
+failures in a row to be counted, so several days of logs can answer it.
+
+## Done in this PR
+
+- **Release checklist:** count failures, not halts, from the rebuild with PR #41, with the adapter in
+  place. Its table now has signal readings and a row for the adapter-moved period.
+- **One change you didn't ask for:** its installed run now asks for a setup file that includes PR #41,
+  so `vpr-39`, named as good enough in the section above, no longer is.
+- **`CHANGELOG.md`:** an "Unreleased" section with the behaviour change.
+
 ## Open for Michi
 
-- **The release checklist's live-log comparison now needs your decision.** I didn't change it, because
-  you didn't ask. Three things have moved under it:
-  - it says to count from 17:20 on 2026-11-02, but everything before about 18:20 ran on the weak signal;
-  - merging this PR changes the uploader, and the checklist's own rule then restarts the count;
-  - the signature change moves failures from "halt" to "retry", so count failures, not halts.
-
-  I suggest counting from this PR's rebuild, with the adapter in place. The earlier rates in its table
-  are mostly from before the adapter moved, and the 2026-11-02 rows are from while it was misplaced.
-- **The old-vs-new comparison in the eleventh part is confounded by the signal,** and §7.1 now says so.
-- `CHANGELOG.md` has no "Unreleased" section yet. This is the first behaviour change since
-  v0.3.0-beta.1, so it needs an entry before the next tag.
+- **Pull and rebuild** on the live install to start the count, and note the time.
+- **The two checklist requirements** before any tag.
+- **Your call, for the next release text:** the "about 1 in 30", and whether to move the 15-second rule
+  out of "Not yet verified".
