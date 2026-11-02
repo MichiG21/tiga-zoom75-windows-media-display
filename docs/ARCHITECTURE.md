@@ -103,7 +103,11 @@ Runtime logs stay local and are ignored by Git.
 ├── STATUS_STACK.ps1
 ├── install_tiga_startup.ps1
 ├── tiga_startup_supervisor.ps1
-├── tiga_windows_nowplaying_v2.py
+├── tiga_windows_nowplaying_v2.py   (the renderer; imports the four below)
+├── tiga_render_text.py             (fonts and text layout)
+├── tiga_render_freshness.py        (freshness gate)
+├── tiga_render_stream.py           (DLX stream install)
+├── tiga_render_loop.py             (main loop)
 ├── tiga_windows_media_snapshot.cpp
 ├── tiga_display_control.cpp
 ├── windows_ble_probe/

@@ -73,6 +73,14 @@ jobs:
         shell: pwsh
         run: pyinstaller --noconfirm --clean --onedir --name tiga_windows_nowplaying tiga_windows_nowplaying_v2.py
 
+      # A module PyInstaller left out only shows when the program starts. --help imports
+      # everything and exits before it renders anything.
+      - name: Check the packaged renderer starts
+        shell: pwsh
+        run: |
+          & ".\dist\tiga_windows_nowplaying\tiga_windows_nowplaying.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "The packaged renderer failed to start." }
+
       - name: Assemble installer staging tree
         shell: pwsh
         run: |
