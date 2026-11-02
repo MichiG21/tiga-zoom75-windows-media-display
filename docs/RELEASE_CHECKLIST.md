@@ -10,6 +10,58 @@ Work top to bottom. **If a step marked STOP fails, don't continue** — go to Ro
 
 ---
 
+## Before the next tag: live logs on `b1fc213`, and the installed refactors
+
+**Two requirements, neither done yet. STOP: no tag until both have passed.**
+
+### Several days of live logs on `b1fc213`
+
+On 2026-11-02 the new code failed 5 of 13 uploads and the old code 5 of 27. That is too few uploads
+to compare, and the new code isn't ruled out (PROJECT_HISTORY §7.1, eleventh part).
+
+- [ ] Let the live install run the refactored code for several days of normal use. A docs-only
+      pull doesn't matter; if the uploader, renderer or scripts change, the count starts again.
+- [ ] Count the uploads from `tiga-fresh-test\logs`, from 17:20 on 2026-11-02: first upload of a run,
+      later uploads, sudden and slowing failures, retry outcomes, halts.
+- [ ] Compare them with the earlier rates, and record the result in §7.1:
+
+      | Period | Code | First upload of a run | Later uploads |
+      |---|---|---|---|
+      | up to 2026-10-18 (`docs/investigations/`) | old | 9 of 24 | 3 of 91 |
+      | 2026-10-22 21:23 to 2026-11-02 15:52 (§7.1, tenth part) | old | 6 of 19 | 7 of 78 |
+      | 2026-11-02, all old-code uploads | old | 0 of 5 | 5 of 22 |
+      | 2026-11-02, 17:20 to 17:52 | new | 3 of 7 | 2 of 6 |
+
+      The last two rows are the same day, and the third overlaps the second. If the new code is
+      clearly worse, don't tag: find out why first.
+
+### The installed refactors
+
+**Not run yet.** The refactors #36–#38 (`b1fc213`) have run only from the
+development install (`tiga-fresh-test`, 2026-11-02, PROJECT_HISTORY §7.1, eleventh part). The
+installed version never has: the frozen renderer with its new modules, and the packaged
+supervisor and Start/Stop/Status scripts. Every step below must pass.
+
+- [ ] **Get a new setup file**, built from a commit that includes `b1fc213`: the
+      `TIGA-Windows-Media-Display-Setup-vpr-<N>` artifact of a PR opened after it. `main` gets
+      no artifact of its own, because the workflow runs on PRs and tags. Don't use "Run
+      workflow" for this: it uploads to the release its tag names. The v0.3.0-beta.1 setup file
+      is older than these refactors and doesn't count.
+- [ ] Stop the development stack with its own `STOP_STACK.ps1` first (see Phase 8), then install
+      v0.3.0-beta.1 from the release page and let it upload a frame, so a `.frame` is left behind.
+- [ ] Run the new setup file over it. Expect no "file in use" or "DeleteFile failed" message.
+      In `logs\ble.log`, the first `UPLOAD START` is not `unknown(sidecar-is-…)`: that is the first
+      real test of `[InstallDelete]`, which the retest didn't reach.
+- [ ] *Status*: the window stays open and shows `OK` and a "Last delivered" frame.
+- [ ] A real track, and a Japanese title: Now Playing appears, with glyphs, not boxes.
+- [ ] *Display Control*: Lock Standby, then Resume Automatic; both confirmed and shown on the LCD.
+- [ ] *Stop Display*: the window stays open, and `startup_supervisor.log` says `exited on request`.
+- [ ] *Start Display*: the window stays open, and `startup_supervisor.log` says `TIGA packaged
+      startup supervisor launched`, then an upload completes.
+- [ ] Uninstall, then re-register the development task, as in Phase 8.
+
+---
+
 ## Phase 0 — Protect the working setup
 
 - [ ] Zip `C:\Users\Regal\source\tiga_ble_re_tools` to somewhere **outside** `source\`,
@@ -245,7 +297,7 @@ the notes — write down exactly what you saw.
 
 ## Phase 7 — Cut the release
 
-Only once the phases above are clean.
+Only once the phases above are clean, and "Before the next tag" at the top has passed.
 
 - [x] `CHANGELOG.md` has a `v0.3.0-beta.1` section, dated 2026-11-02. If the tag goes out
       on a later day, change the date to that day first.

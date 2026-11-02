@@ -1395,8 +1395,8 @@ one: the 3 includes 22:24 on 2026-10-22 and the 6 leaves out 21:25 that evening.
 
 **What this shows:**
 
-- **Every sudden incident recovered without a halt: 7 of 7.** Two needed a second retry; none
-  needed the third.
+- **Every sudden incident up to this read recovered without a halt: 7 of 7.** Two needed a second
+  retry; none needed the third. That no longer holds: see 17:41 in the eleventh part.
 - **The automatic retry, all sources:** the seventh part's 2 of 2, then these 8 retries (6 OK)
   and the packaged one at 09:52 on 2026-10-25. Retries without a power-off in the seventh
   part's tally go from 5 of 7 to **12 of 16**; after a sudden failure from 4 of 5 to
@@ -1423,6 +1423,137 @@ one: the 3 includes 22:24 on 2026-10-22 and the 6 leaves out 21:25 that evening.
   `median=502ms` and is slowing, so it halted. 11-02 15:25 has `median=492ms` and is sudden, so
   it was retried and recovered. Both stopped after block 2. The rule (median over 500 ms)
   wasn't made for so few blocks. Policy unchanged.
+
+#### Eleventh part: 2026-11-02, the merged refactors on the live install, and that day's failures
+
+Source: `tiga-fresh-test\logs` and its files, read again at 17:52 (last entry 17:52:14). The stack
+was still running, so later uploads aren't in these counts. Times are local (UTC+1); upload times are converted from `ble.log`'s UTC. `#36`–`#38` were merged by 17:19,
+ending at `b1fc213`.
+
+**Which code ran.** The live checkout is clean at `b1fc213` and its files are stamped 17:20. The
+`tiga_render_*.pyc` files were compiled at 17:20, so the split renderer was imported. The uploader
+exe is stamped 17:20 and has the size of the split build, 1303552 bytes (`main` before the split:
+1297920). So everything from 17:20:48 on is new code, everything before it old.
+
+**What the logs show from 17:20:**
+
+| Time | Event |
+|---|---|
+| 17:20:44 | `STOP_STACK: no BLE uploader was running` (it had halted at 17:14) |
+| 17:20:48 | **Start 1.** The new supervisor launches, with no `BLE uploader is halted` line: the halt file was gone |
+| 17:21:15 | The uploader's first line, **26 s after it was started**; every other run that day took at most 1 s. It was this exe's first run. Cause not known |
+| 17:21:31 | Code 10: `Zoom75 Tiga not found (no candidate seen in a 15 s scan)`. Restarted after 8 s |
+| 17:21:41 | Connected at once. First upload: **sudden failure**, last ACKed block 4, after 3.70 s |
+| 17:23:48 | Automatic retry 1 of 3. 17:23:59 completes in 8.68 s. 17:24:00 `SUCCEEDED`. No power-off |
+| 17:27:29 | **Clean stop:** `STOP requested; no upload in progress, disconnecting.`, `Disconnected cleanly.`, code 0; `exited on request after 0,3 s` |
+| 17:27:31 | **Start 2.** 17:27:35 standby frame, 8.79 s |
+| 17:31:12 | **Real media:** `FRESH PLAYBACK (playback started)`, `Source: Browser Media`, `Title: Arrival at Kraghammer \| Critical Role: VOX MACHINA \| Episode 1`, duration 3:03:34, artwork. 10.52 s. `FONT fallbacks: YuGothB.ttc, msyhbd.ttc, msjhbd.ttc, malgunbd.ttf, seguisym.ttf; not installed: meiryo.ttc` |
+| 17:31:38 | **Display Control:** `CONTROL -> manual standby`, frame completes in 9.89 s |
+| 17:31:52 | **Display Control:** `CONTROL -> automatic mode re-armed`, frame completes in 10.56 s. The ack file names `auto …-23428-2` and frame `f0004`; 23428 is the running `tiga_display_control.exe`, the build of 2026-10-15, which these refactors didn't touch |
+| 17:32:08 | `FRESH PLAYBACK (steady playback)`. Upload: **sudden failure**, last ACKed block 21, after 7.35 s |
+| 17:34:17 | Automatic retry 1 of 3. 17:34:28 completes in 8.77 s. 17:34:29 `SUCCEEDED`. No power-off |
+| 17:41:27 | Another browser video, `NEW WINDOWS MEDIA`: completes in 10.33 s |
+| 17:41:51 | Next upload: **sudden failure**, last ACKed block 19, after 6.37 s, `median=158ms`. From 17:41:53 to 17:42:10 the renderer writes 5 more frames as the browser changes media; only the newest is uploaded next |
+| 17:43:59 | Automatic retry 1 of 3. 17:44:03 upload starts |
+| 17:44:34 | **Slowing failure**, last ACKed block 21, after 31.03 s (per-block times below) |
+| 17:44:36 | `Automatic retry 1 of 3 FAILED (code 20, signature slowing)`, then `BLE uploader HALTED`. **The first sudden incident on the live install to end in a halt, and the first retry to turn slowing** |
+| 17:49:22 | Idle standby frame, written while the uploader is halted |
+| 17:49:53 | `Halt cleared`; the running supervisor starts the uploader again |
+| 17:49:57 | First upload: **sudden failure**, last ACKed block 8, after 4.23 s |
+| 17:52:02 | Automatic retry 1 of 3. 17:52:03 upload starts, completes in 9.05 s. 17:52:14 `SUCCEEDED` |
+
+So on new code: 2 supervisor starts, 13 uploads, 8 complete (8.68–10.56 s), 5 failed (4 sudden, 1
+slowing), 4 automatic retries (3 recovered, 1 failed and halted), 1 halt, 1 clean stop, and nothing
+in `renderer_error.log`.
+
+**The 17:44 retry, block by block.** `SLOW` lines give each block over 1000 ms; the rest come from
+the `elapsed` values, so they are derived and rounded.
+
+| Block | ms | Block | ms | Block | ms |
+|---|---|---|---|---|---|
+| 1–4 | about 770 in all | 10 | 2152 | 16 | 1102 |
+| 5 | 2288 | 11 | about 973 | 17 | 2115 |
+| 6 | 1732 | 12 | 1447 | 18 | 1283 |
+| 7 | 1792 | 13 | about 857 | 19 | 1305 |
+| 8 | 2183 | 14 | 1733 | 20 | 1454 |
+| 9 | 1478 | 15 | 1920 | 21 | 1545 |
+
+Block 22 got no PROGRESS within 2500 ms. `TIMING`: `blocks_acked=21 median=1454ms p90=2152ms
+max=2288ms slowest=block 5 control1_ack=18ms control2_ack=73ms`. The control ACKs were normal, and
+so were blocks 1–4; then `WARNING first upload is slow (block 5 at 3.06 s; healthy 0.7–0.85 s)`, and
+15 of the next 17 blocks were over 1 s. The keyboard's 28-byte status message kept coming: once at
+17:44:05, then 14 repeats from 17:44:07 to 17:44:33. Nothing else arrived. The retry began 126 s after the
+sudden failure before it, as the policy says. The uploads either side of it were healthy until they
+stopped: 17:41:51 `median=158ms`, 17:49:57 `median=157ms`.
+
+**The 15-second rule fired for the first time.** The `steady playback` line at 17:32:08 is the
+only one in `renderer.log`. It came 16 s after the re-arm, so this browser session reported Playing
+without its position advancing 1.5 s in that time. The v0.3.0-beta.1 release text lists the rule
+under "Not yet verified on the keyboard" and says no such player is known. The text hasn't been
+changed.
+
+**What the logs don't show:**
+
+- `START_STACK.ps1` and `STATUS_STACK.ps1`. They leave no line of their own, so nothing here says
+  which script removed the halt before 17:20:48, or whether it was the new one. At 17:49:53 the
+  checkout was already new, and both the halt file and the session marker were gone (the uploader
+  refuses to start with a marker). That fits the new `START_STACK.ps1`, the only script that
+  removes both, but the log doesn't name it.
+- What the LCD and Display Control's window showed.
+- Whether the battery was disconnected before 17:08:43, 17:20 or 17:49:53, so none of those starts
+  is in the no-power-off tally below.
+
+**10 of 40 uploads failed that day.** Recounted from `ble.log`: 40 `UPLOAD START` lines on
+2026-11-02, 30 `UPLOAD COMPLETE`, 10 `UPLOAD FAILED`. This is the live install only; the retest's
+logged uploads on the installed builds (3 on v0.2, 2 on the new build, all complete) are separate.
+A read at 17:37 gave 7 of 35; three failures came after it.
+
+| Upload started | Code | Signature | Last ACKed | Gap since previous upload | Nth of its run | Outcome |
+|---|---|---|---|---|---|---|
+| 15:25:42 | old | sudden | 2 | 0 s | 5th | retry 1 OK |
+| 15:44:39 | old | sudden | 25 | 340 s | 6th | retry 1 OK |
+| 15:49:59 | old | sudden | 21 | 146 s | 3rd | retry 1 OK |
+| 16:36:14 | old | slowing | 2 | 261 s | 9th | **halted**, cleared 17:08:43 |
+| 17:14:42 | old | slowing | 1 | 258 s | 4th | **halted**, gone by 17:20:48 |
+| 17:21:41 | new | sudden | 4 | 415 s, across a restart | 1st | retry 1 OK |
+| 17:32:08 | new | sudden | 21 | 5 s | 5th | retry 1 OK |
+| 17:41:51 | new | sudden | 19 | 14 s | 3rd | retry 1 failed, slowing (next row) |
+| 17:44:03 | new | slowing | 21 | 126 s | 1st, the retry | **halted**, cleared 17:49:53 |
+| 17:49:57 | new | sudden | 8 | 323 s | 1st | retry 1 OK |
+
+- **Old and new code: too few uploads to compare, and the new code isn't ruled out.** 5 of 27 failed
+  on old code that day, 5 of 13 on new. The new code's rate is higher, but 13 uploads can't settle it:
+  a split this uneven would arise by chance about one time in four (Fisher's exact test, p = 0.25),
+  and that test assumes independent uploads, which these may not be. The refactors are not shown
+  to be harmless, and not shown to be the cause. What can be said: uploads failed in both ways on both,
+  and 5 failures came before the refactors. By upload: first of a run, 0 of 5 on old and 3 of 7 on
+  new; later, 5 of 22 on old and 2 of 6 on new. The pin test covers what `upload_stream` writes, not how
+  the keyboard answers. Several days of live logs on `b1fc213` are needed; the release checklist requires
+  that comparison before the next tag.
+- **No pattern in the gap since the previous upload.** By gap, failed of all uploads: up to 5 s, 2
+  of 4; 6–60 s, 1 of 5; 61–300 s, 4 of 22; over 300 s, 3 of 9. Failures sit among successes at
+  both ends, and the first two bands are small. The 30 completed uploads had gaps from 1 s up.
+- **No known cause.** A slowing failure shows in its block times as it happens; a sudden one shows
+  nothing before it stops. Nothing in these logs says why either begins.
+- **7 sudden, 3 slowing.** Of the 7 sudden incidents, 6 recovered on retry 1 and 1 ended in a halt.
+- First upload of a run: 3 of 12 failed. Later uploads: 7 of 28. The day's later-upload rate is
+  again well above "about 1 in 30" (tenth part). One day, and 7 of the 12 runs were automatic
+  retries.
+- **The 17:14 halt rested on one ACKed block of 993 ms,** under the 1000 ms `SLOW` line and halted
+  only because the median was over 500 ms. Same issue as in the tenth part. The 17:44 halt is
+  not that case: 21 blocks, 15 of them over 1 s. Policy unchanged.
+
+**Totals on the live install from 2026-10-22 on, updating the tenth part:** 10 recoveries, 3 failed
+retries, 13 retries started, 6 slowing halts. **Of 11 sudden incidents, 10 recovered and 1 ended in a
+halt** (17:41, whose retry turned slowing); none used all 3 retries. Retries without a power-off, all
+sources: **15 of 20**; after a sudden failure **14 of 18**. Slowing failures: **now 10**.
+
+**The installed version of these refactors has not been run, and it must be, with a new setup file,
+before the next tag.** All of the above is the development install, on Python and a locally built
+exe. The frozen renderer with its new modules and the packaged supervisor and Start, Stop and Status
+scripts have only been built and checked offline. The v0.3.0-beta.1 setup file is older than them,
+and no install folder exists on this PC right now. The steps are at the top of
+`docs/RELEASE_CHECKLIST.md`.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
