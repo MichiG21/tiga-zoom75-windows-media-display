@@ -97,7 +97,7 @@ function Stop-LoggedProcess {
 
 # ---- Uploader failure policy (issue #4) -------------------------------------------
 #
-# The uploader (windows_ble_probe/src/bin/tiga_stream_watch_flow.rs) exits with a
+# The uploader (windows_ble_probe/src/bin/tiga_stream_watch_flow/) exits with a
 # class code and keeps <stream>.session while a media session is open on the keyboard:
 #
 #   10 unreachable, 11 GATT          -> retry with backoff, then every 5 min, never halt

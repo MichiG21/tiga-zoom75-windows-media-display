@@ -28,7 +28,7 @@ tested that yet; this change makes it testable.
    uploader watches (`extracted\session_01_bulk_stream.bin.stop`; packaged:
    `app\_internal\extracted\…`). It holds the time, STOP_STACK's PID and the uploader
    PIDs it waits for, for the log reader; only its existence matters.
-2. **Uploader** (`tiga_stream_watch_flow.rs`). It checks for the file **only between
+2. **Uploader** (`windows_ble_probe/src/bin/tiga_stream_watch_flow/`). It checks for the file **only between
    uploads**, at the top of its watch loop (every ~250 ms when idle). An upload in
    progress is never abandoned for a stop: it completes, or fails the normal way (code 20
    or 21, session marker kept, supervisor halts). Then it logs
