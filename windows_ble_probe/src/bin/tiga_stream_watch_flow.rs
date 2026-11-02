@@ -904,9 +904,31 @@ impl RendererGate {
     }
 }
 
+/// The one thing an upload asks of the connected keyboard: a write. Faked in the tests,
+/// which pin every write of an upload; the real one only forwards to btleplug.
+trait GattWriter {
+    async fn write(
+        &self,
+        characteristic: &btleplug::api::Characteristic,
+        data: &[u8],
+        write_type: WriteType,
+    ) -> btleplug::Result<()>;
+}
+
+impl GattWriter for btleplug::platform::Peripheral {
+    async fn write(
+        &self,
+        characteristic: &btleplug::api::Characteristic,
+        data: &[u8],
+        write_type: WriteType,
+    ) -> btleplug::Result<()> {
+        btleplug::api::Peripheral::write(self, characteristic, data, write_type).await
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-async fn upload_stream<S>(
-    peripheral: &btleplug::platform::Peripheral,
+async fn upload_stream<P, S>(
+    peripheral: &P,
     control: &btleplug::api::Characteristic,
     bulk: &btleplug::api::Characteristic,
     notifications: &mut S,
@@ -919,6 +941,7 @@ async fn upload_stream<S>(
     timings: &mut UploadTimings,
 ) -> Result<(), Failed>
 where
+    P: GattWriter,
     S: futures::Stream<Item = btleplug::api::ValueNotification> + Unpin,
 {
     let mut p = UploadProgress {
@@ -2549,5 +2572,254 @@ mod tests {
         assert_eq!(&c1[18..21], &[0x01, 0xaf, 0xcc]); // file length 110,540
         assert_eq!(&c1[..18], &CONTROL1[..18]);
         assert_eq!(&c1[21..], &CONTROL1[21..]);
+    }
+
+    // ---- The write sequence of one upload, pinned ----
+    //
+    // Everything the keyboard receives for the template stream, in order, through the real
+    // upload_stream. The expected values don't come from this code: the CRC-32 of the
+    // template is the one in the hardware logs (`UPLOAD HELD ... crc32=57e8e0cf`, Phase 8),
+    // the writes at each block end are those logged by real uploads (`block  5/53 ACKed
+    // writes= 115/1239`), and the sequence CRC-32 was computed separately in Python from
+    // the chunking rule (PROJECT_HISTORY 3.2, 3.3).
+
+    const PINNED_CONTROL1: &str = "88 00 00 00 00 00 10 00 09 03 04 00 08 00 00 ff fc 00 03 5d d0 05 00 00";
+    const PINNED_CONTROL2: &str = "88 00 00 00 00 00 0a 00 08 03 00 ff ff ff 00 ff ff ff";
+    /// CRC-32 over `<1 control or 3 bulk> <u16 BE length> <bytes>` for every write, in order.
+    const PINNED_SEQUENCE_CRC32: u32 = 0x14af_2a9f;
+    const PINNED_TEMPLATE_CRC32: u32 = 0x57e8_e0cf;
+
+    fn pinned_bytes(hex: &str) -> Vec<u8> {
+        hex.split(' ').map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+    }
+
+    fn pinned_characteristic(uuid: Uuid) -> btleplug::api::Characteristic {
+        btleplug::api::Characteristic {
+            uuid,
+            service_uuid: SERVICE_MEDIA,
+            properties: btleplug::api::CharPropFlags::empty(),
+            descriptors: std::collections::BTreeSet::new(),
+        }
+    }
+
+    fn pinned_template() -> Vec<u8> {
+        fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("extracted")
+                .join("session_01_bulk_stream.redgreen-backup.bin"),
+        )
+        .unwrap()
+    }
+
+    /// Records every write and answers the way the keyboard does: the ACK pairs, a PROGRESS
+    /// at each 4096-byte boundary of the DLX file, and COMPLETE after the last byte.
+    struct FakeKeyboard {
+        writes: std::cell::RefCell<Vec<(Uuid, Vec<u8>, WriteType)>>,
+        answers: futures::channel::mpsc::UnboundedSender<btleplug::api::ValueNotification>,
+        stream_len: usize,
+        bytes_sent: std::cell::Cell<usize>,
+        /// How many writes had gone out at each PROGRESS.
+        progress_at: std::cell::RefCell<Vec<usize>>,
+        /// No answer to CONTROL1 at all.
+        ignore_control1: bool,
+        /// No PROGRESS after this many.
+        progress_limit: usize,
+    }
+
+    impl FakeKeyboard {
+        fn new(
+            answers: futures::channel::mpsc::UnboundedSender<btleplug::api::ValueNotification>,
+            stream_len: usize,
+        ) -> Self {
+            FakeKeyboard {
+                writes: Default::default(),
+                answers,
+                stream_len,
+                bytes_sent: Default::default(),
+                progress_at: Default::default(),
+                ignore_control1: false,
+                progress_limit: usize::MAX,
+            }
+        }
+
+        fn answer(&self, value: &[u8]) {
+            self.answers.unbounded_send(notification(value)).unwrap();
+        }
+    }
+
+    impl GattWriter for FakeKeyboard {
+        async fn write(
+            &self,
+            characteristic: &btleplug::api::Characteristic,
+            data: &[u8],
+            write_type: WriteType,
+        ) -> btleplug::Result<()> {
+            self.writes.borrow_mut().push((characteristic.uuid, data.to_vec(), write_type));
+            if characteristic.uuid == CHAR_CONTROL {
+                if data.len() == 24 {
+                    if !self.ignore_control1 {
+                        self.answer(C1_ACK_A);
+                        self.answer(C1_ACK_B);
+                    }
+                } else {
+                    self.answer(C2_ACK_A);
+                    self.answer(C2_ACK_B);
+                }
+                return Ok(());
+            }
+            let sent = self.bytes_sent.get() + data.len() - 1;
+            self.bytes_sent.set(sent);
+            if sent >= FILE_START_IN_STREAM
+                && (sent - FILE_START_IN_STREAM) % 4096 == 0
+                && self.progress_at.borrow().len() < self.progress_limit
+            {
+                let writes = self.writes.borrow().len() - 2;
+                self.progress_at.borrow_mut().push(writes);
+                self.answer(PROGRESS);
+            }
+            if sent == self.stream_len {
+                self.answer(COMPLETE);
+            }
+            Ok(())
+        }
+    }
+
+    async fn pinned_upload(
+        keyboard: &FakeKeyboard,
+        answers: &mut futures::channel::mpsc::UnboundedReceiver<btleplug::api::ValueNotification>,
+        chunks: &[Chunk],
+        block_timeout_ms: u64,
+        stream_path: &Path,
+        timings: &mut UploadTimings,
+    ) -> Result<(), Failed> {
+        upload_stream(
+            keyboard,
+            &pinned_characteristic(CHAR_CONTROL),
+            &pinned_characteristic(CHAR_BULK),
+            answers,
+            chunks,
+            0,
+            block_timeout_ms,
+            stream_path,
+            "r-f0001",
+            true,
+            timings,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn template_upload_write_sequence_is_pinned() {
+        let dir = std::env::temp_dir().join(format!("tiga_pin_sequence_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream_path = dir.join("s.bin");
+        let template = pinned_template();
+        assert_eq!(crc32(&template), PINNED_TEMPLATE_CRC32);
+        let chunks = build_chunks(&template, false).unwrap();
+
+        let (sender, mut answers) = futures::channel::mpsc::unbounded();
+        let keyboard = FakeKeyboard::new(sender, template.len());
+        let mut timings = UploadTimings::default();
+        pinned_upload(&keyboard, &mut answers, &chunks, BLOCK_TIMEOUT_MS, &stream_path, &mut timings)
+            .await
+            .unwrap();
+        let writes = keyboard.writes.into_inner();
+
+        // CONTROL1, CONTROL2, then 1239 bulk writes, none of them with a response.
+        assert_eq!(writes.len(), 2 + 1239);
+        assert!(writes.iter().all(|w| w.2 == WriteType::WithoutResponse));
+        assert_eq!((writes[0].0, writes[0].1.clone()), (CHAR_CONTROL, pinned_bytes(PINNED_CONTROL1)));
+        assert_eq!((writes[1].0, writes[1].1.clone()), (CHAR_CONTROL, pinned_bytes(PINNED_CONTROL2)));
+        assert!(writes[2..].iter().all(|w| w.0 == CHAR_BULK));
+
+        // Each bulk write is a slice of the stream plus its XOR, and together they are the
+        // stream, byte for byte and in order.
+        let mut sent = Vec::new();
+        for (_, value, _) in &writes[2..] {
+            let (data, checksum) = value.split_at(value.len() - 1);
+            assert_eq!(checksum[0], data.iter().fold(0u8, |acc, b| acc ^ b));
+            sent.extend_from_slice(data);
+        }
+        assert_eq!(sent, template);
+
+        // The sizes: 181 bytes + XOR, cut short at each 4096-byte boundary.
+        let count = |len: usize| writes[2..].iter().filter(|w| w.1.len() == len).count();
+        assert_eq!((count(182), count(115), count(140), count(98)), (1185, 52, 1, 1));
+        assert_eq!((writes[2].1.len(), writes[writes.len() - 1].1.len()), (182, 98));
+
+        // A PROGRESS after every 23rd write, as logged on hardware.
+        let progress_at = keyboard.progress_at.into_inner();
+        assert_eq!(progress_at.len(), 53);
+        assert_eq!((progress_at[4], progress_at[9], progress_at[52]), (115, 230, 1219));
+        assert!(progress_at.iter().enumerate().all(|(i, &w)| w == 23 * (i + 1)));
+
+        // The whole sequence in one number.
+        let mut all = Vec::new();
+        for (uuid, value, _) in &writes {
+            all.push(if *uuid == CHAR_CONTROL { 1 } else { 3 });
+            all.extend_from_slice(&(value.len() as u16).to_be_bytes());
+            all.extend_from_slice(value);
+        }
+        assert_eq!(crc32(&all), PINNED_SEQUENCE_CRC32);
+
+        assert_eq!(timings.block_ms.len(), 53);
+        assert!(timings.control1_ack_ms.is_some() && timings.control2_ack_ms.is_some());
+        assert!(read_session_marker(&stream_path).is_none(), "COMPLETE closes the session");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_block_stops_the_writes_and_keeps_the_session_marker() {
+        let dir = std::env::temp_dir().join(format!("tiga_pin_stall_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream_path = dir.join("s.bin");
+        let template = pinned_template();
+        let chunks = build_chunks(&template, false).unwrap();
+
+        let (sender, mut answers) = futures::channel::mpsc::unbounded();
+        let mut keyboard = FakeKeyboard::new(sender, template.len());
+        keyboard.progress_limit = 4;
+        let mut timings = UploadTimings::default();
+        let f = pinned_upload(&keyboard, &mut answers, &chunks, 50, &stream_path, &mut timings)
+            .await
+            .unwrap_err();
+
+        // Block 5 was written in full, and nothing after it.
+        assert_eq!(keyboard.writes.borrow().len(), 2 + 115);
+        assert_eq!((f.kind, f.kind.code(), f.last_acked_block), (Failure::Interrupted, 20, Some(4)));
+        assert!(f.progress_timeout);
+        assert_eq!(f.detail, "timed out waiting for PROGRESS after 4K block 5/53 (last ACKed block 4/53)");
+        assert_eq!(f.frame_id.as_deref(), Some("r-f0001"));
+        assert_eq!(stall_signature(&timings.block_ms, f.progress_timeout), Signature::Sudden);
+        let marker = read_session_marker(&stream_path).unwrap();
+        assert_eq!(sidecar_value(&marker, "last_acked_block"), Some("4"));
+        assert_eq!(sidecar_value(&marker, "total_blocks"), Some("53"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_answer_to_control1_is_unreachable_and_never_sends_control2() {
+        let dir = std::env::temp_dir().join(format!("tiga_pin_control1_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let stream_path = dir.join("s.bin");
+        let template = pinned_template();
+        let chunks = build_chunks(&template, false).unwrap();
+
+        let (sender, mut answers) = futures::channel::mpsc::unbounded();
+        let mut keyboard = FakeKeyboard::new(sender, template.len());
+        keyboard.ignore_control1 = true;
+        let mut timings = UploadTimings::default();
+        let started = Instant::now();
+        let f = pinned_upload(&keyboard, &mut answers, &chunks, BLOCK_TIMEOUT_MS, &stream_path, &mut timings)
+            .await
+            .unwrap_err();
+
+        assert_eq!(keyboard.writes.borrow().len(), 1);
+        assert_eq!((f.kind, f.kind.code(), f.last_acked_block), (Failure::Unreachable, 10, None));
+        assert_eq!(f.detail, "control ACK pair timed out");
+        assert!(started.elapsed() >= Duration::from_millis(1500), "{:?}", started.elapsed());
+        assert!(read_session_marker(&stream_path).is_none(), "no session before CONTROL2");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
