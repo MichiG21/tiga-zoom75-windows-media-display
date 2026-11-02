@@ -1,0 +1,33 @@
+name: Offline tests
+description: >
+  Every offline test: Python, the supervisor suites, the upload soak test and the uploader.
+  ci.yml and installer.yml both run these. Check the code out and set up Python (with
+  requirements.txt) and Rust first. Nothing here touches Bluetooth or the keyboard.
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Python renderer
+      shell: pwsh
+      run: python -m py_compile tiga_windows_nowplaying_v2.py
+
+    - name: Offline renderer tests
+      shell: pwsh
+      run: python -m unittest discover -s tests -v
+
+    - name: Offline supervisor logging tests
+      shell: powershell
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_supervisor_logging.ps1
+
+    - name: Offline supervisor retry-policy tests
+      shell: powershell
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_supervisor_retry.ps1
+
+    - name: Offline upload soak tests
+      shell: powershell
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_upload_soak.ps1
+
+    - name: Offline BLE uploader tests
+      shell: pwsh
+      working-directory: windows_ble_probe
+      run: cargo test --release --locked --bin tiga_stream_watch_flow

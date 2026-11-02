@@ -306,6 +306,8 @@ Only once the phases above are clean, and "Before the next tag" at the top has p
 
 - [x] `CHANGELOG.md` has a `v0.3.0-beta.1` section, dated 2026-11-02. If the tag goes out
       on a later day, change the date to that day first.
+- [ ] `docs/RELEASE_TEXT_<tag>.md` is committed before tagging: the workflow reads it from the
+      tagged commit. Without it, a new release gets generated notes.
 - [ ] Tag and push:
 
 ```
@@ -313,8 +315,9 @@ git tag v0.3.0-beta.1
 git push origin v0.3.0-beta.1
 ```
 
-- [ ] Wait for the installer workflow to build
-- [ ] Paste `docs/RELEASE_TEXT_v0.3.0-beta.1.md` as the release text
+- [ ] Wait for the installer workflow: it runs the offline tests, builds, and creates the release
+- [ ] Check the release text. If a release with that tag already existed, its text was left
+      alone, so edit it by hand if needed
 - [ ] Mark the release as **latest** (not pre-release) if you want people to get it by default
 - [ ] Issues: nothing to close; #4–#10, #14 and #15 were all closed by 2026-10-18
 

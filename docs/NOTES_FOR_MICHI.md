@@ -2701,3 +2701,41 @@ failures in a row to be counted, so several days of logs can answer it.
 - **The two checklist requirements** before any tag.
 - **Your call, for the next release text:** the "about 1 in 30", and whether to move the 15-second rule
   out of "Not yet verified".
+
+# Installer workflow: tests first, no default tag, release text from the repo, 2026-11-02
+
+On `ci/installer-tests-and-release-text`; PR open, not merged, no tag. Workflows and docs only: the
+uploader, renderer and stack scripts weren't touched. Claude sent nothing to the keyboard and ran no
+stack script.
+
+- **Tests first.** `.github/actions/offline-tests/action.yml` holds the offline tests once: Python, both
+  supervisor suites, the soak test and `cargo test`. `ci.yml` and `installer.yml` both call it. In
+  `installer.yml` it comes before every build step, and a failure stops the job, so nothing is built
+  or uploaded. `ci.yml` now runs `cargo test` before its builds instead of after them.
+- **No default tag.** The manual run's `tag` has no default, and an empty one stops at once.
+- **Release text.** A new release uses `docs/RELEASE_TEXT_<tag>.md` from the checked-out commit if it
+  exists, otherwise `--generate-notes`. An existing release keeps its text; only the installer is
+  replaced. A failed `gh release create` now stops the step, where it used to carry on to the upload.
+- **One change you didn't ask for:** Phase 7 of the checklist said to paste the text by hand. It now
+  says to commit the file before tagging, and to check the text afterwards.
+
+**How it was checked.** The release step's real text ran against a fake `gh` in 5 cases: new with a text
+file, new without, existing with, existing without, and a failed create. All behaved as intended, and
+nothing reached GitHub. The publish path itself has not run: only a tag or a manual run reaches it, so
+the next release is its first real run. This PR's own CI shows the shared tests running in both
+workflows. No run has shown a failing test stopping the build; that rests on GitHub's rule that a
+failed step stops the job, and that the release step's `if:` has no `always()`.
+
+## Open for Michi
+
+- **Still possible on a manual run, not changed because you didn't ask:**
+  - it builds the branch you start it from, not the tag you type, so the installer published under a
+    tag can differ from that tag's code;
+  - a tag that doesn't exist yet gets created, on the default branch, by `gh release create`.
+
+  Checking out `inputs.tag` would fix both, because the run would then fail on a mistyped tag. It's a
+  small change; say if you want it.
+- **If tests fail on a tag push,** the tag exists with no release. Fix the code, then delete and re-push
+  the tag, or re-run if the failure was a flaky one.
+- **Each PR now runs the tests in three jobs** (`ci.yml` on push and on pull request, `installer.yml`),
+  and the installer build takes a few minutes longer.
