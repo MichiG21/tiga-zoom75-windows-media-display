@@ -120,7 +120,8 @@ Windows installer definition and packaged-runtime helper scripts.
 
 ### `windows_ble_probe/`
 
-Rust source for the current BLE uploader and earlier BLE investigation tools.
+Rust source for the current BLE uploader (`src/bin/tiga_stream_watch_flow/`) and earlier BLE
+investigation tools.
 
 ### `extracted/`
 

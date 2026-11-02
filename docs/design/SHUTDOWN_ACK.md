@@ -76,7 +76,7 @@ The button is disabled while a wait is running, so two waits cannot overlap.
 
 - `tiga_windows_nowplaying_v2.py`: `write_display` returns `(frame_id, crc)`; new
   `write_command_ack`; called after every handled command.
-- `windows_ble_probe/src/bin/tiga_stream_watch_flow.rs`: `note_already_displayed`.
+- `windows_ble_probe/src/bin/tiga_stream_watch_flow/sidecars.rs`: `note_already_displayed`.
 - `tiga_display_control.cpp`: `write_command_text` returns the text it wrote; the
   shutdown worker waits for both acks and asks on timeout.
 - Tests: renderer ack through `main()`; uploader no-op recording.
