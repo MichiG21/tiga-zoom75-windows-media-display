@@ -15,13 +15,13 @@ release is still `v0.2.0-beta.1` (2026-09-09).
 
 ## Part 1 — What blocks v0.3.0-beta.1 today
 
-**(H)** needs the keyboard; **(M)** needs Michi's decision.
+Nothing is left open; Phase 7 is next.
 
-1. **(H, optional) Phase 4, killed uploader:** `Stop-Process -Name tiga_stream_watch_flow
-   -Force` about 3 s into an upload. Expect HALTED from the session marker. Never run on
-   hardware. **It leaves the keyboard needing a battery disconnect**, so do it last in a
-   session. **(M)** whether it must pass before release; the marker path is covered by
-   offline tests.
+**Phase 4, killed uploader, was skipped for this beta by Michi's decision; it isn't
+required.** `Stop-Process -Name tiga_stream_watch_flow -Force` about 3 s into an upload
+has never been run on hardware, and it would leave the keyboard needing a battery
+disconnect. The session marker path is covered by offline tests only, and Part 2 lists it
+under "Not yet verified on the keyboard".
 
 **Done on 2026-11-02: Phase 8, the installer end to end, passed its retest on hardware.**
 Installer CI run 40182232342 (`b0c207b`) over a running v0.2.0-beta.1 (setup log #005):
@@ -165,7 +165,9 @@ quote marks.
 > 9.08 s; the *Status* window stayed open and showed `OK`.
 >
 > **Not yet verified on the keyboard:** the 15-second rule for players that never report
-> their position moving (no such player is known).
+> their position moving (no such player is known); a halt after the uploader itself is
+> killed mid-upload (covered by offline tests only); the *Start Display* and *Stop Display*
+> windows staying open (same fix as *Status*, which was checked).
 >
 > #### Known problems
 >

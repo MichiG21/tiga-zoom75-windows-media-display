@@ -185,6 +185,10 @@ display freezes here, that fix didn't take.
 
 ## Phase 4 — Bug A, the real test
 
+**Skipped for v0.3.0-beta.1 by Michi's decision; it isn't required for this beta.** The
+killed-uploader halt below has never been run on hardware and is covered by offline tests
+only; the release text says so.
+
 Full steps with expected log lines are in **`docs/design/RETRY_RECOVERY.md`**. The one
 that matters:
 

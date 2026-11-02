@@ -113,7 +113,9 @@ the keyboard got no red/green image, and the first upload, the first real screen
 9.08 s; the *Status* window stayed open and showed `OK`.
 
 **Not yet verified on the keyboard:** the 15-second rule for players that never report
-their position moving (no such player is known).
+their position moving (no such player is known); a halt after the uploader itself is
+killed mid-upload (covered by offline tests only); the *Start Display* and *Stop Display*
+windows staying open (same fix as *Status*, which was checked).
 
 #### Known problems
 

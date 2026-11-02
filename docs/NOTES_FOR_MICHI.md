@@ -2374,3 +2374,22 @@ of that day and stay as they are.
   release page, comes after that.
 - Candidates for an eighth part of PROJECT_HISTORY §7.1, not written: the 2026-10-25 runs
   listed above and this retest.
+
+# Phase 4 skipped for this beta, 2026-11-02 (PR #33)
+
+**Michi's decision: Phase 4 is skipped for v0.3.0-beta.1; it isn't required.** That answers
+the open question in the section above. The killed-uploader halt has never been run on
+hardware and is covered by offline tests only.
+
+Changed on `docs/phase8-retest`: Part 1 of the release notes and Phase 4 of the checklist
+now say so, and the "Not yet verified on the keyboard" sentence in Part 2 and in
+`docs/RELEASE_TEXT_v0.3.0-beta.1.md` got Michi's wording. It now also lists the killed
+uploader and the *Start Display* and *Stop Display* windows. Claude merged PR #33 once its
+checks passed and created no tag. Nothing was sent to the keyboard, and `tiga-fresh-test`
+was not pulled.
+
+## Open for Michi
+
+- Phase 7: tag, paste `docs/RELEASE_TEXT_v0.3.0-beta.1.md`. The CHANGELOG says 2026-11-02;
+  if the tag goes out on a later day, change the date first.
+- Phase 8's last pass, with the file from the release page.
