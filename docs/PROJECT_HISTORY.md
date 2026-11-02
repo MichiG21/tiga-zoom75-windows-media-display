@@ -1268,6 +1268,162 @@ Two of three, with no control: first uploads fail about 1 time in 3 anyway (sixt
 and the two failures have different signatures. Not a finding. To test it, wait a minute
 or more after a RAM session before START_STACK, and note the gap at every session.
 
+#### Eighth part: 2026-10-25, the first Phase 8 run of the installer
+
+Source: `C:\Users\Regal\Downloads\tiga-phase8\` (setup logs #002 and #003, `logs-packaged\`),
+`docs/NOTES_FOR_MICHI.md` and `docs/RELEASE_CHECKLIST.md`. Build `vpr-32` (installer CI run
+39853101947, `4d06fdf`) over v0.2.0-beta.1. Times are local (UTC+1 from this day on);
+`ble.log` stamps are UTC.
+
+**What the logs show:**
+
+| Time | Event |
+|---|---|
+| 09:26:34 | v0.2's packaged supervisor starts. It truncates its logs, so `ble.log` keeps only its last run: 14 completed uploads, 8.34–9.25 s |
+| 09:27:29–09:31:00 | **v0.2's renderer exits 16 times**, each restarted after 8 s |
+| 09:30:56 | Setup log #002 ends with "Exit Setup? Yes", before any file was copied |
+| 09:33:00 | Setup log #003: all files copied. 09:33:02 `STOP_STACK: no BLE uploader was running` |
+| 09:33:06 | v0.3 stack starts. 09:33:23 **`UPLOAD START frame=unknown(no-sidecar) crc32=57e8e0cf`: the red/green template**, because the renderer's first frame came only at 09:33:42 (36 s) |
+| 09:34:27 | That upload **completes in 64.08 s**: `median=1140ms p90=1725ms max=2407ms`, every block slow, no stall. The slowing pattern without a timeout |
+| 09:34:28 | The next upload fails with code 10: `control ACK pair timed out` after CONTROL1. Restarted after 8 s; completes at 09:34:49 in 8.83 s |
+| 09:36:43, 09:38:24 | `OH! TENGO SUERTE` 10.72 s; `トーキョーレギー` 9.62 s. `FONT fallbacks: YuGothB.ttc, msyhbd.ttc, msjhbd.ttc, malgunbd.ttf, seguisym.ttf; not installed: meiryo.ttc`, and no `FONT no font has` line |
+| 09:41:21 | *Stop Display*: `exited on request after 0,3 s`, `Disconnected cleanly`, code 0 |
+| 09:44:46 | First upload after *Start Display*: **slowing failure**, last ACKed block 8, `median=203ms p90=2198ms`. Halted |
+| 09:50:36 | Halt cleared. 09:50:44 first upload: **sudden failure**, last ACKed block 4 |
+| 09:52:44 | Automatic retry 1 of 3. 09:52:55 completes in 8.64 s. **The first automatic retry on the packaged build** |
+
+**What only Michi reported** (not in these logs):
+
+- **The upgrade failure itself.** "DeleteFile failed; code 5. Access is denied" on
+  `app\_internal\tiga_stream_watch_flow.exe` was on screen, and it appears in neither setup
+  log here: #002 quits before copying and #003 ran after v0.2 had been stopped. The cause
+  doesn't depend on the log, because `[Files]` always ran before the `[Run]` stop. Fixed in
+  `e0add1b`.
+- **The crash loop came from a Japanese title** (bug G, fixed in this release). The logs show
+  the exits, with a blank exit code, but not the title.
+- **The Japanese title displayed as glyphs.** The logs show the fallback fonts and no missing
+  character, not the LCD.
+- **The *Start Display*, *Stop Display* and *Status* windows closed at once.** Fixed in
+  `7d086bc`.
+- **Uninstalling and re-pointing the task at `tiga-fresh-test`.** The live log only shows the
+  result: its stack starts at 09:57:56.
+
+**The logs can't show** whether the battery was disconnected between the 09:44 halt and the
+09:50:36 *Start Display*, so that start isn't counted in the no-power-off tally below.
+
+**What this changed:** three fixes (`e0add1b` stop before copying, `319b426` hold a stream
+with no `.frame`, `7d086bc` keep the windows open) and `b0c207b` (`[InstallDelete]` for a
+leftover `.frame`). Slowing failures: now 5.
+
+#### Ninth part: 2026-11-02, the retest and the release
+
+Source: `C:\Users\Regal\Downloads\tiga-phase8-retest\` (setup logs #001–#005,
+`logs-packaged\`), the live install's logs, `gh`. Build at `b0c207b` (installer CI run
+40182232342); the files it installs are stamped 09:49:34 UTC on 2026-10-25, seconds after
+that run started. Its artifact keeps the old name, `…-vpr-32.exe`.
+
+**What the logs show:**
+
+| Time | Event |
+|---|---|
+| 14:58:53 | The live stack is stopped (`STOP_STACK: no BLE uploader was running`; it had been halted since 2026-10-25) |
+| 15:00:51 | Setup #001, the new build: `no installed version`. Display Control's executable is run from Setup at 15:01:03 |
+| 15:06:53 | Setup #002, v0.2: **`Creating directory`**, so the install folder had been removed in between |
+| 15:08:52 | Setup #003, **the old build** from `Downloads\tiga-phase8` over the running v0.2: **"DeleteFile failed; code 5. Access is denied"** on `app\tiga_windows_nowplaying.exe`. Aborted and rolled back at 15:10:27 |
+| 15:13:10 | Setup #004, v0.2 again. Its uploader exits four times by 15:14:45 and the last run, from 15:14:53, completes 3 uploads (8.40–9.04 s). The logs don't say why it exited, and the exit code is blank |
+| 15:16:28 | **Setup #005, the new build over the running v0.2:** `Stopping the installed version before copying files`, `STOP_STACK.ps1 exit code: 0`, `No TIGA stack process runs from … (waited 0 ms)`, then `Starting the installation process`. No DeleteFile line |
+| 15:16:59 | `UPLOAD HELD frame=unknown(no-sidecar) crc32=57e8e0cf`. 15:17:02 `RENDERER sidecar appeared after 3.2s` |
+| 15:17:12 | First upload, the standby frame: `UPLOAD COMPLETE … in 9.08s`. 15:17:22 second upload, 10.34 s |
+| 15:19:56 | The live stack starts again, without `BLE uploader is halted`: the halt file was gone. No `Halt cleared` line, because no supervisor was running to notice |
+| 15:47:29 | PR #33 merged as `601d325`. The v0.3.0-beta.1 tag points at that commit; its installer run is green |
+| 15:55:20 | Release published with `TIGA-Windows-Media-Display-Setup-v0.3.0-beta.1.exe`. Its text matches `docs/RELEASE_TEXT_v0.3.0-beta.1.md` |
+
+So #003 and #005 are the same step with the old and the new build, minutes apart: a locked
+file before the fix, none after it.
+
+**What only Michi reported** (not in these logs):
+
+- No red/green flash on the LCD, and the *Status* window staying open and showing OK.
+- The Known problems taken from this session: Norton CyberCapture holding or sandboxing the
+  programs, with "Access is denied" lines during that time; Display Control keeping its own
+  file locked; "The device is not ready for use" with Bluetooth off. None of these strings is
+  in the retest's logs.
+- The decision to skip Phase 4.
+
+**Not tested by the retest:**
+
+- **`[InstallDelete]` with a leftover `.frame`.** The folder was recreated at 15:06 and v0.2
+  never writes that file, so there was none at #005. `UPLOAD HELD` proves the hold, not the
+  deletion. An upgrade from v0.3.0-beta.1 to a later version is the first real test.
+- *Start Display* and *Stop Display* on the new build: none in the logs up to 15:18. The
+  release text lists their windows under "Not yet verified".
+- The killed-uploader halt (Phase 4), skipped by Michi's decision; offline tests only.
+- Recovery after Bluetooth is turned back on. The class comes from the code: a failure of the
+  Bluetooth manager, adapter list or scan start is code 10.
+
+#### Tenth part: retry outcomes on the live install, 2026-10-22 to 2026-11-02
+
+Source: `tiga-fresh-test\logs\startup_supervisor.log`, `ble.log` and `uploader_retry.json`,
+read at 16:04 on 2026-11-02 (last supervisor line 15:52:21), recounted from those lines.
+Only the live install; the packaged runs above are separate.
+
+**The count depends on where the window starts:**
+
+| | From 2026-10-22 on | After 2026-10-22 (not in the seventh part) |
+|---|---|---|
+| `Automatic retry … SUCCEEDED` (recoveries) | **7** | **6** |
+| `Automatic retry … FAILED` | 2 | 2 |
+| Automatic retries started | 9 | 8 |
+| `HALTED`, signature slowing | **3** | **2** |
+| Halted after all 3 retries | 0 | 0 |
+
+Michi's figures were 6 recoveries and 3 slowing halts. Each matches one column, not the same
+one: the 3 includes 22:24 on 2026-10-22 and the 6 leaves out 21:25 that evening.
+
+| Failure | Signature | Last ACKed | First upload of the run? | Outcome |
+|---|---|---|---|---|
+| 10-22 21:23:33 | sudden | 4 | yes | retry 1 OK, 21:25:48 |
+| 10-22 22:24:27 | slowing | 7 | yes | **halted** |
+| 10-23 21:54:13 | sudden | 4 | yes | retry 1 failed (21:56:22, sudden, block 5, also a first upload), retry 2 OK, 21:58:37 |
+| 10-23 22:23:39 | sudden | 3 | no, after 4 | retry 1 failed (22:25:50, sudden, block 24, also a first upload), retry 2 OK, 22:28:03 |
+| 10-25 10:31:07 | sudden | 4 | no, after 9 | retry 1 OK, 10:33:20 |
+| 10-25 10:36:29 | slowing | 7 | yes, the run after a code 10 at 10:36:05 (`control ACK pair timed out`) | **halted** |
+| 10-25 11:04:53 | slowing | 2 | no, after 4 | **halted, until 2026-11-02** |
+| 11-02 15:25:48 | sudden | 2 | no, after 4 | retry 1 OK, 15:28:01 |
+| 11-02 15:44:47 | sudden | 25 | no, after 5 | retry 1 OK, 15:47:00 |
+| 11-02 15:50:07 | sudden | 21 | no, after 2 | retry 1 OK, 15:52:21 |
+
+**What this shows:**
+
+- **Every sudden incident recovered without a halt: 7 of 7.** Two needed a second retry; none
+  needed the third.
+- **The automatic retry, all sources:** the seventh part's 2 of 2, then these 8 retries (6 OK)
+  and the packaged one at 09:52 on 2026-10-25. Retries without a power-off in the seventh
+  part's tally go from 5 of 7 to **12 of 16**; after a sudden failure from 4 of 5 to
+  **11 of 14**.
+- **Slowing failures: now 7** (4 up to the seventh part, the packaged 09:44, and 10:36 and
+  11:04 here). After 10:36 the halt was cleared at 10:52:05 and 4 uploads completed. After
+  11:04 the next start was on 2026-11-02, and 4 uploads completed. The logs can't show
+  whether the battery was disconnected either time, so neither is in the tally.
+- **A halt survives reboots, on the record:** the 11:04 halt lasted until 2026-11-02. The
+  supervisor started 5 times in between (10-25 14:06, 10-27, 10-28, 11-01, 11-02 13:47), logged
+  `BLE uploader is halted` and kept the renderer running each time.
+- **84 uploads completed in these runs (from 21:23 on 2026-10-22):** median 9.71 s, 8.53 s at
+  the fastest. Three took longer than 11 s and still completed: 12.43, 13.25 and 30.12 s (the
+  last on 2026-10-23, `median=240ms max=5440ms`).
+
+**Observations, not findings:**
+
+- **Later uploads failed more often than the release text says.** First uploads of a run: 6
+  of 19 failed, which fits "about 1 in 3". Later uploads: 7 of 78, about 1 in 11, against
+  "about 1 in 30" in the text. One of the 7 is the code 10, which never opened a transfer;
+  without it, 6 of 77. Three of the 7 came within 25 minutes on 2026-11-02. A small sample,
+  and a different period from the one the 1 in 30 came from. The text hasn't been changed.
+- **With two ACKed blocks the signature turns on a few milliseconds.** 10-25 11:04 has
+  `median=502ms` and is slowing, so it halted. 11-02 15:25 has `median=492ms` and is sudden, so
+  it was retried and recovered. Both stopped after block 2. The rule (median over 500 ms)
+  wasn't made for so few blocks. Policy unchanged.
+
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
 Two separate fixes, easy to conflate:
