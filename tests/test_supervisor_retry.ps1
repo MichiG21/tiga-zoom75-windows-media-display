@@ -468,7 +468,7 @@ foreach ($script in @("STOP_STACK.ps1", "installer\runtime\STOP_STACK.ps1")) {
 Write-Host "== STATUS_STACK.ps1"
 $root = Join-Path $work "status root"
 New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "extracted") | Out-Null
-Copy-Item (Join-Path $RepoRoot "STATUS_STACK.ps1") $root
+Copy-Item (Join-Path $RepoRoot "STATUS_STACK.ps1"), (Join-Path $RepoRoot "tiga_supervisor_common.ps1") $root
 $fakeStream = Join-Path $root "extracted\session_01_bulk_stream.bin"
 Set-Content -LiteralPath "$fakeStream.frame" -Encoding ASCII -Value "frame_id=r-f0042", "crc32=aaaa0042", "rendered_at=2026-10-15T20:00:00+02:00", "reason=media changed"
 $decision = Get-UploaderDecision -ExitCode 20 -Session @{ frame_id = "r-f0042" } -Attempt 1
@@ -528,6 +528,92 @@ foreach ($script in @("START_STACK.ps1", "installer\runtime\START_STACK.ps1")) {
     $clearStop = $text.IndexOf("Clear-UploaderStopRequest")
     Assert-True ($clearStop -ge 0 -and $clearStop -lt $start) "$script withdraws a leftover stop request before Start-ScheduledTask"
 }
+
+# What the dev and packaged scripts share lives in tiga_supervisor_common.ps1. The scripts keep
+# their names (the task, the installer and the shortcuts use them) and what differs by layout.
+Write-Host "== dev and packaged scripts"
+$dev = "tiga_startup_supervisor.ps1", "START_STACK.ps1", "STOP_STACK.ps1", "STATUS_STACK.ps1"
+foreach ($name in $dev) {
+    foreach ($script in @($name, "installer\runtime\$name")) {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $RepoRoot $script), [ref]$tokens, [ref]$errors)
+        Assert-True ($errors.Count -eq 0 -and $ast.Extent.Text -match 'tiga_supervisor_common\.ps1') "$script parses and dot-sources the common file"
+        $defined = @($ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+        Assert-True (@($defined | Where-Object { Test-Path "function:$_" }).Count -eq 0) "$script defines nothing the common file also defines"
+    }
+}
+$text = @{}
+foreach ($script in "STOP_STACK.ps1", "STATUS_STACK.ps1", "tiga_startup_supervisor.ps1") {
+    $text["dev $script"] = Get-Content -Raw (Join-Path $RepoRoot $script)
+    $text["packaged $script"] = Get-Content -Raw (Join-Path $RepoRoot "installer\runtime\$script")
+}
+Assert-True ($text["dev STOP_STACK.ps1"] -match [regex]::Escape('"tiga_startup_supervisor|tiga_windows_nowplaying_v2.py|tiga_stream_watch_flow"')) "dev STOP_STACK keeps its process pattern"
+Assert-True ($text["packaged STOP_STACK.ps1"] -match [regex]::Escape('"tiga_startup_supervisor|tiga_windows_nowplaying_v2.py|tiga_windows_nowplaying.exe|tiga_stream_watch_flow"')) "packaged STOP_STACK keeps its process pattern"
+Assert-True ($text["dev STATUS_STACK.ps1"] -match [regex]::Escape('"tiga_startup_supervisor|tiga_windows_nowplaying_v2.py|tiga_stream_watch_flow"')) "dev STATUS_STACK keeps its process pattern"
+Assert-True ($text["packaged STATUS_STACK.ps1"] -match [regex]::Escape('"tiga_startup_supervisor|tiga_windows_nowplaying.exe|tiga_stream_watch_flow"')) "packaged STATUS_STACK keeps its process pattern"
+Assert-True ($text["dev tiga_startup_supervisor.ps1"] -match "TIGA startup supervisor launched \(pid \`$PID\)\." -and $text["packaged tiga_startup_supervisor.ps1"] -match "TIGA packaged startup supervisor launched \(pid \`$PID\)\.") "each supervisor keeps its log line"
+foreach ($file in "installer\runtime\START_STACK.ps1", "installer\runtime\STOP_STACK.ps1", "installer\runtime\STATUS_STACK.ps1", "installer\runtime\tiga_startup_supervisor.ps1") {
+    Assert-True ((Get-Content -Raw (Join-Path $RepoRoot ".github\workflows\installer.yml")) -match [regex]::Escape($file)) "installer.yml still stages $file"
+}
+Assert-True ((Get-Content -Raw (Join-Path $RepoRoot ".github\workflows\installer.yml")) -match [regex]::Escape('.\tiga_supervisor_common.ps1')) "installer.yml still stages the common file"
+
+Write-Host "== Clear-UploaderHaltWithNotice"
+$noticeHalt = Join-Path $logs "notice_halted.json"
+[System.IO.File]::WriteAllText($noticeHalt, '{"halted_at":"2026-10-25T11:04:53+01:00","reason":"code 20"}')
+Set-Content -LiteralPath "$stream.session" -Value "frame_id=r-f0001" -Encoding ASCII
+$said = (Clear-UploaderHaltWithNotice -HaltFile $noticeHalt -StreamPath $stream 6>&1 | Out-String -Width 400)
+Assert-True ($said -match "The BLE uploader was halted at 2026-10-25T11:04:53\+01:00: code 20") "says what the halt was"
+Assert-True ($said -match "Cleared the halt, assuming" -and $said -match "removed .*\.session" -and $said -match "removed .*notice_halted\.json") "says what it removed"
+Assert-True ($said -match "If it was NOT, run STOP_STACK\.ps1 now\. Then:" -and $said -match "Disconnect the keyboard's battery for at least 30 s \(there is no power switch; unplugging USB doesn't count\), then run START_STACK\.ps1\.") "asks for the battery disconnect, word for word"
+Assert-True (-not (Test-Path $noticeHalt) -and -not (Test-Path "$stream.session")) "both files are gone"
+Assert-True ([string]::IsNullOrWhiteSpace((Clear-UploaderHaltWithNotice -HaltFile $noticeHalt -StreamPath $stream 6>&1 | Out-String))) "no halt: says nothing"
+
+Write-Host "== Initialize-StackStream"
+$seedDir = Join-Path $work "seed"
+New-Item -ItemType Directory -Force -Path $seedDir | Out-Null
+$seedStream = Join-Path $seedDir "s.bin"
+$seedTemplate = Join-Path $seedDir "template.bin"
+Set-Content -LiteralPath $seedTemplate -Value "template" -Encoding ASCII
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+Initialize-StackStream -Stream $seedStream -Template $seedTemplate -Required @($seedStream)
+Assert-True ((Get-Content -Raw $seedStream) -match "template" -and (Get-Content -Raw $SupervisorLog) -match "Seeded .*s\.bin from .*template\.bin\.") "a missing stream is seeded and logged"
+Set-Content -LiteralPath $seedStream -Value "a frame" -Encoding ASCII
+Initialize-StackStream -Stream $seedStream -Template $seedTemplate -Required @($seedStream)
+Assert-True ((Get-Content -Raw $seedStream) -match "a frame") "an existing stream is left alone"
+$missing = Join-Path $seedDir "no such file.exe"
+$threw = $false
+try { Initialize-StackStream -Stream $seedStream -Template $seedTemplate -Required @($seedStream, $missing) } catch { $threw = $_.Exception.Message -eq "Required file missing: $missing" }
+Assert-True ($threw -and (Get-Content -Raw $SupervisorLog) -match "Required file missing: .*no such file\.exe") "a missing required file is logged and stops the start"
+
+Write-Host "== Invoke-StackSupervisor"
+# A mutex of its own: the real name belongs to the live supervisor.
+$testMutex = "Local\tiga-test-" + [guid]::NewGuid().ToString("N")
+$startedChildren = New-Object System.Collections.ArrayList
+$startChild = { param($name)
+    $p = Start-LoggedProcess -Name $name -FilePath $python -Arguments @($sleeper) -WorkingDirectory $work -StdOut (Join-Path $logs "$name.log") -StdErr (Join-Path $logs "$name.err.log")
+    [void]$startedChildren.Add($p)
+    $p
+}
+Remove-Item -LiteralPath $haltFile, (Get-RetryStatePath $haltFile), "$stream.session", "$stream.stop" -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+Invoke-StackSupervisor -LaunchMessage "test supervisor launched" -StartRenderer { & $startChild "r" } -StartUploader { & $startChild "u" } `
+    -HaltFile $haltFile -StreamPath $stream -MutexName $testMutex -PollSeconds 0.1 -MaxIterations 3
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($startedChildren.Count -eq 2) "starts the renderer and the uploader ($($startedChildren.Count))"
+Assert-True ($log.IndexOf("test supervisor launched") -ge 0 -and $log.IndexOf("test supervisor launched") -lt $log.IndexOf("Started r run=")) "logs its launch line first"
+Assert-True ($log -match "Supervisor stopping; cleaning up children\.") "logs the clean-up"
+Start-Sleep -Milliseconds 500
+Assert-True (@($startedChildren | Where-Object { -not $_.HasExited }).Count -eq 0) "stops its children on the way out"
+
+$createdHeld = $false
+$held = New-Object System.Threading.Mutex($true, $testMutex, [ref]$createdHeld)
+$startedChildren.Clear()
+Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+Invoke-StackSupervisor -LaunchMessage "second supervisor launched" -StartRenderer { & $startChild "r" } -StartUploader { & $startChild "u" } `
+    -HaltFile $haltFile -StreamPath $stream -MutexName $testMutex -PollSeconds 0.1 -MaxIterations 3
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($createdHeld -and $log -match "Another supervisor instance is already running; exiting\." -and $log -notmatch "second supervisor launched" -and $startedChildren.Count -eq 0) "a second supervisor starts nothing"
+$held.ReleaseMutex(); $held.Dispose()
 
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 if ($failures) { Write-Host "$failures failure(s)"; exit 1 }
