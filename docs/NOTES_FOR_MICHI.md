@@ -2739,3 +2739,70 @@ failed step stops the job, and that the release step's `if:` has no `always()`.
   the tag, or re-run if the failure was a flaky one.
 - **Each PR now runs the tests in three jobs** (`ci.yml` on push and on pull request, `installer.yml`),
   and the installer build takes a few minutes longer.
+
+# Automatic retries for slowing failures, and the third soak, 2026-11-02
+
+On `feature/slowing-retry`; PR open, not merged, no tag. Claude sent nothing to the keyboard and ran no
+stack script. `tiga-fresh-test\logs` was only read, last at 21:50. The block timeout is unchanged.
+
+## The third soak, on the new build
+
+It began at 21:30:28 and **delivered 23 of 24**. Upload 24, from 21:35:47, was **a real slowdown from
+block 2 for 61.03 s to block 37**: 35 of its 37 blocks over 1 s, median 1500 ms, at -63 dBm. It halted at
+21:36:50 and you cleared it at 21:39:45.
+
+**Where slowdowns begin varies: blocks 2, 5, 5, 5 and 6.** That corrects what I wrote in the design note
+and §7.1, that every real slowdown began at block 5 or later. 21:01 also stalled after 6 blocks, which
+ends "at least 7". `SLOWING_MIN_BLOCKS` stays at 5. A slowdown that stalls before block 5 is labelled
+sudden, so it waits 120 s rather than 300 s.
+
+## The change
+
+A slowing code 20 now gets automatic retries with no power-off: 300 s, sharing the 3 retries per incident
+with sudden failures, which still wait 120 s. Each wait follows the failure just seen. Code 21,
+unclassified failures and running out of retries still halt. A delivered frame resets the count. It lives
+in `tiga_supervisor_common.ps1`, so it needs no uploader rebuild; the one change in `failure.rs` is a
+comment. Status, the supervisor log lines, tests (retry checks 177 → 203), `docs/design/RETRY_RECOVERY.md`,
+`docs/BUILD_AND_RECOVERY.md`, the README and `CHANGELOG.md` are updated.
+
+Changes you didn't list:
+
+- `tools/upload_soak.ps1`: its delivery timeout goes from 480 s to 1320 s. Otherwise a soak would report
+  "not delivered" while a slowing retry was still waiting.
+- The README's "every such failure has recovered" went too. 17:41 and 20:59 both ended in a halt.
+- The internal names changed from `SuddenRetries` to `AutoRetries`, because the count is now shared.
+
+## What the logs say about it
+
+Table of all 12 slowing halts: §7.1, fourteenth part, and the PR. **They don't contradict the change,
+apart from one case at a shorter wait, but they don't show that it works.**
+
+- **Only 2 slowing halts are known to have had no reset:** 2 min 41 s, then 42 completed (10-22), and 1 min
+  47 s, then a slowdown again at the same block (10-15).
+- **No halt is known to have recovered after about 300 s without a reset.** All 7 that lasted that long
+  have an unknown battery state. You'd know some of these: tell me and I'll fill them in.
+- Twice a retry about 2 minutes after a sudden failure turned slowing.
+
+If it goes wrong, the cost is up to 3 more slow uploads, then the same halt as before. Up to about 15
+minutes with no display update. The logs can't show the LCD, so watch it in the first days.
+
+## Not run on hardware
+
+The new policy has only run offline, against dummy uploaders. It starts when the live install is pulled
+and the stack restarted. Nothing in the logs tells a retry that worked from a reset you did, so note any
+battery disconnect from here on: that is what would answer the unknowns.
+
+## Counts
+
+To 21:50: whole day, 167 uploads, 20 failed. Since the 21:29 rebuild, 30 uploads, 3 failed. After the 21:39
+clear, 2 uploads completed, then 2 sudden failures, then retry 2 of 3 worked at 21:48:07.
+
+## Open for Michi
+
+- **Your checklist's count restarts when this is pulled,** because it changes the scripts. The 21:29
+  rebuild started one count, and it stands at 30 uploads and 3 failed. A failure is counted the same
+  under either policy, so you may prefer to keep it running. That's your call; I didn't change the rule.
+- **The setup file for the installed run** must now include this PR as well. The checklist still names
+  PR #41.
+- **Retry 3 of 3 and halts:** a slowing failure that uses all 3 retries still ends in a halt, and
+  that one needs you.

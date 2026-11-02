@@ -89,9 +89,10 @@ impl Failed {
 //
 // A stall before block 5 is sudden whatever its pace: too few blocks to call sustained.
 // Healthy uploads often start slowly (block 1 up to 1540 ms on 2026-11-02, and the slowest
-// block is among blocks 1-4 in 195 of 213 uploads), while every logged real slowdown began
-// at block 5 or later. Before this rule, one block of 987 ms was a "slowing" halt
-// (2026-11-02 18:33). The replay of every logged failure is in PROJECT_HISTORY §7.1.
+// block is among blocks 1-4 in 195 of 213 uploads). Real slowdowns begin at varying blocks
+// (2, 5, 5, 5, 6 so far), and the fewest ACKed before one stalled is 6. Before this rule, one
+// block of 987 ms was a "slowing" halt (2026-11-02 18:33). The replay of every logged failure
+// is in PROJECT_HISTORY §7.1. Both kinds now get automatic retries; the label sets the wait.
 //
 // Anything that isn't clearly sudden is reported as `unclassified`, and the supervisor
 // halts on it exactly as it did before the retry: a link failure or write error rather

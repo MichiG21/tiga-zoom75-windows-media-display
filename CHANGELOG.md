@@ -4,11 +4,16 @@
 
 ### Uploads and recovery
 
-- **An upload that stalls before block 5 now counts as sudden, whatever its pace,** so it gets the
-  automatic retry instead of an immediate halt. One or two blocks can't show a sustained slowdown:
-  healthy uploads often start slowly, and two halts on 2026-11-02 rested on a single block of about
-  990 ms. From block 5 on, the rule is unchanged, and a real slowdown still halts. If an upload
-  stalls early on a keyboard that really is slow, it now gets up to 3 retries first (PR #41).
+- **A slowing failure now gets automatic retries too,** with no power-off: 300 s apart, sharing the 3
+  retries per incident with sudden failures, which still wait 120 s. It used to halt at once and wait
+  for a person. Running out of retries, code 21 and unclassified failures still halt, and a delivered
+  frame still resets the count. Whether a retry clears a real slowdown without a reset isn't proven
+  yet (`docs/design/RETRY_RECOVERY.md`). The display doesn't update during the waits, up to about 15
+  minutes in all.
+- **An upload that stalls before block 5 now counts as sudden, whatever its pace.** One or two blocks
+  can't show a sustained slowdown: healthy uploads often start slowly, and two halts on 2026-11-02
+  rested on a single block of about 990 ms. It waits 120 s, where a slowing failure waits 300 s
+  (PR #41).
 
 ## v0.3.0-beta.1 (2026-11-02)
 
