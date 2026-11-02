@@ -2501,8 +2501,9 @@ installer already staged. No file renamed; each script keeps its paths and proce
 Michi ran #36–#38 on the live install from 17:20. Claude read `tiga-fresh-test\logs`, recorded
 it in PROJECT_HISTORY §7.1 (eleventh part) and added a section to the release checklist. Claude
 sent nothing to the keyboard and ran no stack script or anything else that starts or stops the
-stack. The live checkout, its logs and the task were only read. The logs were read at 17:37; the
-last entry is 17:34:29.
+stack. The live checkout, its logs and the task were only read. The logs were first read at 17:37; three
+more failures followed, so this section was updated from a re-read at 17:52 (last entry 17:52:14).
+The stack was still running, so later uploads aren't counted.
 
 ## What the logs show from 17:20
 
@@ -2513,8 +2514,17 @@ last entry is 17:34:29.
   first line came 26 s after its start (every other run today: within 1 s), it found nothing in
   a 15 s scan (code 10), and the restart 8 s later connected at once. It was the new exe's first run;
   cause not known.
-- **8 uploads, 6 complete (8.68–10.56 s), 2 sudden failures,** both recovered by automatic retry
-  1 of 3 without a power-off (17:21:41 → 17:24:00, 17:32:08 → 17:34:29).
+- **13 uploads, 8 complete (8.68–10.56 s), 5 failed: 4 sudden, 1 slowing.**
+  - 17:21:41 sudden → retry 1 OK, 17:24:00.
+  - 17:32:08 sudden → retry 1 OK, 17:34:29.
+  - 17:41:51 sudden → retry 1 at 17:44:03 **turned slowing** after 31.03 s, last ACKed block 21 →
+    **halted** at 17:44:36.
+  - `Halt cleared` at 17:49:53. 17:49:57 sudden → retry 1 OK, 17:52:14.
+- **The 17:44 retry:** blocks 1–4 normal (about 770 ms in all), then block 5 2288 ms, 6 1732, 7 1792,
+  8 2183, 9 1478, 10 2152, 11 about 973, 12 1447, 13 about 857, 14 1733, 15 1920, 16 1102, 17 2115, 18
+  1283, 19 1305, 20 1454, 21 1545, then no PROGRESS for block 22 in 2500 ms. The control ACKs were
+  normal (18 and 73 ms). The uploads either side of it had medians of 158 and 157 ms until they
+  stopped.
 - **Clean stop:** 17:27:29, `exited on request after 0,3 s`, `Disconnected cleanly`, code 0, with
   the new `STOP_STACK.ps1`. No upload was in progress.
 - **Real media:** a browser video, `Arrival at Kraghammer | Critical Role: VOX MACHINA | Episode
@@ -2526,32 +2536,52 @@ last entry is 17:34:29.
   keyboard (no such player is known)". I left the text alone.
 
 **Not in the logs:** `START_STACK.ps1` and `STATUS_STACK.ps1`; what the LCD and Display Control
-showed; whether the battery was disconnected before 17:08:43 or 17:20.
+showed; whether the battery was disconnected before 17:08:43, 17:20 or 17:49:53. I left the later
+videos' titles out of the record, since this repo is public.
 
-## 7 of 35 uploads failed that day
+## 10 of 40 uploads failed that day
 
-Recounted from the live install's `ble.log`: **35 uploads, 28 complete, 7 failed**, your count. The
-retest's 5 uploads on the installed builds are in another log and not counted.
+Recounted from the live install's `ble.log`: **40 uploads, 30 complete, 10 failed.** Your 7 of 35 was
+right at 17:37; three more failed after it. The retest's 5 uploads on the installed builds are in
+another log and not counted.
 
-- **Old and new code alike:** 5 of 27 before 17:20, 2 of 8 after. 2 of 8 is too few to compare rates.
-  The 5 on old code rule out the refactors as the cause of this failure rate.
-- **No pattern in the gap since the previous upload:** before failures 0, 5, 146, 258, 261, 340 and
-  415 s. Up to 5 s: 2 of 4 failed; 6–60 s: 0 of 4; 61–300 s: 3 of 20; over 300 s: 2 of 7. The
-  first band is only 4 uploads.
+- **Old and new code: too few uploads to compare, and the new code isn't ruled out.** 5 of 27 on old
+  code, 5 of 13 on new. The new code's rate is higher, but a split this uneven would arise by chance
+  about one time in four (Fisher's exact test, p = 0.25), and that assumes independent uploads. The
+  refactors are not shown to be harmless, and not shown to be the cause.
+- **Withdrawn from the 17:37 version of this PR:**
+  - "The 5 on old code rule out the refactors": they don't.
+  - "No slowing failure has happened on new code yet": 17:44:03 is one.
+  - "All 9 sudden incidents recovered": the 17:41 one ended in a halt.
+  - "Old and new code alike": the counts don't support saying so.
+  - "Nothing in these logs separates a failing upload from a healthy one before it fails": a slowing
+    failure shows in its block times as it happens.
+- **No pattern in the gap since the previous upload:** before failures 0, 5, 14, 126, 146, 258, 261,
+  323, 340 and 415 s. Up to 5 s: 2 of 4 failed; 6–60 s: 1 of 5; 61–300 s: 4 of 22; over 300 s: 3 of
+  9. The first two bands are small.
 - **No known cause.**
-- 5 sudden, all recovered by retry 1; 2 slowing, both halted. The 17:14 halt rested on one ACKed
-  block of 993 ms, the same small-sample issue as in the earlier section.
-- First upload of a run: 1 of 9 failed. Later: 6 of 26, again well above the release text's "about
+- 7 sudden incidents: 6 recovered on retry 1, 1 ended in a halt. 3 slowing, all halted. The 17:14 halt
+  rested on one ACKed block of 993 ms, the same small-sample issue as in the earlier section; 17:44
+  did not, with 15 of its 21 blocks over 1 s.
+- First upload of a run: 3 of 12 failed. Later: 7 of 28, again well above the release text's "about
   1 in 30".
 
-Totals on the live install from 2026-10-22 on: 9 recoveries, 2 failed retries, 5 slowing halts.
+Totals on the live install from 2026-10-22 on: 10 recoveries, 3 failed retries, 6 slowing halts; of 11
+sudden incidents, 10 recovered and 1 ended in a halt. Retries without a power-off, all sources: 15 of
+20. This also supersedes "All 7 sudden incidents … recovered" in the clean-up section above; §7.1's
+tenth part now points to the 17:41 incident.
 
-## Not run yet
+## Two things before the next tag
+
+Both are at the top of `docs/RELEASE_CHECKLIST.md`.
+
+**Several days of live logs on `b1fc213` must be compared with the earlier failure rates.** The
+checklist has the table to compare against. Nobody has set a threshold for "clearly worse"; that
+call is yours when the numbers are in.
 
 **The installed version of these refactors has not been run, and it must be, with a new setup file,
 before the next tag.** The frozen renderer with its new modules and the packaged scripts have
-only been built and checked offline; the install folder doesn't exist on this PC right now. Steps
-are at the top of `docs/RELEASE_CHECKLIST.md`.
+only been built and checked offline; the install folder doesn't exist on this PC right now.
 
 - **Where to get the setup file:** the `vpr-<N>` artifact of a PR opened after `b1fc213`, this
   docs PR included. `main` gets none, and "Run workflow" uploads to the release its tag names, so
@@ -2561,8 +2591,9 @@ are at the top of `docs/RELEASE_CHECKLIST.md`.
 
 ## Open for Michi
 
-- **The installed run above**, before any tag.
+- **Both requirements above**, before any tag.
 - **Your call, for the next release text:** the "about 1 in 30", and whether to move the 15-second
   rule out of "Not yet verified".
-- **Still not on hardware from #38:** a halt cleared by the new `START_STACK.ps1`, if the 17:20 clear
-  wasn't that. The logs can't tell which script removed it.
+- **Probably done, not proven, from #38:** a halt cleared by the new `START_STACK.ps1`. At 17:49:53
+  the checkout was new and both the halt file and the session marker were gone, which fits that
+  script, but the log doesn't name it. You'd know if you ran it.

@@ -1395,8 +1395,8 @@ one: the 3 includes 22:24 on 2026-10-22 and the 6 leaves out 21:25 that evening.
 
 **What this shows:**
 
-- **Every sudden incident recovered without a halt: 7 of 7.** Two needed a second retry; none
-  needed the third.
+- **Every sudden incident up to this read recovered without a halt: 7 of 7.** Two needed a second
+  retry; none needed the third. That no longer holds: see 17:41 in the eleventh part.
 - **The automatic retry, all sources:** the seventh part's 2 of 2, then these 8 retries (6 OK)
   and the packaged one at 09:52 on 2026-10-25. Retries without a power-off in the seventh
   part's tally go from 5 of 7 to **12 of 16**; after a sudden failure from 4 of 5 to
@@ -1426,8 +1426,8 @@ one: the 3 includes 22:24 on 2026-10-22 and the 6 leaves out 21:25 that evening.
 
 #### Eleventh part: 2026-11-02, the merged refactors on the live install, and that day's failures
 
-Source: `tiga-fresh-test\logs` and its files, read at 17:37 (last entry 17:34:29). Times are
-local (UTC+1); upload times are converted from `ble.log`'s UTC. `#36`–`#38` were merged by 17:19,
+Source: `tiga-fresh-test\logs` and its files, read again at 17:52 (last entry 17:52:14). The stack
+was still running, so later uploads aren't in these counts. Times are local (UTC+1); upload times are converted from `ble.log`'s UTC. `#36`–`#38` were merged by 17:19,
 ending at `b1fc213`.
 
 **Which code ran.** The live checkout is clean at `b1fc213` and its files are stamped 17:20. The
@@ -1452,9 +1452,39 @@ exe is stamped 17:20 and has the size of the split build, 1303552 bytes (`main` 
 | 17:31:52 | **Display Control:** `CONTROL -> automatic mode re-armed`, frame completes in 10.56 s. The ack file names `auto …-23428-2` and frame `f0004`; 23428 is the running `tiga_display_control.exe`, the build of 2026-10-15, which these refactors didn't touch |
 | 17:32:08 | `FRESH PLAYBACK (steady playback)`. Upload: **sudden failure**, last ACKed block 21, after 7.35 s |
 | 17:34:17 | Automatic retry 1 of 3. 17:34:28 completes in 8.77 s. 17:34:29 `SUCCEEDED`. No power-off |
+| 17:41:27 | Another browser video, `NEW WINDOWS MEDIA`: completes in 10.33 s |
+| 17:41:51 | Next upload: **sudden failure**, last ACKed block 19, after 6.37 s, `median=158ms`. From 17:41:53 to 17:42:10 the renderer writes 5 more frames as the browser changes media; only the newest is uploaded next |
+| 17:43:59 | Automatic retry 1 of 3. 17:44:03 upload starts |
+| 17:44:34 | **Slowing failure**, last ACKed block 21, after 31.03 s (per-block times below) |
+| 17:44:36 | `Automatic retry 1 of 3 FAILED (code 20, signature slowing)`, then `BLE uploader HALTED`. **The first sudden incident on the live install to end in a halt, and the first retry to turn slowing** |
+| 17:49:22 | Idle standby frame, written while the uploader is halted |
+| 17:49:53 | `Halt cleared`; the running supervisor starts the uploader again |
+| 17:49:57 | First upload: **sudden failure**, last ACKed block 8, after 4.23 s |
+| 17:52:02 | Automatic retry 1 of 3. 17:52:03 upload starts, completes in 9.05 s. 17:52:14 `SUCCEEDED` |
 
-So on new code: 2 starts, 8 uploads, 6 complete (8.68–10.56 s), 2 sudden failures, 2 automatic
-retries that both recovered, 1 clean stop, and nothing in `renderer_error.log`.
+So on new code: 2 supervisor starts, 13 uploads, 8 complete (8.68–10.56 s), 5 failed (4 sudden, 1
+slowing), 4 automatic retries (3 recovered, 1 failed and halted), 1 halt, 1 clean stop, and nothing
+in `renderer_error.log`.
+
+**The 17:44 retry, block by block.** `SLOW` lines give each block over 1000 ms; the rest come from
+the `elapsed` values, so they are derived and rounded.
+
+| Block | ms | Block | ms | Block | ms |
+|---|---|---|---|---|---|
+| 1–4 | about 770 in all | 10 | 2152 | 16 | 1102 |
+| 5 | 2288 | 11 | about 973 | 17 | 2115 |
+| 6 | 1732 | 12 | 1447 | 18 | 1283 |
+| 7 | 1792 | 13 | about 857 | 19 | 1305 |
+| 8 | 2183 | 14 | 1733 | 20 | 1454 |
+| 9 | 1478 | 15 | 1920 | 21 | 1545 |
+
+Block 22 got no PROGRESS within 2500 ms. `TIMING`: `blocks_acked=21 median=1454ms p90=2152ms
+max=2288ms slowest=block 5 control1_ack=18ms control2_ack=73ms`. The control ACKs were normal, and
+so were blocks 1–4; then `WARNING first upload is slow (block 5 at 3.06 s; healthy 0.7–0.85 s)`, and
+15 of the next 17 blocks were over 1 s. The keyboard's 28-byte status message kept coming: once at
+17:44:05, then 14 repeats from 17:44:07 to 17:44:33. Nothing else arrived. The retry began 126 s after the
+sudden failure before it, as the policy says. The uploads either side of it were healthy until they
+stopped: 17:41:51 `median=158ms`, 17:49:57 `median=157ms`.
 
 **The 15-second rule fired for the first time.** The `steady playback` line at 17:32:08 is the
 only one in `renderer.log`. It came 16 s after the re-arm, so this browser session reported Playing
@@ -1465,14 +1495,18 @@ changed.
 **What the logs don't show:**
 
 - `START_STACK.ps1` and `STATUS_STACK.ps1`. They leave no line of their own, so nothing here says
-  which script removed the halt before 17:20:48, or whether it was the new one.
+  which script removed the halt before 17:20:48, or whether it was the new one. At 17:49:53 the
+  checkout was already new, and both the halt file and the session marker were gone (the uploader
+  refuses to start with a marker). That fits the new `START_STACK.ps1`, the only script that
+  removes both, but the log doesn't name it.
 - What the LCD and Display Control's window showed.
-- Whether the battery was disconnected before 17:08:43 or 17:20, so neither start is in the
-  no-power-off tally below.
+- Whether the battery was disconnected before 17:08:43, 17:20 or 17:49:53, so none of those starts
+  is in the no-power-off tally below.
 
-**7 of 35 uploads failed that day.** Recounted from `ble.log`: 35 `UPLOAD START` lines on
-2026-11-02, 28 `UPLOAD COMPLETE`, 7 `UPLOAD FAILED`. This is the live install only; the retest's
+**10 of 40 uploads failed that day.** Recounted from `ble.log`: 40 `UPLOAD START` lines on
+2026-11-02, 30 `UPLOAD COMPLETE`, 10 `UPLOAD FAILED`. This is the live install only; the retest's
 logged uploads on the installed builds (3 on v0.2, 2 on the new build, all complete) are separate.
+A read at 17:37 gave 7 of 35; three failures came after it.
 
 | Upload started | Code | Signature | Last ACKed | Gap since previous upload | Nth of its run | Outcome |
 |---|---|---|---|---|---|---|
@@ -1483,25 +1517,36 @@ logged uploads on the installed builds (3 on v0.2, 2 on the new build, all compl
 | 17:14:42 | old | slowing | 1 | 258 s | 4th | **halted**, gone by 17:20:48 |
 | 17:21:41 | new | sudden | 4 | 415 s, across a restart | 1st | retry 1 OK |
 | 17:32:08 | new | sudden | 21 | 5 s | 5th | retry 1 OK |
+| 17:41:51 | new | sudden | 19 | 14 s | 3rd | retry 1 failed, slowing (next row) |
+| 17:44:03 | new | slowing | 21 | 126 s | 1st, the retry | **halted**, cleared 17:49:53 |
+| 17:49:57 | new | sudden | 8 | 323 s | 1st | retry 1 OK |
 
-- **Old and new code alike:** 5 of 27 on old code, 2 of 8 on new. 2 of 8 is too few to compare
-  rates, but the failures don't start with the refactors: 5 came before them. Both failures on new
-  code are sudden, as 3 of the 5 on old code were. No slowing failure has happened on new code yet.
+- **Old and new code: too few uploads to compare, and the new code isn't ruled out.** 5 of 27 failed
+  on old code that day, 5 of 13 on new. The new code's rate is higher, but 13 uploads can't settle it:
+  a split this uneven would arise by chance about one time in four (Fisher's exact test, p = 0.25),
+  and that test assumes independent uploads, which these may not be. The refactors are not shown
+  to be harmless, and not shown to be the cause. What can be said: uploads failed in both ways on both,
+  and 5 failures came before the refactors. By upload: first of a run, 0 of 5 on old and 3 of 7 on
+  new; later, 5 of 22 on old and 2 of 6 on new. The pin test covers what `upload_stream` writes, not how
+  the keyboard answers. Several days of live logs on `b1fc213` are needed; the release checklist requires
+  that comparison before the next tag.
 - **No pattern in the gap since the previous upload.** By gap, failed of all uploads: up to 5 s, 2
-  of 4; 6–60 s, 0 of 4; 61–300 s, 3 of 20; over 300 s, 2 of 7. Failures sit among successes at
-  both ends, and the first band is only 4 uploads. The 28 completed uploads had gaps from 1 s up.
-- **No known cause.** Nothing in these logs separates a failing upload from a healthy one before
-  it fails.
-- First upload of a run: 1 of 9 failed. Later uploads: 6 of 26. The day's later-upload rate is
-  again well above "about 1 in 30" (tenth part), and its first-upload rate below "about 1 in 3".
-  One day, and 5 of the 9 runs were automatic retries.
+  of 4; 6–60 s, 1 of 5; 61–300 s, 4 of 22; over 300 s, 3 of 9. Failures sit among successes at
+  both ends, and the first two bands are small. The 30 completed uploads had gaps from 1 s up.
+- **No known cause.** A slowing failure shows in its block times as it happens; a sudden one shows
+  nothing before it stops. Nothing in these logs says why either begins.
+- **7 sudden, 3 slowing.** Of the 7 sudden incidents, 6 recovered on retry 1 and 1 ended in a halt.
+- First upload of a run: 3 of 12 failed. Later uploads: 7 of 28. The day's later-upload rate is
+  again well above "about 1 in 30" (tenth part). One day, and 7 of the 12 runs were automatic
+  retries.
 - **The 17:14 halt rested on one ACKed block of 993 ms,** under the 1000 ms `SLOW` line and halted
-  only because the median was over 500 ms. Same issue as in the tenth part. Policy unchanged.
+  only because the median was over 500 ms. Same issue as in the tenth part. The 17:44 halt is
+  not that case: 21 blocks, 15 of them over 1 s. Policy unchanged.
 
-**Totals on the live install from 2026-10-22 on, updating the tenth part:** 9 recoveries, 2 failed
-retries, 11 retries started, 5 slowing halts, and no halt after 3 retries: all 9 sudden incidents
-recovered. Retries without a power-off, all sources: **14 of 18**; after a sudden failure **13 of 16**.
-Slowing failures: **now 9**.
+**Totals on the live install from 2026-10-22 on, updating the tenth part:** 10 recoveries, 3 failed
+retries, 13 retries started, 6 slowing halts. **Of 11 sudden incidents, 10 recovered and 1 ended in a
+halt** (17:41, whose retry turned slowing); none used all 3 retries. Retries without a power-off, all
+sources: **15 of 20**; after a sudden failure **14 of 18**. Slowing failures: **now 10**.
 
 **The installed version of these refactors has not been run, and it must be, with a new setup file,
 before the next tag.** All of the above is the development install, on Python and a locally built

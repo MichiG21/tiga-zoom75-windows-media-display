@@ -10,12 +10,37 @@ Work top to bottom. **If a step marked STOP fails, don't continue** — go to Ro
 
 ---
 
-## Before the next tag: run the installed refactors
+## Before the next tag: live logs on `b1fc213`, and the installed refactors
 
-**Not done yet, and required.** The refactors #36–#38 (`b1fc213`) have run only from the
+**Two requirements, neither done yet. STOP: no tag until both have passed.**
+
+### Several days of live logs on `b1fc213`
+
+On 2026-11-02 the new code failed 5 of 13 uploads and the old code 5 of 27. That is too few uploads
+to compare, and the new code isn't ruled out (PROJECT_HISTORY §7.1, eleventh part).
+
+- [ ] Let the live install run the refactored code for several days of normal use. A docs-only
+      pull doesn't matter; if the uploader, renderer or scripts change, the count starts again.
+- [ ] Count the uploads from `tiga-fresh-test\logs`, from 17:20 on 2026-11-02: first upload of a run,
+      later uploads, sudden and slowing failures, retry outcomes, halts.
+- [ ] Compare them with the earlier rates, and record the result in §7.1:
+
+      | Period | Code | First upload of a run | Later uploads |
+      |---|---|---|---|
+      | up to 2026-10-18 (`docs/investigations/`) | old | 9 of 24 | 3 of 91 |
+      | 2026-10-22 21:23 to 2026-11-02 15:52 (§7.1, tenth part) | old | 6 of 19 | 7 of 78 |
+      | 2026-11-02, all old-code uploads | old | 0 of 5 | 5 of 22 |
+      | 2026-11-02, 17:20 to 17:52 | new | 3 of 7 | 2 of 6 |
+
+      The last two rows are the same day, and the third overlaps the second. If the new code is
+      clearly worse, don't tag: find out why first.
+
+### The installed refactors
+
+**Not run yet.** The refactors #36–#38 (`b1fc213`) have run only from the
 development install (`tiga-fresh-test`, 2026-11-02, PROJECT_HISTORY §7.1, eleventh part). The
 installed version never has: the frozen renderer with its new modules, and the packaged
-supervisor and Start/Stop/Status scripts. **STOP: no tag until every step below has passed.**
+supervisor and Start/Stop/Status scripts. Every step below must pass.
 
 - [ ] **Get a new setup file**, built from a commit that includes `b1fc213`: the
       `TIGA-Windows-Media-Display-Setup-vpr-<N>` artifact of a PR opened after it. `main` gets
