@@ -2393,3 +2393,105 @@ was not pulled.
 - Phase 7: tag, paste `docs/RELEASE_TEXT_v0.3.0-beta.1.md`. The CHANGELOG says 2026-11-02;
   if the tag goes out on a later day, change the date first.
 - Phase 8's last pass, with the file from the release page.
+
+# Clean-up after v0.3.0-beta.1, 2026-11-02 (PRs #35–#38)
+
+Four PRs off `origin/main` at `601d325`, none merged, no tag. No behaviour change is intended
+in any of them. Claude sent nothing to the keyboard and ran no START/STOP_STACK, supervisor or
+task-changing command. `tiga-fresh-test` was only read (`logs\`) and is still at `07e7de8`.
+`tiga_ble_re_tools` and `reference/` weren't touched.
+
+| PR | Branch | What |
+|---|---|---|
+| #35 | `docs/history-phase8-and-retries` | PROJECT_HISTORY §7.1, eighth to tenth parts; this section |
+| #36 | `refactor/uploader-modules` | Pin test, then the uploader split into modules |
+| #37 | `refactor/renderer-modules` | Renderer split into modules; a start check in `installer.yml` |
+| #38 | `refactor/powershell-dedup` | Shared PowerShell moved into `tiga_supervisor_common.ps1` |
+
+**These notes are only on #35.** Four branches appending to the end of this file would conflict
+at every merge, so this section covers all four. Merging #35 first keeps the record in step.
+
+All four merged together in a scratch worktree: no conflict, and Python 73, Rust 57, PowerShell
+logging 19 and retry 177 all pass.
+
+## Corrections and differences from what you expected
+
+- **The retry count isn't 6 and 3 in one window.** Recounted from
+  `tiga-fresh-test\logs`: from 2026-10-22 on, **7 recoveries and 3 slowing halts**; after that
+  day, **6 and 2**. Your 3 includes the 22:24 halt on 10-22, and your 6 leaves out the 21:25
+  recovery the same evening. §7.1 has both columns and a table of all 10 failures. The packaged
+  runs are extra: one recovery and one slowing halt on 2026-10-25.
+- **My earlier note was wrong about the leftover `.frame`.** The 2026-11-02 section above says
+  one was probably there at setup log #005. It wasn't: #002 logs `Creating directory` at 15:06,
+  so the folder was new, and v0.2 never writes that file. **So `[InstallDelete]` has not been
+  tested on hardware.** `UPLOAD HELD` proved the hold, not the deletion. The first real test is
+  an upgrade from v0.3.0-beta.1 to a later version.
+
+## New observations (recorded, nothing changed)
+
+- **Later uploads failed more often than the release text says:** 7 of 78 in these logs, about
+  1 in 11, against "about 1 in 30". First uploads were 6 of 19, which fits "about 1 in 3". One
+  of the 7 is a code 10 that never opened a transfer, and three came within 25 minutes today.
+- **With two ACKed blocks the signature turns on a few milliseconds:** 10-25 11:04 had
+  `median=502ms` (slowing, halted, and it stayed halted until today); 11-02 15:25 had
+  `median=492ms` (sudden, retried, recovered). The 500 ms rule wasn't made for so few blocks.
+- All 7 sudden incidents on the live install recovered, none needing a third retry. Retries
+  without a power-off now stand at 12 of 16.
+
+## #36: the uploader
+
+`src/bin/tiga_stream_watch_flow.rs` became the directory `src/bin/tiga_stream_watch_flow/`, with
+the same `--bin` name and exe. A directory is needed because Cargo builds every file directly in
+`src/bin/` as its own binary. Modules: `protocol`, `stream`, `notifications`, `timing`,
+`sidecars`, `failure`, `device`, `upload`, `logging`, `main`.
+
+- **Pin test first, on the unsplit file.** `upload_stream` got a small `GattWriter` trait, the
+  only production change, so the real function runs against a fake keyboard. The expected values
+  come from outside the code: `57e8e0cf` and the writes per block from hardware logs, the
+  sequence CRC `14af2a9f` from a separate Python calculation. It fails when a CONTROL2 byte is
+  changed and when the bulk writes are reversed; both were tried.
+- **Identical:** code lines moved by script; only imports, `mod` lines, module doc comments and
+  the `log!` macro's path to `utc_now` differ. All 180 strings and 303 numbers match. The 54
+  existing tests are the same text one indent less. 17 dry runs match the old exe on output,
+  exit code and sidecar files.
+- No dead code (no build warnings), and no comment stale enough to change.
+
+## #37: the renderer
+
+`tiga_windows_nowplaying_v2.py` keeps its name, flags and log formats, and imports
+`tiga_render_text`, `tiga_render_freshness`, `tiga_render_stream` and `tiga_render_loop`.
+
+- **Paths, flags and the frame counter stay in the main file and are passed down.** `__main__`
+  sets `DLX_FRAMES` and friends on that module, so `--dlx-frames` would have silently stopped
+  working otherwise, and `HERE` must come from that file for the frozen build.
+- **Test files unchanged.** Old and new side by side: 51 comparisons of pixels, stream bytes,
+  sidecars and two whole scripted `main()` logs, all the same.
+- **PyInstaller, the `installer.yml` command in a scratch folder:** all modules are in the
+  archive, `--help` works, and the frozen exe runs against a scratch template with `_internal`
+  as its folder, as in the real install. That was Python 3.14; CI uses 3.12.
+- **New CI step:** `installer.yml` starts the packaged exe with `--help`, because a module
+  PyInstaller left out only shows when the program starts.
+- Removed: a duplicate print block, a stale "~7.7 s" comment, a redundant `except`.
+
+## #38: PowerShell
+
+`STATUS_STACK`'s body, `START_STACK`'s halt notice, `STOP_STACK`'s process helpers and the
+supervisors' stream setup, mutex and clean-up moved into `tiga_supervisor_common.ps1`, which the
+installer already staged. No file renamed; each script keeps its paths and process pattern.
+
+- `STATUS_STACK`, old and new: 18 of 18 outputs match, in both layouts.
+- One existing test line changed: the `STATUS_STACK` test copies the common file too. 39 new
+  checks; the supervisor test uses its own mutex, never the live one.
+- PowerShell tests were read before running. They use dummy children, stop only the processes
+  they started, by PID, and read the task's state without starting or stopping it.
+
+## Open for Michi
+
+- **Nothing here has run on the keyboard.** After merging: pull into `tiga-fresh-test`, run
+  `BUILD_AND_INSTALL.ps1` for the rebuilt uploader, then `START_STACK`, a track change,
+  `STATUS_STACK` and `STOP_STACK`. Then the same with an installer built after the merges.
+- **#38 carries the most risk.** Its scripts couldn't be run here, because the supervisors and
+  START/STOP are off limits. Its shared functions are tested; a mistake in a script itself shows
+  up at the next real start.
+- **Your call:** whether to change "about 1 in 30" in the release text and whether the signature
+  rule should treat very few blocks differently. I changed neither.
