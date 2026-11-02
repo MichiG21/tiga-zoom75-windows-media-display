@@ -36,7 +36,7 @@ The evidence (`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`, PR #24):
 - Under that rate, one retry clears about 6 halts in 10, three about 95 %.
 
 The rule still holds for everything else. **Slowing** failures (sustained slow blocks
-before the stall; the back-to-back pair at block 11 on 2026-10-15 is the one hint of a
+before the stall, over at least 5 ACKed blocks; the back-to-back pair at block 11 on 2026-10-15 is the one hint of a
 state that persists), failures the uploader can't classify, **21**, and a session marker
 without this run's exit record (a killed or crashed uploader) halt at once. (On
 2026-10-22 22:24 a slowing failure halted as designed, and a plain START_STACK without a
@@ -62,14 +62,32 @@ The same information goes to `extracted\session_01_bulk_stream.bin.exit`.
 For code 20 the uploader also logs `SIGNATURE sudden|slowing|unclassified frame=…` and
 writes `signature=` to the exit record:
 
-- **sudden:** the keyboard stopped sending PROGRESS (a block timeout), and the pace was
-  normal: block median ≤ 500 ms and at most one block over 1000 ms. One slow block just
-  before the stall still counts (2026-10-18 14:09: block 6 took 1860 ms, then nothing;
-  a plain retry 2.5 minutes later worked).
-- **slowing:** median over 500 ms, or two or more blocks over 1000 ms (2026-10-15 22:44
-  and 22:46, 2026-10-16 18:49, 2026-10-22 22:24).
+- **sudden:** the keyboard stopped sending PROGRESS (a block timeout), and either fewer than
+  **5 blocks** were ACKed, whatever their pace, or the pace was normal: block median ≤ 500 ms
+  and at most one block over 1000 ms. One slow block just before the stall still counts
+  (2026-10-18 14:09: block 6 took 1860 ms, then nothing; a plain retry 2.5 minutes later
+  worked).
+- **slowing:** at least 5 blocks ACKed, and median over 500 ms or two or more blocks over 1000
+  ms (2026-10-15 22:44 and 22:46, 2026-10-16 18:49, 2026-10-22 22:24, 2026-10-25 10:36,
+  2026-11-02 17:44).
 - **unclassified:** not a block timeout (link lost, write error, CONTROL2 ACK missing),
   no block ACKed at all, or the marker of an earlier run.
+
+**Why 5 blocks (2026-11-02).** One or two blocks can't show a sustained pace, because uploads
+often start slowly: in 213 completed uploads the slowest block was among blocks 1–4 in 195,
+block 1 reached 1540 ms and block 2 1403 ms, and at least 10 of them would have read as slowing
+had they stalled after block 2. The halts at 17:14 and 18:33 on 2026-11-02 rested on one block
+of 993 and 987 ms. Every real slowdown in the logs began at block 5 or later and ACKed at least
+7 blocks. Replaying all 27 logged PROGRESS timeouts that have timing data (PROJECT_HISTORY §7.1,
+twelfth part) gives the same result for any minimum from 3 to 7: 4 halts become retries, and every
+real slowdown still halts. So the logs don't pin the number down exactly. 3 and 4 would still judge
+mostly slow-start blocks, and 7 leaves no margin below the smallest real slowdowns; block 5 is
+also where the uploader's first-upload warning already looks.
+
+**What this gives up.** A real slowdown that stalls before block 5 now gets the automatic retries
+without a power-off (up to 3, 120 s apart) instead of an immediate halt. None is known for certain:
+2026-11-02 16:36, with a 1865 ms first block, is the nearest case, and the next upload there,
+after a manual clear, completed. If a retry goes on to show a sustained slowdown, it halts as before (2026-11-02 17:44).
 
 ### Block timeout
 

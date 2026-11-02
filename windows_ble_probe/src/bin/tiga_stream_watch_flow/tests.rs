@@ -395,6 +395,55 @@ fn stall_signatures_from_the_record() {
 }
 
 #[test]
+fn a_stall_on_a_short_sample_is_sudden_whatever_its_pace() {
+    // Halted as "slowing" before the minimum existed; all from ble.log.
+    assert_eq!(stall_signature(&[993.0], true), Signature::Sudden, "2026-11-02 17:14");
+    assert_eq!(stall_signature(&[987.0], true), Signature::Sudden, "2026-11-02 18:33");
+    assert_eq!(stall_signature(&[1865.0, 173.0], true), Signature::Sudden, "2026-11-02 16:36");
+    assert_eq!(stall_signature(&[778.0, 226.0], true), Signature::Sudden, "2026-10-25 11:04");
+    // Healthy uploads start this slowly (2026-11-02 18:18 and 18:33): had they stalled here.
+    assert_eq!(stall_signature(&[1540.0], true), Signature::Sudden);
+    assert_eq!(stall_signature(&[420.0, 1403.0], true), Signature::Sudden);
+    // The rule is about the sample, not the pace: 4 very slow blocks are still too few.
+    assert_eq!(stall_signature(&[2000.0; 4], true), Signature::Sudden);
+}
+
+#[test]
+fn the_pace_is_judged_from_the_fifth_block() {
+    assert_eq!(SLOWING_MIN_BLOCKS, 5);
+    assert_eq!(stall_signature(&[2000.0; 5], true), Signature::Slowing, "median");
+    // Two blocks over 1 s among five, with a healthy median.
+    assert_eq!(stall_signature(&[150.0, 160.0, 170.0, 1100.0, 1200.0], true), Signature::Slowing);
+    assert_eq!(stall_signature(&[150.0, 160.0, 170.0, 180.0, 1200.0], true), Signature::Sudden);
+}
+
+#[test]
+fn real_slowdowns_from_the_log_still_halt() {
+    // 2026-11-02 17:44: 21 blocks, median 1454 ms. Blocks 1-4 took about 770 ms in all; 11 and
+    // 13 are worked out from the elapsed values.
+    let b = [
+        190.0, 190.0, 195.0, 195.0, 2288.0, 1732.0, 1792.0, 2183.0, 1478.0, 2152.0, 973.0, 1447.0, 857.0, 1733.0, 1920.0,
+        1102.0, 2115.0, 1283.0, 1305.0, 1454.0, 1545.0,
+    ];
+    assert_eq!(median_p90(&b).unwrap().0, 1454.0);
+    assert_eq!(stall_signature(&b, true), Signature::Slowing);
+    // 2026-10-22 22:24: 7 blocks, median 645 ms, blocks 5-7 over 1 s.
+    assert_eq!(stall_signature(&[150.0, 160.0, 170.0, 645.0, 1845.0, 2355.0, 1470.0], true), Signature::Slowing);
+    // 2026-10-25 10:36: 7 blocks, median 150 ms, blocks 6 and 7 over 1 s.
+    assert_eq!(stall_signature(&[150.0, 150.0, 150.0, 150.0, 150.0, 1612.0, 1568.0], true), Signature::Slowing);
+}
+
+#[test]
+fn the_minimum_changes_nothing_else() {
+    // No block ACKed, or not a PROGRESS timeout: still unclassified, so still a halt.
+    assert_eq!(stall_signature(&[], true), Signature::Unclassified);
+    assert_eq!(stall_signature(&[993.0], false), Signature::Unclassified);
+    assert_eq!(stall_signature(&[2000.0; 21], false), Signature::Unclassified);
+    // Short and healthy was sudden before and is sudden now.
+    assert_eq!(stall_signature(&[150.0, 160.0], true), Signature::Sudden);
+}
+
+#[test]
 fn control2_is_the_boundary() {
     // Anything before CONTROL2 is retryable, however far it got.
     assert_eq!(classify_upload_failure(false, false), Failure::Unreachable);
