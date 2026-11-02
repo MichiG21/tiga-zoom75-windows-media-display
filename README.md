@@ -82,6 +82,7 @@ The project has been tested on one Windows PC and one Zoom75 TIGA, and the curre
 - Each update takes 8–10 seconds to reach the keyboard, and there is no live progress bar. Both are limits of the keyboard's upload protocol.
 - **Uploads are occasionally interrupted, cause unknown.** It happens most often on the first upload after the display software starts (about 1 in 3 in testing, against about 1 in 30 for later uploads). Most of these recover by themselves within a few minutes. The rest need a keyboard reset, which means opening the case and disconnecting the battery, because the TIGA has no power switch. See [BLE upload was interrupted](#ble-upload-was-interrupted-uploader-halted).
 - **Bluetooth must be on**, even with the keyboard plugged in over USB-C. When it's off, the log only says "The device is not ready for use". Turn it on and the display is picked up again within 5 minutes.
+- A Bluetooth adapter behind the PC case can cause interrupted uploads. Keep it in the open, near the keyboard.
 - After a restart the keyboard can be invisible for 20–70 seconds. The uploader keeps trying and finds it.
 - Norton CyberCapture may hold or sandbox the programs the first time they run, for a minute or so. "Access is denied" lines during that time are harmless.
 - Uninstalling leaves the logs and a few runtime files in `%LOCALAPPDATA%\Programs\TIGA Windows Media Display`. Delete the folder by hand afterwards.

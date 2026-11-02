@@ -1555,6 +1555,132 @@ scripts have only been built and checked offline. The v0.3.0-beta.1 setup file i
 and no install folder exists on this PC right now. The steps are at the top of
 `docs/RELEASE_CHECKLIST.md`.
 
+#### Twelfth part: 2026-11-02, the Bluetooth adapter, and the short-sample signature
+
+Source: `tiga-fresh-test\logs` (`ble.log`, `upload_soak.log`, `startup_supervisor.log`), read at
+19:31 (last upload 19:30). Times are local.
+
+**What Michi reported:** at about 18:20 he found the Bluetooth adapter lying right behind the PC
+case, instead of centred under the monitor, and put it back. The logs can't say when it got there.
+
+**What the logs show.** Signal at each connection, from the `CANDIDATE` lines:
+
+| Period | Readings (dBm) |
+|---|---|
+| 2026-10-15 to 2026-10-25 | -55 to -71, with -79 and -81 once each (36 readings) |
+| 2026-11-02, up to 18:19 | -72 to -96 |
+| 2026-11-02, 18:21:12 and 19:19:30 | -56, -57 |
+
+| 2026-11-02, live install | Uploads | Failed |
+|---|---:|---:|
+| Before the move (15:20–18:19) | 44 | 11 |
+| After the move (18:21–19:30) | 49 | 1 |
+| Whole day | 93 | 12 |
+
+- **`tools/upload_soak.ps1` delivered 30 of 30** from 19:22 to 19:29, each in 10.2–11.2 s.
+- **That was its second run after the move.** The first, from 18:30, delivered 11 and then halted at
+  upload 12, at 18:33:19, at -56 dBm. That halt rested on one block of 987 ms; see below. It was
+  cleared at 19:19:30, and the logs can't show whether the battery was disconnected.
+
+**What this does and doesn't show:**
+
+- The move came with a clear change: 11 of 44 failed before it, 1 of 49 after. The one failure
+  after it would not have been a halt under the new rule, though it would still have been a failure.
+  An hour later, three more failed in a row on the same good signal: see the thirteenth part.
+- **30 of 30 is strong against the day's earlier rate, not against the older one.** Later uploads
+  before the move failed 8 of 32, about 1 in 4, and 30 in a row at that rate would be about 1 chance
+  in 5600. At the "about 1 in 30" of the release text, 30 in a row happens about 1 time in 3.
+- **The soak doesn't cover first uploads.** All 30 ran on one connection, back to back.
+- **A weak signal isn't the whole cause.** Failures on 2026-10-15 to 2026-10-25 came at -55 to -71
+  dBm, and first uploads failed about 1 in 3 then.
+- **The old-vs-new comparison in the eleventh part is confounded.** All 27 old-code uploads that day
+  and the first 17 new-code ones ran on the weak signal (5 of 27 and 6 of 17 failed). New code on
+  the good signal: 1 of 49. Same-signal old code hasn't been measured since the move.
+
+**Corrections to what the eleventh part's read could see:** the day ended at 12 of 93, not 10 of 40.
+Live-install totals from 2026-10-22 on, with the labels as logged: 11 recoveries, 3 failed retries,
+14 retries started, 7 slowing halts. Retries without a power-off, all sources: 16 of 21; after a
+sudden failure 15 of 19.
+
+**The short-sample signature.** Four of those halts rested on one or two ACKed blocks. Healthy
+uploads often start that slowly. Replaying the rule on every failure in `ble.log`, the old rule
+matches every logged `SIGNATURE` line. With a minimum of 5 blocks, 4 of the 27 PROGRESS timeouts
+with timing data change, all from slowing to sudden:
+
+| Failure | Blocks ACKed | Median | Next upload |
+|---|---:|---:|---|
+| 2026-10-25 11:04 | 2 | 502 ms | complete, 8 days later |
+| 2026-11-02 16:36 | 2 | 1019 ms (block 1: 1865 ms) | complete, 33 min later |
+| 2026-11-02 17:14 | 1 | 993 ms | failed sudden, 7 min later; the retry after it completed |
+| 2026-11-02 18:33 | 1 | 987 ms | complete, 46 min later |
+
+Those next uploads came after a manual clear, and whether the battery was disconnected isn't
+logged, so this doesn't prove a retry at 120 s would have worked. **Slowing failures, on the new
+rule: 7**, all with at least 7 ACKed blocks (2026-10-15 22:44 and 22:46, 2026-10-16 18:49,
+2026-10-22 22:24, the packaged 2026-10-25 09:44, 10:36, and 2026-11-02 17:44). The full table,
+and why 5, are in the PR that made the change and in `docs/design/RETRY_RECOVERY.md`.
+
+The new rule has not run on the keyboard: a short-sample stall can't be induced, and it takes
+effect on the live install only once it is merged and the uploader is rebuilt.
+
+#### Thirteenth part: 2026-11-02, three sudden failures in a row on a good signal, 20:26–20:33
+
+Source: `tiga-fresh-test\logs`, read at 20:37 (last upload 20:36:08, complete). Times are local. The
+live install was at `7f0f2cb`, so this is the refactored code, before PR #41's signature change, which
+wouldn't have changed any of these labels.
+
+| Upload started | Signal at connect (dBm) | What | Last ACKed | Median | Outcome |
+|---|---:|---|---:|---:|---|
+| 20:26:45 | -57 (read at 19:19) | later upload, the 63rd of its run | 10 | 173 ms | sudden, 5.69 s; `retry 1 of 3 at 20:28:51` |
+| 20:28:54 | -57 | retry 1 | 4 | 172 ms | sudden, 4.13 s; `retry 2 of 3 at 20:31:00` |
+| 20:31:04 | -56 | retry 2, a newer frame | 4 | 179 ms | sudden, 4.05 s; `retry 3 of 3 at 20:33:08` |
+| 20:33:14 | -57 | retry 3, a newer frame | all 53 | 150 ms | **complete in 8.74 s; 20:33:23 `Automatic retry 3 of 3 SUCCEEDED`** |
+
+No halt, and no line showing any action in between. It was **the first time on the live install that
+all 3 retries were used**: one more failure would have halted. The control ACKs were normal, and each
+failure stopped with no `SLOW` line and nothing new from the keyboard, only its usual 28-byte
+status message. The next 3 uploads completed too.
+
+**Uploads and failures since the second soak began (19:22:48):**
+
+| Period | Uploads | Failed | First of a run | Later |
+|---|---:|---:|---:|---:|
+| Soak window, 19:22:48–19:29:59 | 32 | 0 | - | 0 of 32 |
+| 19:30 to the cluster | 28 | 0 | - | 0 of 28 |
+| The cluster | 3 | 3 | 2 of 2 | 1 of 1 |
+| 20:33 to 20:36 | 4 | 0 | 0 of 1 | 0 of 3 |
+| **Since the second soak began** | **67** | **3** | **2 of 3** | **1 of 64** |
+
+Since the adapter move: 83 uploads, 4 failed, all at -56 or -57. The whole day: 127 uploads, 15 failed.
+
+**A good signal didn't remove the failures.** It came with fewer of them, 4 of 83 against 11 of 44
+before the move, but those 4 include a halt and a run of three at the best readings of the day. So
+the adapter was at least part of that day's failure rate, and the failures have another cause too.
+
+**This cluster questions the finding that failures are independent** (sixth part,
+`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`: sudden failures "behave like independent draws").
+After 62 completed uploads in a row, three failed within five minutes and then four completed. That
+looks more like a bad period lasting minutes than like separate draws. It doesn't overturn the
+finding, for three reasons:
+
+- **The second and third fit the old rate.** Both were first uploads of a run, and at about 1 in 3 two
+  in a row happen about 1 time in 9. Only the first was a later upload, which rarely fails.
+- **The check behind the finding still doesn't separate them.** Over all of `ble.log`, first uploads
+  failed 13 of 36 after a failure and 5 of 22 after a completed upload (Fisher's exact test, p = 0.38).
+  That leans toward dependence, but not far enough to say so.
+- **That check can't see a bad period at all.** It compares first uploads by what came just before; it
+  doesn't test whether failures bunch up in time. So independence was never tested against this.
+
+It isn't the first run of three in the log: 2026-10-15 21:39 (no signal logged) and 17:41–17:49 the same
+day (-73 to -79) were too, and 2026-10-23 had two runs of two (-64 to -71). This one is the first on a
+good signal. A short bad period would also matter for the retry design: 120 s apart, three retries may all
+land inside it, and "three retries clear about 95%" in `docs/design/RETRY_RECOVERY.md` assumes
+independence. Nothing has changed because of this. It does make failures in a row worth counting.
+
+**Totals on the live install from 2026-10-22 on, updating the twelfth part:** 12 recoveries, 5 failed
+retries, 17 retries started, 7 slowing halts as logged. Of 13 sudden incidents, 12 recovered and 1 ended
+in a halt. Retries without a power-off, all sources: **17 of 24**; after a sudden failure **16 of 22**.
+
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
 Two separate fixes, easy to conflate:

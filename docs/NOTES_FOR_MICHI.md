@@ -2612,3 +2612,92 @@ after finding the Bluetooth adapter out of place (signal -72 to -96 all day, the
   not run against the keyboard yet.
 - The screens are mostly flat colour, but every upload is the same size (53 blocks), so the transfer
   is the same length. Artwork isn't exercised. Back-to-back uploads also aren't quite normal use.
+
+# The Bluetooth adapter and the short-sample signature, 2026-11-02
+
+Claude changed the uploader's stall signature and recorded the adapter finding, on
+`fix/short-sample-signature`. Merged as PR #41 at your request once its checks passed; no tag. Claude
+sent nothing to the keyboard and ran no stack script. `tiga-fresh-test\logs` was only read, at 19:31,
+19:36 and 20:37. The live install doesn't have this change until it is pulled and rebuilt.
+
+## The adapter
+
+At about 18:20 you found the Bluetooth adapter lying right behind the PC case instead of centred
+under the monitor, and moved it. The logs agree on the signal: -72 to -96 dBm on 2026-11-02 before
+that, -56 and -57 after. Before 2026-11-02 it was mostly -55 to -71, so it probably got there
+between 10-25 and 11-02, but the logs can't say.
+
+**11 of 44 uploads failed before the move, 1 of 49 after** (93 uploads, 12 failed, to 19:30).
+
+**30 of 30 was the second soak after the move, not the first.** The first ran from 18:30, delivered 11
+and halted at upload 12, at 18:33 on -56 dBm, on one block of 987 ms. You cleared that at 19:19, and
+then came the 30 of 30. Both are in §7.1 (twelfth part).
+
+Limits of the 30 of 30: all on one connection, back to back, so no first uploads. It is very unlikely
+at the day's earlier rate (8 of 32 later uploads, about 1 chance in 5600) but happens about 1 time in 3
+at the release text's "about 1 in 30". Failures in October came at -55 to -71 dBm, so signal isn't
+the whole cause. The README line says "can cause", and "Uploads are occasionally interrupted, cause
+unknown" stays beside it.
+
+## The signature
+
+**A stall before block 5 now counts as sudden, whatever its pace** (`SLOWING_MIN_BLOCKS = 5` in
+`failure.rs`). That one rule is the only code change. It decides only the label, so writes, timeouts
+and exit codes are untouched: the pin test passes unchanged, and no ACKed block at all is still
+`unclassified`. Rust tests: 57 + 4 new = 61.
+
+- **Replay of all 33 failures in `ble.log`** (table in the PR): 27 have timing data and a PROGRESS
+  timeout. The old rule matches every logged `SIGNATURE` line. 4 change, all to sudden: 10-25 11:04, 11-02
+  16:36, 17:14 and 18:33. The real slowdowns keep halting, including 17:44 (21 blocks, median 1454 ms).
+- **Why 5:** any minimum from 3 to 7 gives the same result on those failures, so they don't pin it
+  down, and I chose it. In 213 healthy uploads the slowest block is among blocks 1–4 in 195; every real
+  slowdown began at block 5 or later and ACKed at least 7. 5 is where the sample first reaches past the
+  usual slow start, with margin below 7. It's a judgement, not a measurement.
+- **Correction to the brief:** 1403 ms was block 2 (18:33:08). The largest healthy first block that day
+  was 1540 ms (18:18:42). Both are in the design note.
+- **What it gives up:** a real slowdown that stalls before block 5 now gets up to 3 retries instead of an
+  immediate halt. The nearest case is 16:36, with a 1865 ms first block. Whether a retry at 120 s would
+  have worked in the 4 changed cases isn't shown: their next uploads came after a manual clear, and
+  the 17:14 one still failed once.
+- **Not run on the keyboard.** A short-sample stall can't be induced. It reaches the live install only
+  after a merge, a pull and a rebuild.
+
+## Three in a row on a good signal, 20:26–20:33
+
+**Three sudden failures in a row** at -56 and -57 dBm, from 20:26:45 to 20:31:08, last ACKed blocks 10,
+4 and 4. Automatic retry 3 of 3 then succeeded, at 20:33:23 (8.74 s). No halt, but it was the first time
+all 3 retries were used on the live install, and one more failure would have halted.
+
+**Recount since the second soak began (19:22:48), to 20:36:** 67 uploads, 3 failed. The 32 in the soak
+window and the next 28 all completed, then those three, then 4 completed. Since the adapter move: 83
+uploads, 4 failed. Whole day: 127 uploads, 15 failed.
+
+**A good signal didn't remove the failures.** It came with fewer: 4 of 83 against 11 of 44. But the
+adapter can't be the whole cause, and "can cause" in the README is as far as it goes.
+
+**This cluster questions the finding that failures are independent.** 62 completed in a row, then three
+failures in five minutes, looks like a bad period of some minutes. It doesn't overturn the finding:
+
+- two of the three were first uploads, and at about 1 in 3 two in a row happen about 1 time in 9;
+- over all of `ble.log`, first uploads failed 13 of 36 after a failure and 5 of 22 after a completed
+  upload (p = 0.38), which leans toward dependence but doesn't show it;
+- that check never tested for bunching in time, so it couldn't have seen a bad period.
+
+If bad periods are real, 120 s apart may be too short for three retries to clear one. The "about 95%" in
+`docs/design/RETRY_RECOVERY.md` assumes independence. I changed neither; the checklist now asks for
+failures in a row to be counted, so several days of logs can answer it.
+
+## Done in this PR
+
+- **Release checklist:** count failures, not halts, from the rebuild with PR #41, with the adapter in
+  place. Its table now has signal readings and a row for the adapter-moved period.
+- **One change you didn't ask for:** its installed run now asks for a setup file that includes PR #41,
+  so `vpr-39`, named as good enough in the section above, no longer is.
+- **`CHANGELOG.md`:** an "Unreleased" section with the behaviour change.
+
+## Open for Michi
+
+- **Pull and rebuild** on the live install to start the count, and note the time.
+- **The two checklist requirements** before any tag.
+- **Your call, for the next release text:** the "about 1 in 30", and whether to move the 15-second rule
+  out of "Not yet verified".

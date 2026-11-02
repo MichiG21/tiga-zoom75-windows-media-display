@@ -87,6 +87,12 @@ impl Failed {
 //   slowing - sustained slowness before the stall: blocks at ~1.2-2.5 s each
 //             (2026-10-15 22:44 and 22:46, 2026-10-16 18:49).
 //
+// A stall before block 5 is sudden whatever its pace: too few blocks to call sustained.
+// Healthy uploads often start slowly (block 1 up to 1540 ms on 2026-11-02, and the slowest
+// block is among blocks 1-4 in 195 of 213 uploads), while every logged real slowdown began
+// at block 5 or later. Before this rule, one block of 987 ms was a "slowing" halt
+// (2026-11-02 18:33). The replay of every logged failure is in PROJECT_HISTORY §7.1.
+//
 // Anything that isn't clearly sudden is reported as `unclassified`, and the supervisor
 // halts on it exactly as it did before the retry: a link failure or write error rather
 // than a PROGRESS timeout, or no ACKed block at all, so there is no pace to judge.
@@ -113,10 +119,15 @@ impl Signature {
 pub(crate) const SLOWING_MEDIAN_MS: f64 = 500.0;
 /// Two or more blocks over SLOW_BLOCK_MS also mean sustained slowness; one does not.
 pub(crate) const SLOWING_SLOW_BLOCKS: usize = 2;
+/// With fewer ACKed blocks than this, the pace isn't judged: the stall counts as sudden.
+pub(crate) const SLOWING_MIN_BLOCKS: usize = 5;
 
 pub(crate) fn stall_signature(block_ms: &[f64], progress_timeout: bool) -> Signature {
     if !progress_timeout || block_ms.is_empty() {
         return Signature::Unclassified;
+    }
+    if block_ms.len() < SLOWING_MIN_BLOCKS {
+        return Signature::Sudden;
     }
     let (median, _) = median_p90(block_ms).unwrap_or((0.0, 0.0));
     let slow_blocks = block_ms.iter().filter(|&&v| v > SLOW_BLOCK_MS).count();
