@@ -2597,3 +2597,18 @@ only been built and checked offline; the install folder doesn't exist on this PC
 - **Probably done, not proven, from #38:** a halt cleared by the new `START_STACK.ps1`. At 17:49:53
   the checkout was new and both the halt file and the session marker were gone, which fits that
   script, but the log doesn't name it. You'd know if you ran it.
+
+# Upload soak script, 2026-11-02
+
+Added `tools/upload_soak.ps1`, so the failure rate can be measured without waiting for media to
+change. Michi asked for it because he was watching a long video, which causes few uploads, right
+after finding the Bluetooth adapter out of place (signal -72 to -96 all day, then -56).
+
+- It alternates the standby and black screens through the command file, as Display Control does.
+  Each one is a normal upload, so the retry and halt rules apply. It doesn't open Bluetooth or start
+  or stop the stack. It stops at a halt, and asks for automatic mode again at the end.
+- Without `-ConfirmUploads` it sends nothing. Results go to `logs\upload_soak.log`.
+- **Tested offline only,** against a fake install (`tests/test_upload_soak.ps1`, also in CI). It has
+  not run against the keyboard yet.
+- The screens are mostly flat colour, but every upload is the same size (53 blocks), so the transfer
+  is the same length. Artwork isn't exercised. Back-to-back uploads also aren't quite normal use.
