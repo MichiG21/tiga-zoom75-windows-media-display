@@ -1,6 +1,6 @@
-﻿# Helpers shared by the development supervisor (tiga_startup_supervisor.ps1 at the
-# repository root) and the packaged one (installer/runtime). Dot-source it after
-# setting $SupervisorLog:
+﻿# Helpers shared by the development scripts (repository root) and the packaged ones
+# (installer/runtime). The scripts themselves hold what differs: paths, process patterns
+# and how to start each child. Dot-source it after setting $SupervisorLog, if logging:
 #
 #   . (Join-Path $PSScriptRoot "tiga_supervisor_common.ps1")
 #
@@ -646,4 +646,216 @@ function Stop-PendingSuddenRetry {
     $n = [int]$state.retry
     Write-RetryState -HaltFile $HaltFile -Status "cancelled" -Retry $n -Event "retry $n of $BleSuddenRetryMax cancelled by STOP_STACK.ps1 (was $($state.status))"
     return "STOP_STACK: automatic retry $n of $BleSuddenRetryMax was $($state.status); cancelled. START_STACK.ps1 starts the uploader afresh (it clears the session marker)."
+}
+
+function Clear-UploaderHaltWithNotice {
+    # START_STACK.ps1 (dev and packaged): says what the halt was, clears it and asks that the
+    # battery really has been disconnected.
+    param([string]$HaltFile, [string]$StreamPath)
+    if (Test-Path -LiteralPath $HaltFile) {
+        try {
+            $halt = Get-Content -Raw -LiteralPath $HaltFile | ConvertFrom-Json
+            Write-Host "The BLE uploader was halted at $($halt.halted_at): $($halt.reason)"
+        } catch {}
+    }
+    $cleared = Clear-UploaderHalt -HaltFile $HaltFile -StreamPath $StreamPath
+    if ($cleared) {
+        Write-Host "Cleared the halt, assuming the keyboard's battery has been disconnected and reconnected:"
+        $cleared | ForEach-Object { Write-Host "  removed $_" }
+        Write-Host "If it was NOT, run STOP_STACK.ps1 now. Then:"
+        Write-Host $PowerCycleInstruction
+    }
+}
+
+# ---- STATUS_STACK.ps1 ----------------------------------------------------------------
+
+function Get-StackProcesses {
+    # Every process whose command line matches. The pattern differs by layout.
+    param([string]$Pattern)
+    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match $Pattern }
+}
+
+function ConvertTo-LocalTime {
+    param([string]$Text)
+    try { return ([DateTimeOffset]::Parse($Text)).LocalDateTime } catch { return $null }
+}
+
+function Show-StackStatus {
+    # The body of STATUS_STACK.ps1 (dev and packaged). Only reads.
+    param([string]$TaskName, [string]$Stream, [string]$Logs, [string]$ProcessPattern)
+
+    Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Select-Object TaskName,State
+    Write-Host ""
+    Get-StackProcesses $ProcessPattern | Select-Object ProcessId,Name,CommandLine
+
+    # ---- Delivery (issue #9): a live process is not proof the keyboard is being updated ----
+
+    $rendered  = Read-KeyValueFile "$Stream.frame"
+    $delivered = Read-KeyValueFile "$Stream.delivered"
+
+    Write-Host "Delivery"
+    Write-Host "--------"
+    if ($rendered) {
+        Write-Host ("Last rendered : {0}  {1:yyyy-MM-dd HH:mm:ss}  ({2})" -f $rendered.frame_id, (ConvertTo-LocalTime $rendered.rendered_at), $rendered.reason)
+    } else {
+        Write-Host "Last rendered : none recorded"
+    }
+    if ($delivered) {
+        Write-Host ("Last delivered: {0}  {1:yyyy-MM-dd HH:mm:ss}  in {2}s" -f $delivered.frame_id, (ConvertTo-LocalTime $delivered.delivered_at), $delivered.elapsed_s)
+    } else {
+        Write-Host "Last delivered: none recorded"
+    }
+
+    $verdict = "UNKNOWN - nothing rendered yet"
+    if ($rendered) {
+        $renderedAt = ConvertTo-LocalTime $rendered.rendered_at
+        $age = if ($renderedAt) { [int]((Get-Date) - $renderedAt).TotalSeconds } else { 0 }
+        if ($delivered -and ($delivered.crc32 -eq $rendered.crc32)) {
+            $verdict = "OK - the keyboard shows the newest rendered frame"
+        } elseif ($age -gt 60) {
+            $verdict = "STALLED - newest frame rendered ${age}s ago and not delivered"
+        } else {
+            $verdict = "PENDING - newest frame rendered ${age}s ago; upload should be in progress"
+        }
+    }
+
+    # Halted uploader (issue #4): this outranks every other state.
+    $haltFile = Join-Path $Logs "uploader_halted.json"
+    $halt = $null
+    if (Test-Path -LiteralPath $haltFile) {
+        try { $halt = Get-Content -Raw -LiteralPath $haltFile | ConvertFrom-Json } catch { $halt = $null }
+        if ($null -eq $halt) { $halt = [pscustomobject]@{ reason = "halt file unreadable: $haltFile" } }
+        $verdict = "HALTED - BLE uploader stopped and will NOT retry by itself: $($halt.reason)"
+    }
+
+    # Automatic retry after a sudden failure (docs/design/RETRY_RECOVERY.md). The supervisor
+    # keeps logs\uploader_retry.json up to date; a waiting or running retry outranks the
+    # open session marker that goes with it.
+    $retryFile = Join-Path $Logs "uploader_retry.json"
+    $retry = $null
+    if (Test-Path -LiteralPath $retryFile) {
+        try { $retry = Get-Content -Raw -LiteralPath $retryFile | ConvertFrom-Json } catch { $retry = $null }
+    }
+    # A waiting or running state older than 10 minutes is left over from a stopped stack.
+    $retrying = (-not $halt) -and $retry -and ($retry.status -eq "waiting" -or $retry.status -eq "running") -and
+        ((ConvertTo-LocalTime $retry.updated_at) -gt (Get-Date).AddMinutes(-10))
+    if ($retrying) {
+        if ($retry.status -eq "waiting") {
+            $at = ConvertTo-LocalTime $retry.next_attempt_at
+            $verdict = "RETRYING - sudden upload failure; automatic retry $($retry.retry) of $($retry.max_retries) at {0:HH:mm:ss} (no power-off needed yet)" -f $at
+        } else {
+            $verdict = "RETRYING - automatic retry $($retry.retry) of $($retry.max_retries) after a sudden upload failure is in progress"
+        }
+    } elseif ((-not $halt) -and (Test-Path -LiteralPath "$Stream.session")) {
+        $session = Read-KeyValueFile "$Stream.session"
+        $verdict += " (media session open: frame $($session.frame_id), block $($session.last_acked_block)/$($session.total_blocks))"
+    }
+
+    if ($halt) {
+        Write-Host ""
+        Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+    }
+    Write-Host "Status        : $verdict" -ForegroundColor $(if ($halt) { "Red" } else { "Gray" })
+    if ($halt) {
+        Write-Host ("Halted at     : {0}  (exit code {1}: {2})" -f $halt.halted_at, $halt.exit_code, $halt.meaning)
+        if ($halt.frame_id) {
+            $blocks = if ($null -ne $halt.last_acked_block) { "; last ACKed block $($halt.last_acked_block)$(if ($halt.total_blocks) { "/$($halt.total_blocks)" })" } else { "" }
+            Write-Host "Frame         : $($halt.frame_id)$blocks"
+        }
+        if ($halt.detail) { Write-Host "Detail        : $($halt.detail)" }
+        if ($halt.signature) { Write-Host "Signature     : $($halt.signature)" }
+        if ($halt.auto_retries) { Write-Host "Auto-retries  : $($halt.auto_retries) automatic retr$(if ($halt.auto_retries -eq 1) { 'y' } else { 'ies' }) used before halting" }
+        Write-Host "Action        : $($halt.instruction)" -ForegroundColor Yellow
+        Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+    }
+
+    if ($retry) {
+        $color = if ($retrying) { "Yellow" } else { "DarkGray" }
+        Write-Host ("Auto-retry    : {0}, retry {1} of {2}; last failure: {3}" -f $retry.status, $retry.retry, $retry.max_retries, $retry.last_failure) -ForegroundColor $color
+        foreach ($e in @($retry.events) | Select-Object -Last 4) { Write-Host "                $e" -ForegroundColor $color }
+    }
+
+    $lastFailure = Get-ChildItem -Path $Logs -Filter "ble.log*" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime |
+        Select-String -Pattern "UPLOAD FAILED" -ErrorAction SilentlyContinue |
+        Select-Object -Last 1
+    if ($lastFailure) {
+        # The log keeps history, so this can be days old. Say so when a delivery since
+        # then shows it has been recovered from.
+        $failedAt = ConvertTo-LocalTime (($lastFailure.Line -split " ", 2)[0])
+        $deliveredAt = if ($delivered) { ConvertTo-LocalTime $delivered.delivered_at } else { $null }
+        if ($failedAt -and $deliveredAt -and ($deliveredAt -gt $failedAt)) {
+            Write-Host ("Past failure  : {0:yyyy-MM-dd HH:mm:ss} (historical; uploads have succeeded since)" -f $failedAt) -ForegroundColor DarkGray
+            Write-Host "                $($lastFailure.Line)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "Last failure  : $($lastFailure.Line)"
+        }
+    }
+}
+
+function Get-UploaderProcessIds {
+    Get-CimInstance Win32_Process -Filter "Name = 'tiga_stream_watch_flow.exe'" | ForEach-Object { $_.ProcessId }
+}
+
+function Stop-ProcessesMatching {
+    # STOP_STACK.ps1's last resort. The tests never call it: it kills by command line.
+    param([string]$Pattern)
+    Get-StackProcesses $Pattern | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---- The body of both supervisors ------------------------------------------------------
+
+function Initialize-StackStream {
+    # The active stream is runtime output: recreate it from the template if it is missing.
+    # Then every file the stack needs must exist.
+    param([string]$Stream, [string]$Template, [string[]]$Required)
+    if ((-not (Test-Path $Stream)) -and (Test-Path $Template)) {
+        Copy-Item -LiteralPath $Template -Destination $Stream
+        Write-SupervisorLog "Seeded $Stream from $Template."
+    }
+    foreach ($file in $Required) {
+        if (-not (Test-Path $file)) {
+            Write-SupervisorLog "Required file missing: $file"
+            throw "Required file missing: $file"
+        }
+    }
+}
+
+function Invoke-StackSupervisor {
+    # One supervisor at a time; runs the loop, and on the way out stops its children. Runs
+    # until stopped. The tests pass their own $MutexName, $PollSeconds and $MaxIterations.
+    param(
+        [string]$LaunchMessage,
+        [scriptblock]$StartRenderer,
+        [scriptblock]$StartUploader,
+        [string]$HaltFile,
+        [string]$StreamPath,
+        [string]$MutexName = "Global\TigaWindowsMediaDisplay",
+        [double]$PollSeconds = 2,
+        [int]$MaxIterations = 0
+    )
+    $createdNew = $false
+    $mutex = New-Object System.Threading.Mutex($true, $MutexName, [ref]$createdNew)
+    if (-not $createdNew) {
+        Write-SupervisorLog "Another supervisor instance is already running; exiting."
+        $mutex.Dispose()
+        return
+    }
+
+    $state = New-SupervisorState
+    try {
+        Write-SupervisorLog $LaunchMessage
+        Invoke-SupervisorLoop -State $state -StartRenderer $StartRenderer -StartUploader $StartUploader `
+            -HaltFile $HaltFile -StreamPath $StreamPath -PollSeconds $PollSeconds -MaxIterations $MaxIterations
+    }
+    finally {
+        Write-SupervisorLog "Supervisor stopping; cleaning up children."
+        foreach ($proc in @($state.Renderer, $state.Uploader)) {
+            try { Stop-LoggedProcess $proc } catch {}
+        }
+        try { $mutex.ReleaseMutex() } catch {}
+        $mutex.Dispose()
+    }
 }
