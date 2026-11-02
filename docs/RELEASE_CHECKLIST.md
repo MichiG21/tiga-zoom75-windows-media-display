@@ -243,8 +243,8 @@ the notes — write down exactly what you saw.
 
 Only once the phases above are clean.
 
-- [ ] `CHANGELOG.md` has a `v0.3.0-beta.1` section (done in the release PR); change
-      "(not yet tagged)" to the release date
+- [x] `CHANGELOG.md` has a `v0.3.0-beta.1` section, dated 2026-11-02. If the tag goes out
+      on a later day, change the date to that day first.
 - [ ] Tag and push:
 
 ```
@@ -253,9 +253,7 @@ git push origin v0.3.0-beta.1
 ```
 
 - [ ] Wait for the installer workflow to build
-- [ ] Paste Part 2 of `docs/RELEASE_NOTES_v0.3.0-beta.1.md` as the release text, after
-      deleting its last *(Before publishing)* note, under "Installing", once the Phase 8
-      retest has passed (the other one got the 2026-10-25 result)
+- [ ] Paste `docs/RELEASE_TEXT_v0.3.0-beta.1.md` as the release text
 - [ ] Mark the release as **latest** (not pre-release) if you want people to get it by default
 - [ ] Issues: nothing to close; #4–#10, #14 and #15 were all closed by 2026-10-18
 
@@ -296,24 +294,30 @@ the test:
   before copying (`[InstallDelete]`), so after a reinstall or upgrade the uploader holds
   the template until the renderer's first frame, as on a first install.
 
-Checks (results of the 2026-10-25 run with build `vpr-32` at `4d06fdf`):
+Checks (results of the 2026-10-25 run with build `vpr-32` at `4d06fdf`, and of the
+2026-11-02 run with `vpr-32` at `b0c207b`, installer CI run 40182232342):
 
-- [ ] Install v0.2.0-beta.1, then this release **over** it while v0.2 is running; note any
+- [x] Install v0.2.0-beta.1, then this release **over** it while v0.2 is running; note any
       "file in use" message.
       **2026-10-25: failed** with "DeleteFile failed; code 5. Access is denied" on
       `app\_internal\tiga_stream_watch_flow.exe`; worked after v0.2's *Stop Display*.
-      Fixed in `e0add1b`. **Retest with a build that has the fix**; steps in
-      `docs/NOTES_FOR_MICHI.md`, "Phase 8 on hardware, 2026-10-25".
+      Fixed in `e0add1b`. **2026-11-02: OK** (setup log #005): `STOP_STACK.ps1 exit code:
+      0`, `waited 0 ms`, all before `Starting the installation process`; no DeleteFile
+      error. Earlier that day the old build (setup log #003) failed the same way, on
+      `app\tiga_windows_nowplaying.exe`.
 - [x] An upload completes (`ble.log`: `UPLOAD COMPLETE`); *Status* shows `OK` and a "Last
       delivered" frame. **2026-10-25: OK** (8.6–10.7 s). The first upload was the
       red/green template (`frame=unknown(no-sidecar)`, 64 s) while the renderer took 36 s
-      to its first frame; fixed in `319b426`, to be seen in the retest.
+      to its first frame; fixed in `319b426`. **2026-11-02: OK**: `UPLOAD HELD` on the
+      template (crc32 `57e8e0cf`), `RENDERER sidecar appeared after 3.2s`, no red/green
+      flash; first upload 9.08 s, *Status* `OK`.
 - [x] A Japanese title displays as glyphs, not boxes (`renderer.log`: `FONT fallbacks: …`).
       **2026-10-25: OK** (`トーキョーレギー`; no `FONT no font has` line).
-- [ ] It works without you touching PowerShell (Start menu shortcuts only).
+- [x] It works without you touching PowerShell (Start menu shortcuts only).
       **2026-10-25: the *Start Display*, *Stop Display* and *Status* windows closed at
-      once**, so their output couldn't be read. Fixed in `7d086bc` (`-NoExit`); check in
-      the retest.
+      once**, so their output couldn't be read. Fixed in `7d086bc` (`-NoExit`).
+      **2026-11-02: OK**: the *Status* window stays open and shows `OK`. The other two
+      shortcuts have the same fix.
 - [x] The packaged clean stop: **2026-10-25: OK** (*Stop Display* at 09:41:21, uploader
       exited on request after 0.3 s, `Disconnected cleanly`).
 - [x] The packaged automatic retry (not a planned check): **2026-10-25, first time on the
@@ -327,7 +331,7 @@ Also seen: v0.2.0-beta.1 crash-loops on Japanese titles (bug G, fixed in this re
 its renderer exited 16 times in four minutes, and v0.2 completed 14 uploads meanwhile.
 
 Step-by-step for this release: `docs/NOTES_FOR_MICHI.md`, "Phase 8 test steps for
-v0.3.0-beta.1"; for the retest, "Phase 8 on hardware, 2026-10-25".
+v0.3.0-beta.1".
 
 ---
 

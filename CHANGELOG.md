@@ -1,6 +1,6 @@
 # Bundle changelog
 
-## v0.3.0-beta.1 (not yet tagged)
+## v0.3.0-beta.1 (2026-11-02)
 
 ### License
 
