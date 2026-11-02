@@ -26,23 +26,8 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Validate Python renderer
-        run: python -m py_compile tiga_windows_nowplaying_v2.py
-
-      - name: Offline renderer tests
-        run: python -m unittest discover -s tests -v
-
-      - name: Offline supervisor logging tests
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_supervisor_logging.ps1
-
-      - name: Offline supervisor retry-policy tests
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_supervisor_retry.ps1
-
-      - name: Offline upload soak tests
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\test_upload_soak.ps1
+      - name: Offline tests
+        uses: ./.github/actions/offline-tests
 
       - name: Build Windows media snapshot helper
         shell: cmd
@@ -55,7 +40,3 @@ jobs:
       - name: Build BLE uploader
         working-directory: windows_ble_probe
         run: cargo build --release --locked --bin tiga_stream_watch_flow
-
-      - name: Offline BLE uploader tests
-        working-directory: windows_ble_probe
-        run: cargo test --release --locked --bin tiga_stream_watch_flow
