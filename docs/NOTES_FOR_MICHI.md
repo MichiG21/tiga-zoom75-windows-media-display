@@ -2495,3 +2495,74 @@ installer already staged. No file renamed; each script keeps its paths and proce
   up at the next real start.
 - **Your call:** whether to change "about 1 in 30" in the release text and whether the signature
   rule should treat very few blocks differently. I changed neither.
+
+# The merged refactors on the live install, 2026-11-02 (`b1fc213`)
+
+Michi ran #36–#38 on the live install from 17:20. Claude read `tiga-fresh-test\logs`, recorded
+it in PROJECT_HISTORY §7.1 (eleventh part) and added a section to the release checklist. Claude
+sent nothing to the keyboard and ran no stack script or anything else that starts or stops the
+stack. The live checkout, its logs and the task were only read. The logs were read at 17:37; the
+last entry is 17:34:29.
+
+## What the logs show from 17:20
+
+- **Code in use:** the checkout is clean at `b1fc213`, its files are stamped 17:20, the
+  `tiga_render_*.pyc` files were compiled at 17:20, and the uploader exe (17:20) has the size of
+  the split build, 1303552 bytes.
+- **Two starts:** 17:20:48 and 17:27:31, with the new supervisor script. At 17:20:49 the uploader's
+  first line came 26 s after its start (every other run today: within 1 s), it found nothing in
+  a 15 s scan (code 10), and the restart 8 s later connected at once. It was the new exe's first run;
+  cause not known.
+- **8 uploads, 6 complete (8.68–10.56 s), 2 sudden failures,** both recovered by automatic retry
+  1 of 3 without a power-off (17:21:41 → 17:24:00, 17:32:08 → 17:34:29).
+- **Clean stop:** 17:27:29, `exited on request after 0,3 s`, `Disconnected cleanly`, code 0, with
+  the new `STOP_STACK.ps1`. No upload was in progress.
+- **Real media:** a browser video, `Arrival at Kraghammer | Critical Role: VOX MACHINA | Episode
+  1`, with artwork, `FRESH PLAYBACK (playback started)` at 17:31:12, uploaded in 10.52 s.
+- **Display Control:** standby at 17:31:38, auto at 17:31:52, from process 23428. Each got a frame,
+  and each frame completed (9.89 and 10.56 s). The ack names the auto command and its frame.
+- **New: the 15-second rule fired.** After auto, `FRESH PLAYBACK (steady playback)` at 17:32:08, the
+  first in `renderer.log`. The release text still lists this rule under "Not yet verified on the
+  keyboard (no such player is known)". I left the text alone.
+
+**Not in the logs:** `START_STACK.ps1` and `STATUS_STACK.ps1`; what the LCD and Display Control
+showed; whether the battery was disconnected before 17:08:43 or 17:20.
+
+## 7 of 35 uploads failed that day
+
+Recounted from the live install's `ble.log`: **35 uploads, 28 complete, 7 failed**, your count. The
+retest's 5 uploads on the installed builds are in another log and not counted.
+
+- **Old and new code alike:** 5 of 27 before 17:20, 2 of 8 after. 2 of 8 is too few to compare rates.
+  The 5 on old code rule out the refactors as the cause of this failure rate.
+- **No pattern in the gap since the previous upload:** before failures 0, 5, 146, 258, 261, 340 and
+  415 s. Up to 5 s: 2 of 4 failed; 6–60 s: 0 of 4; 61–300 s: 3 of 20; over 300 s: 2 of 7. The
+  first band is only 4 uploads.
+- **No known cause.**
+- 5 sudden, all recovered by retry 1; 2 slowing, both halted. The 17:14 halt rested on one ACKed
+  block of 993 ms, the same small-sample issue as in the earlier section.
+- First upload of a run: 1 of 9 failed. Later: 6 of 26, again well above the release text's "about
+  1 in 30".
+
+Totals on the live install from 2026-10-22 on: 9 recoveries, 2 failed retries, 5 slowing halts.
+
+## Not run yet
+
+**The installed version of these refactors has not been run, and it must be, with a new setup file,
+before the next tag.** The frozen renderer with its new modules and the packaged scripts have
+only been built and checked offline; the install folder doesn't exist on this PC right now. Steps
+are at the top of `docs/RELEASE_CHECKLIST.md`.
+
+- **Where to get the setup file:** the `vpr-<N>` artifact of a PR opened after `b1fc213`, this
+  docs PR included. `main` gets none, and "Run workflow" uploads to the release its tag names, so
+  don't use it for this.
+- **That run also covers** `[InstallDelete]`, still untested: installing over v0.3.0-beta.1 leaves a
+  real `.frame` to delete.
+
+## Open for Michi
+
+- **The installed run above**, before any tag.
+- **Your call, for the next release text:** the "about 1 in 30", and whether to move the 15-second
+  rule out of "Not yet verified".
+- **Still not on hardware from #38:** a halt cleared by the new `START_STACK.ps1`, if the 17:20 clear
+  wasn't that. The logs can't tell which script removed it.
