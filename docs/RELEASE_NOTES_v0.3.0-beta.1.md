@@ -1,61 +1,35 @@
 # v0.3.0-beta.1 — release draft
 
 **Draft. No tag and no release have been created.** Part 1 is for Michi: what blocks the
-release today. Part 2 is the release text for users, ready to paste once Part 1 is done.
+release today. Part 2 is the release text for users; `docs/RELEASE_TEXT_v0.3.0-beta.1.md`
+holds the same text ready to paste.
 
 Written 2026-10-16 against `main` at `e8f7211` (after #17); updated the same evening for
 `main` at `56c3825` (after #18 and #22); brought up to date on 2026-10-22 for `main` at
 `8b2011a` (after #31); Phase 8 results and the three fixes they led to added on
-2026-10-25. The version name is Michi's choice. The newest release is still
-`v0.2.0-beta.1` (2026-09-09).
+2026-10-25; the passed Phase 8 retest and four more known problems added on 2026-11-02
+for `main` at `07e7de8` (after #32). The version name is Michi's choice. The newest
+release is still `v0.2.0-beta.1` (2026-09-09).
 
 ---
 
 ## Part 1 — What blocks v0.3.0-beta.1 today
 
-**(H)** needs the keyboard; **(M)** needs Michi's decision.
+Nothing is left open; Phase 7 is next.
 
-1. **(H) Phase 8, the installer end to end: run on 2026-10-25; one retest left.** Build
-   `vpr-32` (installer CI run 39853101947, `4d06fdf`), installed over a running
-   v0.2.0-beta.1 on this keyboard. Results:
-   - **Upgrade lock found, and fixed but not yet retested.** Installing over the running
-     v0.2 failed with "DeleteFile failed; code 5. Access is denied" on
-     `app\_internal\tiga_stream_watch_flow.exe`: `[Files]` copied before the `[Run]` step
-     that stops the stack. After v0.2's *Stop Display*, Setup ran through (09:33). Fixed in
-     `e0add1b`: Setup now runs the installed version's `STOP_STACK.ps1` before copying
-     anything and waits until its executables have exited. **The retest of this fix on
-     hardware is the one Phase 8 item left**; steps in `docs/NOTES_FOR_MICHI.md`,
-     "Phase 8 on hardware, 2026-10-25".
-   - **Worked on the packaged build:** uploads (`UPLOAD COMPLETE`, 8.6–10.7 s), *Status*,
-     a Japanese title (`トーキョーレギー`, glyphs; `FONT fallbacks: YuGothB.ttc, …`, no
-     missing characters), and a clean *Stop Display* (09:41:21, uploader exited on request
-     after 0.3 s).
-   - **First packaged automatic retry:** a sudden failure at 09:50:44 (block 5, last ACKed
-     4) was retried at 09:52:44 and succeeded; the frame was delivered at 09:52:55. The
-     start before it (09:44) had halted on a slowing failure, which by design is not
-     retried.
-   - **Two more problems, fixed:** the first upload after install was the red/green
-     template (`frame=unknown(no-sidecar)`, crc32 `57e8e0cf`, 64 s), because the packaged
-     renderer took 36 s to its first frame (fixed in `319b426`; for upgrades and
-     reinstalls too since Setup deletes a leftover `.frame`); and the Start menu
-     shortcuts *Start Display*, *Stop Display* and *Status* closed their window at once
-     (fixed in `7d086bc`). Neither is retested on hardware yet; the same retest covers
-     both.
-   - **v0.2.0-beta.1 crash-loops on Japanese titles:** its renderer exited 16 times between
-     09:27:29 and 09:31:00, each time restarted after 8 s, and v0.2 completed 14 uploads in
-     those minutes. That is bug G, fixed in this release; it matters for the upgrade advice
-     in Part 2.
-   - **The uninstaller leaves runtime files** in `app\` (the stream's sidecars,
-     `session_01_bulk_stream.windows_nowplaying.bin`, the thumbnail and preview) and all
-     of `logs\`. Listed under "Known problems" in Part 2.
-2. **(H, optional) Phase 4, killed uploader:** `Stop-Process -Name tiga_stream_watch_flow
-   -Force` about 3 s into an upload. Expect HALTED from the session marker. Never run on
-   hardware. **It leaves the keyboard needing a battery disconnect**, so do it last in a
-   session. **(M)** whether it must pass before release; the marker path is covered by
-   offline tests.
-3. **(M) After the Phase 8 retest:** delete the one remaining *(before publishing)* note in
-   Part 2, under "Installing". The other one, under "Verified on the keyboard", now has
-   the 2026-10-25 result.
+**Phase 4, killed uploader, was skipped for this beta by Michi's decision; it isn't
+required.** `Stop-Process -Name tiga_stream_watch_flow -Force` about 3 s into an upload
+has never been run on hardware, and it would leave the keyboard needing a battery
+disconnect. The session marker path is covered by offline tests only, and Part 2 lists it
+under "Not yet verified on the keyboard".
+
+**Done on 2026-11-02: Phase 8, the installer end to end, passed its retest on hardware.**
+Installer CI run 40182232342 (`b0c207b`) over a running v0.2.0-beta.1 (setup log #005):
+Setup stopped v0.2 before copying (`STOP_STACK.ps1 exit code: 0`, `waited 0 ms`), with no
+DeleteFile error. The uploader held the template (`UPLOAD HELD`, crc32 `57e8e0cf`) until
+`RENDERER sidecar appeared after 3.2s`, with no red/green flash. The first upload took
+9.08 s. The *Status* window stayed open and showed OK. The first run on 2026-10-25 and
+everything else it covered are in `docs/RELEASE_CHECKLIST.md`, Phase 8.
 
 **Done since the first draft:** the version name (v0.3.0-beta.1; the checklist's title and
 Phase 7 tag now say so); `CHANGELOG.md` is complete; **#7 verified on hardware on
@@ -71,7 +45,10 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 
 ---
 
-## Part 2 — Release text (draft)
+## Part 2 — Release text
+
+Keep this in step with `docs/RELEASE_TEXT_v0.3.0-beta.1.md`, the same text without the
+quote marks.
 
 > ### TIGA Windows Media Display v0.3.0-beta.1
 >
@@ -182,8 +159,15 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 > that recovered an interrupted upload by itself. The three installer and startup fixes
 > above come from that test.
 >
+> On 2026-11-02 a new test build with those fixes was installed over a running
+> v0.2.0-beta.1 on the same keyboard. Setup stopped v0.2 first and reported no locked file;
+> the keyboard got no red/green image, and the first upload, the first real screen, took
+> 9.08 s; the *Status* window stayed open and showed `OK`.
+>
 > **Not yet verified on the keyboard:** the 15-second rule for players that never report
-> their position moving (no such player is known).
+> their position moving (no such player is known); a halt after the uploader itself is
+> killed mid-upload (covered by offline tests only); the *Start Display* and *Stop Display*
+> windows staying open (same fix as *Status*, which was checked).
 >
 > #### Known problems
 >
@@ -204,6 +188,18 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 >   `%LOCALAPPDATA%\Programs\TIGA Windows Media Display`: the logs in `logs\` and a few
 >   runtime files in `app\`. Delete the folder by hand afterwards (keep `logs\` first if
 >   you want to report a problem).
+> - **Norton CyberCapture may hold or sandbox the programs the first time they run**, for
+>   a minute or so. "Access is denied" lines during that time are harmless. (An error box
+>   from Setup is a different matter; see the next point.)
+> - **Close Display Control before updating.** Setup stops the display software, but
+>   Display Control is a separate window and can keep its own file locked. If Setup says
+>   it can't replace `tiga_display_control.exe`, close the window and choose *Retry*.
+> - **A halt survives reboots.** After an upload that slowed down before it stopped, or
+>   any other `HALTED`, nothing is uploaded again until you run *Start Display*; restarting
+>   Windows doesn't clear it. See below.
+> - **Bluetooth must be on**, even with the keyboard plugged in over USB-C. When it's off,
+>   the log only says "The device is not ready for use". Turn Bluetooth on; the uploader
+>   keeps trying and picks the display up within 5 minutes.
 >
 > #### If the display stops updating and Status says HALTED
 >
@@ -227,8 +223,7 @@ Already fine: CI is green on `main`, `Cargo.lock` is committed and every build u
 > is not code-signed, so Windows SmartScreen may warn; choose *More info → Run anyway*.
 >
 > To update, run the new setup file over the installed version. It stops the running
-> version first, which can take up to 30 s. *(Before publishing: delete this note once the
-> Phase 8 retest has shown it working over a running v0.2.0-beta.1.)*
+> version first, which can take up to 30 s.
 >
 > **Updating from v0.2.0-beta.1:** v0.2 can only be stopped abruptly, and stopping it in
 > the middle of an upload can leave the keyboard needing a battery disconnect (see above).

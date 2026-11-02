@@ -2286,3 +2286,110 @@ only compiled by CI; the retest is its first run.
 ## Open for Michi
 
 - **The Phase 8 retest** (steps above), with an installer run that includes this commit.
+
+# Phase 8 retest passed, 2026-11-02: docs updated for the release
+
+Michi ran the retest and reported it passed; logs in
+`C:\Users\Regal\Downloads\tiga-phase8-retest\`. Claude read them and updated the docs on
+`docs/phase8-retest`, off `origin/main` at `07e7de8`. PR open, not merged, no tag. Claude
+installed nothing, sent nothing to the keyboard, and ran no START/STOP_STACK. The only
+scheduled-task command was a read of the task's state and path.
+
+## What the logs confirm
+
+| Michi's report | Where |
+|---|---|
+| Build `b0c207b` | `Setup Log #005`: the files it installs are stamped 2026-10-25 09:49:34 (UTC), seconds after installer CI run 40182232342 started; its head is `b0c207b` |
+| v0.2 stopped before copying | #005: `STOP_STACK.ps1 exit code: 0`, `waited 0 ms`, then `Starting the installation process` |
+| No DeleteFile error | #005 has none |
+| Template held | `ble.log`: `UPLOAD HELD frame=unknown(no-sidecar) crc32=57e8e0cf` at 14:16:59Z |
+| Sidecar after 3.2 s | `ble.log`: `RENDERER sidecar appeared after 3.2s` at 14:17:02Z |
+| First upload 9.08 s | `ble.log`: `UPLOAD COMPLETE frame=renderer-20261102-151636-5af1bf-f0001 … in 9.08s` |
+
+From Michi only, not in the logs: no red/green flash, and the *Status* window staying open
+and showing OK.
+
+## Also in the logs
+
+- **Setup log #003 reproduced the old failure.** 15:08, the old `vpr-32` from
+  `Downloads\tiga-phase8\` over a running v0.2: "DeleteFile failed; code 5. Access is
+  denied", aborted and rolled back. The locked file was `app\tiga_windows_nowplaying.exe`
+  this time (`tiga_stream_watch_flow.exe` on 2026-10-25). So the same setup sequence failed
+  before the fix and passed after it, which makes #005 a better result than a pass alone.
+- **Whether a leftover `.frame` was there at #005 can't be read from the logs**, because
+  the `Test-Path` output isn't in the folder. The new build's stack had run since #001 at
+  15:00, so one probably was. The first thing the uploader logged after connecting was
+  `no-sidecar`, not `sidecar-is-…`, so none survived Setup.
+- **v0.2's uploader exited four times** between 15:13:43 and 15:14:45 before its last run, with
+  the exit code blank in `startup_supervisor.log`. v0.2 truncated its logs, so the reason
+  is gone. That is v0.2, not this release.
+- The second upload took 10.34 s (block 1 max 949 ms). Normal range.
+- The task points at `tiga-fresh-test\tiga_startup_supervisor.ps1` again and is `Running`
+  (read today), so the dev install is back.
+
+## What changed
+
+- **`docs/RELEASE_NOTES_v0.3.0-beta.1.md`:** Phase 8 and the "delete the note" item left
+  Part 1, whose only item is now optional Phase 4; the retest result is recorded; the
+  *(Before publishing)* note is gone; one 2026-11-02 paragraph under "Verified on the
+  keyboard"; four new Known problems.
+- **`docs/RELEASE_TEXT_v0.3.0-beta.1.md` (new):** Part 2 without the quote marks,
+  generated from the notes and checked identical. Phase 7 now pastes this file.
+- **`docs/RELEASE_CHECKLIST.md`:** the two open Phase 8 checks ticked with the results;
+  all retest wording removed; the Phase 7 CHANGELOG step ticked.
+- **`CHANGELOG.md`:** `## v0.3.0-beta.1 (2026-11-02)`.
+
+Older sections of these notes still talk about the retest as pending. They are the record
+of that day and stay as they are.
+
+## Decisions and how the new Known problems were checked
+
+- **The release date is set to 2026-11-02, today**, since there is no tag yet. If the tag
+  goes out on a later day, change it first; the checklist's Phase 7 says so.
+- **The halt bullet says any `HALTED` survives reboots, not only a slowing failure.** The
+  supervisor checks for `uploader_halted.json` at every start and doesn't start the
+  uploader if it's there (`tiga_supervisor_common.ps1:410`); only `START_STACK.ps1` clears
+  it. Slowing stays as the named example.
+- **The Bluetooth bullet adds "picks the display up within 5 minutes".** That comes from the
+  code: a failure from the Bluetooth manager, adapter list or scan start is class
+  Unreachable (`tiga_stream_watch_flow.rs:1540-1554`), retried after 8, 16, 32 and 60 s,
+  then every 5 minutes. Recovery from Bluetooth being switched off hasn't been run on
+  hardware.
+- **The Display Control bullet adds "close the window and choose *Retry*"**, from the
+  2026-10-25 section above and the installer's comment. Not run on hardware.
+- **The CyberCapture "Access is denied" lines and "The device is not ready for use" are
+  from Michi's report.** Neither is in the retest's logs, and our code prints neither;
+  they come from Windows. The bullet separates the harmless lines from Setup's "DeleteFile failed… Access is
+  denied" box, which #003 shows is a real lock.
+
+## Open for Michi
+
+- **(M) Phase 4, killed uploader:** must it pass before the release? The only item left in
+  Part 1. It leaves the keyboard needing a battery disconnect.
+- **The retest didn't run *Start Display* or *Stop Display* on the new build:** the
+  supervisor log shows none after 15:16:36 and the logs were copied at 15:18. They have the
+  same `-NoExit` fix as *Status*, and the checklist says so. Worth a look when you next use
+  them.
+- Review and merge the PR, then Phase 7. Phase 8's last pass, with the file from the
+  release page, comes after that.
+- Candidates for an eighth part of PROJECT_HISTORY §7.1, not written: the 2026-10-25 runs
+  listed above and this retest.
+
+# Phase 4 skipped for this beta, 2026-11-02 (PR #33)
+
+**Michi's decision: Phase 4 is skipped for v0.3.0-beta.1; it isn't required.** That answers
+the open question in the section above. The killed-uploader halt has never been run on
+hardware and is covered by offline tests only.
+
+Changed on `docs/phase8-retest`: Part 1 of the release notes and Phase 4 of the checklist
+now say so, and the "Not yet verified on the keyboard" sentence in Part 2 and in
+`docs/RELEASE_TEXT_v0.3.0-beta.1.md` got Michi's wording. It now also lists the killed
+uploader and the *Start Display* and *Stop Display* windows. Claude merged PR #33 once its
+checks passed and created no tag. Nothing was sent to the keyboard, and `tiga-fresh-test`
+was not pulled.
+
+## Open for Michi
+
+- Phase 7: tag, paste `docs/RELEASE_TEXT_v0.3.0-beta.1.md`. The CHANGELOG says 2026-11-02;
+  if the tag goes out on a later day, change the date first.
+- Phase 8's last pass, with the file from the release page.
