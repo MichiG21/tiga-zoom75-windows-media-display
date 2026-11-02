@@ -101,9 +101,11 @@ Wait for the current upload to finish first. If the custom frame never appears, 
 
 If an upload stops partway through, the keyboard is left holding an unfinished media session.
 
-**Most interruptions recover by themselves.** When the transfer was running at a normal pace and the keyboard simply stopped answering (the usual case), the stack waits 2 minutes and tries again, up to 3 times, without you doing anything. So far, every such failure on the development unit since this was added (2026-10-22) has recovered on the first or second retry, with no reset. While it waits, **Status** says `RETRYING - … automatic retry 1 of 3 at …`, and `logs\startup_supervisor.log` records each retry and its result.
+**Most interruptions recover by themselves.** The stack tries again without you doing anything, up to 3 times per interruption and with no reset. It waits 2 minutes when the upload was running at a normal pace and the keyboard simply stopped answering (the usual case), and 5 minutes when the upload had been getting slower and slower before it stopped. While it waits, **Status** says `RETRYING - … automatic retry 1 of 3 at …`, and `logs\startup_supervisor.log` records each retry and its result. The display doesn't update during those waits.
 
-If all three retries fail, or if the upload had been getting slower and slower before it stopped (a state retrying doesn't fix), the BLE uploader halts, the Now Playing renderer keeps running, and **Status** reports:
+Retrying after a slowdown is new, and whether it works without a reset isn't proven yet. So far most retries after a normal-pace stop have worked, and two of them slowed down instead.
+
+If all three retries fail, or the failure can't be classified, the BLE uploader halts, the Now Playing renderer keeps running, and **Status** reports:
 
 ```
 Status        : HALTED - transfer interrupted after CONTROL2 ...

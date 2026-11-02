@@ -7,7 +7,9 @@ hardware on 2026-10-15; the rest of the plan below has not been run. The slow re
 **automatic retry after a sudden code 20** (below) was added on `feature/sudden-retry`,
 2026-10-18, with Michi's approval. It first ran on hardware on 2026-10-22 (20:30–20:49,
 the PR #20 test on `tiga-dev`), then on the live install at 21:23–21:25; both times it
-recovered a sudden failure without a power-off (PROJECT_HISTORY §7.1, seventh part).
+recovered a sudden failure without a power-off (PROJECT_HISTORY §7.1, seventh part). The
+**automatic retry after a slowing code 20** (below) was added on `feature/slowing-retry`,
+2026-11-02, at Michi's request. It has not run on hardware yet.
 
 ## The rule
 
@@ -33,15 +35,32 @@ The evidence (`docs/investigations/UPLOAD_FAILURES_2026-10-18.md`, PR #24):
   could not have done that.
 - In the 6 logged retries without a proper reset, none damaged the LCD; each failure
   was an ordinary code 20.
-- Under that rate, one retry clears about 6 halts in 10, three about 95 %.
+- Under that rate, one retry clears about 6 halts in 10, three about 95 %. That assumes
+  independent failures, which the 2026-11-02 run of three questions (§7.1, thirteenth part).
 
-The rule still holds for everything else. **Slowing** failures (sustained slow blocks
-before the stall, over at least 5 ACKed blocks; the back-to-back pair at block 11 on 2026-10-15 is the one hint of a
-state that persists), failures the uploader can't classify, **21**, and a session marker
-without this run's exit record (a killed or crashed uploader) halt at once. (On
-2026-10-22 22:24 a slowing failure halted as designed, and a plain START_STACK without a
-power-off then completed. That is the first slowing failure recovered without a reset; one
-case, so the rule is unchanged.)
+**Exception since 2026-11-02: the slowing failure.** A code 20 with the *slowing* signature is
+retried the same way after **300 s**, at Michi's request, so that it recovers without him. It
+shares the 3 retries per incident with sudden failures. Each wait follows the failure just seen:
+sudden, then slowing, then sudden waits 120, 300 and 120 s. **Never shorten these waits:** fast
+retries against a stuck keyboard were bug A.
+
+**The evidence is thin, and this is a bet.** The table of all 12 slowing halts is in §7.1,
+fourteenth part. In short:
+
+- **For:** in 11 of 12, the next upload wasn't slowing, and 9 of 12 completed (2 of those after a
+  known reset). On 2026-10-22 a plain START_STACK with no power-off, 2 min 41 s after the halt, was followed by 42 completed uploads.
+- **Against:** on 2026-10-15 a start 1 min 47 s after the halt, with no reset recorded, slowed down
+  and stalled at the same block. Twice on 2026-11-02 a retry 2 minutes after a sudden failure itself
+  turned slowing.
+- **Unknown:** no slowing halt is known to have recovered after about 300 s without a reset. Every
+  halt that lasted that long has an unknown battery state, because the logs can't show one.
+
+If this goes wrong, the cost is up to 3 more slow uploads against a keyboard that needed a reset (the
+longest so far ran 77.83 s), then the same halt as before. The logs can't show the LCD, so watch it
+in the first days.
+
+The rule still holds for everything else. Failures the uploader can't classify, **21**, and a
+session marker without this run's exit record (a killed or crashed uploader) halt at once.
 
 ## Uploader exit codes (`tiga_stream_watch_flow`)
 
@@ -50,7 +69,7 @@ case, so the rule is unchanged.)
 | 0 | success (only with `--once`; watch mode normally never exits) | restart |
 | 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff, then every 5 min; **never halts** |
 | 11 | connected, but the media service was missing or unusable: every candidate was reached and none qualified (issue #14), or subscribing to its notifications failed | retry with backoff, then every 5 min; **never halts** |
-| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | signature `sudden`: **automatic retry after 120 s, up to 3 per incident**, then halt. Otherwise **halt, power-cycle** |
+| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | signature `sudden`: **automatic retry after 120 s**; signature `slowing`: **automatic retry after 300 s**; **3 per incident between them**, then halt. Otherwise **halt, power-cycle** |
 | 21 | every block ACKed, COMPLETE never arrived | **halt, power-cycle** |
 | 30 | bad arguments, missing or invalid stream, internal error | halt, no power cycle |
 | other | crashed or killed | decided by the session marker (below) |
@@ -69,7 +88,7 @@ writes `signature=` to the exit record:
   worked).
 - **slowing:** at least 5 blocks ACKed, and median over 500 ms or two or more blocks over 1000
   ms (2026-10-15 22:44 and 22:46, 2026-10-16 18:49, 2026-10-22 22:24, 2026-10-25 10:36,
-  2026-11-02 17:44).
+  2026-11-02 17:44, 21:01 and 21:35).
 - **unclassified:** not a block timeout (link lost, write error, CONTROL2 ACK missing),
   no block ACKed at all, or the marker of an earlier run.
 
@@ -77,17 +96,18 @@ writes `signature=` to the exit record:
 often start slowly: in 213 completed uploads the slowest block was among blocks 1–4 in 195,
 block 1 reached 1540 ms and block 2 1403 ms, and at least 10 of them would have read as slowing
 had they stalled after block 2. The halts at 17:14 and 18:33 on 2026-11-02 rested on one block
-of 993 and 987 ms. Every real slowdown in the logs began at block 5 or later and ACKed at least
-7 blocks. Replaying all 27 logged PROGRESS timeouts that have timing data (PROJECT_HISTORY §7.1,
-twelfth part) gives the same result for any minimum from 3 to 7: 4 halts become retries, and every
-real slowdown still halts. So the logs don't pin the number down exactly. 3 and 4 would still judge
-mostly slow-start blocks, and 7 leaves no margin below the smallest real slowdowns; block 5 is
-also where the uploader's first-upload warning already looks.
+of 993 and 987 ms. Replaying all 27 logged PROGRESS timeouts that had timing data at the time
+(PROJECT_HISTORY §7.1, twelfth part) gives the same result for any minimum from 3 to 7: 4 failures
+change label. So the logs don't pin the number down exactly. 3 and 4 would still judge mostly slow-start
+blocks, and block 5 is also where the uploader's first-upload warning already looks.
 
-**What this gives up.** A real slowdown that stalls before block 5 now gets the automatic retries
-without a power-off (up to 3, 120 s apart) instead of an immediate halt. None is known for certain:
-2026-11-02 16:36, with a 1865 ms first block, is the nearest case, and the next upload there,
-after a manual clear, completed. If a retry goes on to show a sustained slowdown, it halts as before (2026-11-02 17:44).
+**Where slowdowns begin varies** (§7.1, fourteenth part): blocks 2, 5, 5, 5 and 6 so far, and the
+fewest blocks ACKed before one stalled is 6. An earlier version of this note said every real slowdown
+began at block 5 or later; 2026-11-02 21:35 began at block 2.
+
+**What this gives up.** A real slowdown that stalls before block 5 is labelled sudden, so its retry
+comes after 120 s instead of 300 s. The nearest cases are 2026-11-02 16:36, with a 1865 ms first block,
+and any slowdown that begins as early as block 2 and stalls within 3 blocks. None is known for certain.
 
 ### Block timeout
 
@@ -187,9 +207,10 @@ shut down mid-transfer.
 - **Retryable, then give up** (an unexplained exit with no marker): restart after 8, 16,
   32, 60 s; the 5th consecutive failure halts as `gave-up`, no power cycle needed.
 - A frame delivered during a run resets the count.
-- **Sudden-failure retry** (20 with `signature=sudden` in this run's exit record): the
-  supervisor logs `Sudden failure (code 20, signature sudden, last ACKed block N):
-  automatic retry 1 of 3 at HH:MM:SS, in 120s.` When the time comes it removes the session marker and logs
+- **Automatic retry** (20 with `signature=sudden` or `signature=slowing` in this run's exit
+  record): the supervisor logs `Sudden failure (code 20, signature sudden, last ACKed block N):
+  automatic retry 1 of 3 at HH:MM:SS, in 120s.` or `Slowing failure (code 20, signature slowing,
+  last ACKed block N): automatic retry 1 of 3 at HH:MM:SS, in 300s.` When the time comes it removes the session marker and logs
   `Automatic retry 1 of 3: session marker removed; starting the BLE uploader (no
   power-off).` The outcome is logged as `Automatic retry 1 of 3 SUCCEEDED` (a frame was
   delivered, even while the uploader keeps running) or `Automatic retry 1 of 3 FAILED
@@ -199,7 +220,7 @@ shut down mid-transfer.
   halt below, with `auto_retries: 3` and the signature in the halt file. A retry that was
   waiting when the supervisor stopped is not resumed (its marker makes the next start
   halt, as before).
-- **Halt** (marker present, 20 other than sudden, 20 after 3 retries, 21, 30, or an
+- **Halt** (marker present, 20 that is neither sudden nor slowing, 20 after 3 retries, 21, 30, or an
   unexplained exit's retries exhausted): the uploader is not restarted. `logs\uploader_halted.json` records the time, code, meaning, class,
   frame ID, last ACKed block, the uploader's detail line, and an instruction. The
   renderer keeps running.
@@ -209,7 +230,7 @@ shut down mid-transfer.
   fresh one. Nothing clears it on a timer.
 - `STATUS_STACK.ps1` shows `HALTED - …` with the instruction, in red. While a retry is
   waiting or running it shows `RETRYING - sudden upload failure; automatic retry 1 of 3
-  at HH:MM:SS`, and an `Auto-retry` line with the last events from
+  at HH:MM:SS` (or `slowing upload failure`), and an `Auto-retry` line with the last events from
   `logs\uploader_retry.json`. A halt after retries adds the signature and the number of
   retries used.
 

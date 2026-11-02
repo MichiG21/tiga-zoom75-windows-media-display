@@ -1616,7 +1616,7 @@ with timing data change, all from slowing to sudden:
 
 Those next uploads came after a manual clear, and whether the battery was disconnected isn't
 logged, so this doesn't prove a retry at 120 s would have worked. **Slowing failures, on the new
-rule: 7**, all with at least 7 ACKed blocks (2026-10-15 22:44 and 22:46, 2026-10-16 18:49,
+rule: 7**, all with at least 7 ACKed blocks so far; see the fourteenth part for what followed (2026-10-15 22:44 and 22:46, 2026-10-16 18:49,
 2026-10-22 22:24, the packaged 2026-10-25 09:44, 10:36, and 2026-11-02 17:44). The full table,
 and why 5, are in the PR that made the change and in `docs/design/RETRY_RECOVERY.md`.
 
@@ -1680,6 +1680,69 @@ independence. Nothing has changed because of this. It does make failures in a ro
 **Totals on the live install from 2026-10-22 on, updating the twelfth part:** 12 recoveries, 5 failed
 retries, 17 retries started, 7 slowing halts as logged. Of 13 sudden incidents, 12 recovered and 1 ended
 in a halt. Retries without a power-off, all sources: **17 of 24**; after a sudden failure **16 of 22**.
+
+#### Fourteenth part: 2026-11-02, the third soak, every slowing halt, and retrying them
+
+Source: `tiga-fresh-test\logs`, read at 21:50 (last upload 21:47:58). Times are local. The live install
+was rebuilt at 21:29 at `0bc4d4c`, so PR #41 is in it.
+
+**The third soak, on the new build.** It began at 21:30:28 and **delivered 23 of 24**, each in 10.2–11.2
+s. Upload 24 began at 21:35:47 and was **a real slowdown from block 2**: 35 of its 37 ACKed blocks took
+over 1 s (1013–2332 ms), `median=1500ms`, and it stopped after **61.03 s, with no PROGRESS for block 38**.
+Signal at connect: -63 dBm. It halted at 21:36:50, and the halt was cleared at 21:39:45.
+
+Earlier that evening: a sudden failure at 20:59:45 (-57 dBm, last ACKed 3); its retry at 21:01:52
+turned slowing (-61 dBm, 6 blocks, `SLOW` blocks 5 and 6) and halted at 21:02:00. That is the second
+retry to turn slowing, after 17:44.
+
+The new exe's first run again took a while: 20 s to its first line, then code 11 (`media service present
+but missing`), and the restart 8 s later connected. Compare 26 s and code 10 at 17:20. Cause not known.
+
+**Where slowdowns begin varies.** The blocks of the first `SLOW` line: **2** (21:35), **5** (2026-10-22
+22:24), **5** (17:44), **5** (21:01), **6** (2026-10-25 10:36). The three before per-block logging can't
+be placed. **This corrects the twelfth part and `docs/design/RETRY_RECOVERY.md`,** which said every real
+slowdown began at block 5 or later. It also ends "at least 7 ACKed blocks": 21:01 stalled after 6.
+`SLOWING_MIN_BLOCKS` stays at 5, and a slowdown that stalls before block 5 is still labelled sudden.
+
+**Every slowing halt.** All 12 on the live install. \* was labelled slowing before PR #41 and would be
+sudden now. "Reset" is what is recorded in §7.1 or by Michi; the logs themselves never show one.
+
+| Failure | Signal | ACKed, median | Halted, then cleared | Halted for | Battery reset | Next uploads |
+|---|---:|---|---|---:|---|---|
+| 10-15 22:44:31 | - | 10, no timing | 22:44:47, start 22:46:34 | 1 min 47 | none recorded | **failed: slowing again, same block** |
+| 10-15 22:46:42 | - | 10, no timing | 22:46:59, 22:49:27 | 2 min 28 | **30 s** | complete; 45 in a row |
+| 10-16 18:49:14 | -62 | 40, no timing | 18:50:34, start 18:54:07 | 3 min 33 | **40 s** | complete; 17 in a row |
+| 10-22 22:24:17 | -61 | 7, 645 ms | 22:24:27, 22:27:08 | 2 min 41 | **none (Michi)** | complete; 42 in a row |
+| 10-25 10:36:21 | -59 | 7, 150 ms | 10:36:29, 10:52:05 | 15 min 36 | unknown | complete; 4, then the next row |
+| 10-25 11:04:46\* | -67 | 2, 502 ms | 11:04:53, gone by 11-02 15:19:56 | 8 days | unknown | complete; 4, then a sudden failure |
+| 11-02 16:36:14\* | -72 | 2, 1019 ms | 16:36:21, 17:08:43 | 32 min | unknown | complete; 3, then the next row |
+| 11-02 17:14:42\* | -72 | 1, 993 ms | 17:14:47, gone by 17:20:48 | 6 min | unknown | failed: sudden; retry completed, then 5 more |
+| 11-02 17:44:03 (a retry) | -73 | 21, 1454 ms | 17:44:36, 17:49:53 | 5 min 17 | unknown | failed: sudden; retry completed, then 3 more |
+| 11-02 18:33:19\* | -56 | 1, 987 ms | 18:33:25, 19:19:30 | 46 min | unknown | complete; 62 in a row |
+| 11-02 21:01:52 (a retry) | -61 | 6, 285 ms | 21:02:00, gone by 21:29:20 | 27 min | unknown | complete; 24, then the next row |
+| 11-02 21:35:47 | -63 | 37, 1500 ms | 21:36:50, 21:39:45 | 2 min 55 | unknown | complete; 2, then 2 sudden failures, then retry 2 completed |
+
+**What it says about retrying a slowing failure without a reset:**
+
+- **For:** the next upload was slowing in only 1 of 12, and completed in 9 of 12 (2 of those after a
+  known reset). 2026-10-22: no reset, 2 min 41 s, then 42 completed.
+- **Against:** 2026-10-15 22:44: no reset recorded, 1 min 47 s, then a slowdown again at the same block.
+  Twice a retry about 2 minutes after a sudden failure turned slowing, so a slow state can be there at
+  that point. Both waits are shorter than the 300 s now chosen.
+- **Unknown:** no slowing halt is known to have recovered after about 300 s without a reset. For all 7
+  halts that lasted that long, the battery state is unknown. Their next uploads: 5 completed, 2 failed
+  suddenly and then completed on the retry. The nearest to 300 s is 17:44, at 5 min 17, with a sudden
+  failure next.
+
+So the logs don't contradict retrying after 300 s, apart from one case at a shorter wait, but they don't
+show that it works. **From `feature/slowing-retry`, a slowing failure gets automatic retries** at Michi's
+request: 300 s apart, sharing the 3 retries with sudden failures. It has not run on hardware.
+
+**Counts to 21:50:** whole day, 167 uploads, 20 failed. Since the 21:29 rebuild, 30 uploads, 3 failed.
+Live install from 2026-10-22 on, with the labels as logged: 13 recoveries, 7 failed retries, 20 retries
+started, 9 slowing halts. Of 15 sudden incidents, 13 recovered and 2 ended in a halt when a retry turned
+slowing. Retries without a power-off, all sources: **18 of 27**; after a sudden failure **17 of 25**.
+Slowing failures on PR #41's rule: **9**.
 
 ### 7.2 Non-Latin titles: the crash fix, then the font fallback
 
