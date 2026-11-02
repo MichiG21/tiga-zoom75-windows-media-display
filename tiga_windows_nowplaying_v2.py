@@ -6,30 +6,39 @@ import hashlib
 import io
 import json
 import os
-import re
 import subprocess
 import sys
-import time
-import unicodedata
-import zlib
+import time  # noqa: F401  (the tests replace time.sleep and time.monotonic through this name)
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 import tiga_dlx
+import tiga_render_loop
+import tiga_render_stream
 
-WIDTH = 320
-HEIGHT = 172
-FRAME_BYTES = WIDTH * HEIGHT * 2
-
-FILE_START_IN_STREAM = 25
-DLX_PREFIX_BYTES = 8
-HEADER_BYTES = 452
-FRAME1_START = FILE_START_IN_STREAM + DLX_PREFIX_BYTES + HEADER_BYTES
-FRAME2_START = FRAME1_START + FRAME_BYTES
-TRAILER_START = FRAME2_START + FRAME_BYTES
-EXPECTED_STREAM_LEN = TRAILER_START + 4
+# Paths, flags and the frame counter stay in this file, and the modules get them passed
+# in: --dlx-frames and the like set them here, and PyInstaller's HERE must come from this
+# file. Names unused below are for tests/test_renderer.py and tests/test_dlx.py.
+from tiga_render_freshness import STEADY_PLAYING_RELEASE_SECONDS, FreshnessGate  # noqa: F401
+from tiga_render_loop import IDLE_TO_STANDBY_SECONDS
+from tiga_render_stream import HEIGHT, WIDTH, stream_crc32, validate_stream  # noqa: F401
+from tiga_render_text import (  # noqa: F401
+    ALBUM_STEP,
+    ARTIST_STEP,
+    DIVIDER_Y,
+    FALLBACK_FONT_FILES,
+    MORSE_STEP,
+    TITLE_STEP,
+    FontLibrary,
+    decode_morse,
+    draw_text,
+    find_font,
+    fit_text,
+    layout_text_block,
+    text_width,
+)
 
 HERE = Path(__file__).resolve().parent
 EXTRACTED = HERE / "extracted"
@@ -41,12 +50,6 @@ PREVIEW = HERE / "windows_nowplaying_preview.png"
 SNAPSHOT_EXE = HERE / "tiga_windows_media_snapshot.exe"
 THUMBNAIL_FILE = HERE / "windows_media_thumbnail.bin"
 
-POLL_INTERVAL = 1.0
-IDLE_TO_STANDBY_SECONDS = 60.0
-FRESH_POSITION_ADVANCE_MS = 1500
-# Some providers report Playing with a position that never moves. Without this escape,
-# media that was already playing at startup stayed on standby indefinitely (issue #5).
-STEADY_PLAYING_RELEASE_SECONDS = 15.0
 COMMAND_FILE = HERE / "tiga_display_command.txt"
 # Written after a command's frame is installed; the control utility waits for it
 # before "Standby + Shut Down" (issue #7).
@@ -58,6 +61,9 @@ COVER_SIZE = 122
 # --dlx-frames 1, and the uploader must also be given --allow-single-frame.
 DLX_FRAMES = 2
 DLX_LAYOUT = "index"
+
+# The decoded line under a field written entirely in Morse code. Off: --no-morse-subtitle.
+MORSE_SUBTITLE = True
 
 # Frame correlation (issue #9). The sidecar is written before the stream is replaced,
 # so the uploader always finds a sidecar at least as new as the stream it reads. The
@@ -72,241 +78,16 @@ def log(message: str):
     print(f"{stamp} {message}", flush=True)
 
 
-def stream_crc32(data: bytes) -> str:
-    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
-
-
 def next_frame_id() -> str:
     global _frame_seq
     _frame_seq += 1
     return f"{RUN_ID}-f{_frame_seq:04d}"
 
 
-def find_font(size: int, bold: bool = False):
-    candidates = [
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / ("segoeuib.ttf" if bold else "segoeui.ttf"),
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / ("arialbd.ttf" if bold else "arial.ttf"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return ImageFont.truetype(str(p), size=size)
-    return ImageFont.load_default()
-
-
-# Segoe UI has no CJK or Hangul glyphs and no "♪", and Pillow does no font fallback of
-# its own: a Japanese title rendered as empty boxes on hardware. Text that comes from
-# media metadata is therefore drawn with a chain of fonts, one character at a time.
-FALLBACK_FONT_FILES = [
-    # (regular, bold); the first that exists is used for each slot
-    ("YuGothR.ttc", "YuGothB.ttc"),    # Japanese
-    ("meiryo.ttc", "meiryob.ttc"),     # Japanese, older Windows
-    ("msyh.ttc", "msyhbd.ttc"),        # Chinese (Microsoft YaHei)
-    ("msjh.ttc", "msjhbd.ttc"),        # Traditional Chinese (Microsoft JhengHei)
-    ("malgun.ttf", "malgunbd.ttf"),    # Korean
-    ("seguisym.ttf", "seguisym.ttf"),  # symbols, including ♪
-]
-_NOTDEF_PROBE = "\U0010fffd"  # private use, plane 16: no font here maps it
-_glyph_cache: dict[tuple[int, str], bool] = {}
-_fonts_logged = False
-_missing_logged: set[str] = set()
-
-
-def _glyph_mask(font, ch: str) -> bytes:
-    size = getattr(font, "size", 16) * 2
-    img = Image.new("L", (size, size))
-    ImageDraw.Draw(img).text((0, 0), ch, font=font, fill=255)
-    return img.tobytes()
-
-
-def has_glyph(font, ch: str) -> bool:
-    """Whether `font` draws `ch` as something other than its missing-glyph box."""
-    if ch.isspace() or not ch.isprintable():
-        return True
-    key = (id(font), ch)
-    if key not in _glyph_cache:
-        notdef = (id(font), _NOTDEF_PROBE)
-        if notdef not in _glyph_cache:
-            _glyph_cache[notdef] = _glyph_mask(font, _NOTDEF_PROBE)
-        _glyph_cache[key] = _glyph_mask(font, ch) != _glyph_cache[notdef]
-    return _glyph_cache[key]
-
-
-class FontChain:
-    """A primary font plus fallbacks, chosen per character."""
-
-    def __init__(self, fonts: list):
-        self.fonts = fonts
-        self.primary = fonts[0]
-        self.size = getattr(self.primary, "size", 16)
-
-    def font_for(self, ch: str):
-        for font in self.fonts:
-            if has_glyph(font, ch):
-                return font
-        if ch not in _missing_logged:
-            _missing_logged.add(ch)
-            name = unicodedata.name(ch, "unnamed")
-            log(f"FONT no font has U+{ord(ch):04X} {name}; drawn as a box")
-        return self.primary
-
-    def runs(self, text: str) -> list[tuple[str, object]]:
-        """Split `text` into (substring, font) runs."""
-        out: list[tuple[str, object]] = []
-        for ch in text:
-            font = self.font_for(ch)
-            if out and out[-1][1] is font:
-                out[-1] = (out[-1][0] + ch, font)
-            else:
-                out.append((ch, font))
-        return out
-
-
-_chains: dict[tuple[int, bool], FontChain] = {}
-
-
-def find_text_font(size: int, bold: bool = False) -> FontChain:
-    """find_font() with fallbacks, for text that comes from media metadata."""
-    global _fonts_logged
-    key = (size, bold)
-    if key not in _chains:
-        fonts = [find_font(size, bold)]
-        loaded, skipped = [], []
-        folder = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-        for regular, bold_file in FALLBACK_FONT_FILES:
-            p = folder / (bold_file if bold else regular)
-            if not p.exists():
-                p = folder / regular
-            try:
-                # Index 0 of each .ttc is the non-UI family (Yu Gothic, not Yu Gothic UI).
-                fonts.append(ImageFont.truetype(str(p), size=size))
-                loaded.append(p.name)
-            except OSError:
-                skipped.append(p.name)
-        if not _fonts_logged:
-            _fonts_logged = True
-            log(f"FONT fallbacks: {', '.join(loaded) or 'none'}"
-                + (f"; not installed: {', '.join(skipped)}" if skipped else ""))
-        _chains[key] = FontChain(fonts)
-    return _chains[key]
-
-
-def text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
-    if not isinstance(font, FontChain):
-        return draw.textbbox((0, 0), text, font=font)[2]
-    runs = font.runs(text)
-    if len(runs) == 1:
-        return draw.textbbox((0, 0), text, font=runs[0][1])[2]
-    return int(round(sum(f.getlength(s) for s, f in runs)))
-
-
-def draw_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill):
-    """draw.text(), with per-character fallback when `font` is a FontChain."""
-    if not isinstance(font, FontChain):
-        draw.text(xy, text, font=font, fill=fill)
-        return
-    runs = font.runs(text)
-    if len(runs) == 1 and runs[0][1] is font.primary:
-        draw.text(xy, text, font=font.primary, fill=fill)  # unchanged for plain Latin text
-        return
-    # Share the primary font's baseline, so mixed scripts sit on one line.
-    x, y = xy
-    baseline = y + font.primary.getmetrics()[0]
-    for s, f in runs:
-        draw.text((x, baseline), s, font=f, fill=fill, anchor="ls")
-        x += f.getlength(s)
-
-
-# Japanese and Chinese are written without spaces, so a line may break between any two
-# of these characters, not only at spaces. Hangul is left out: Korean uses spaces.
-_BREAK_ANYWHERE = (
-    (0x3040, 0x30FF),    # Hiragana, Katakana
-    (0x31F0, 0x31FF),    # Katakana phonetic extensions
-    (0x3400, 0x4DBF),    # CJK extension A
-    (0x4E00, 0x9FFF),    # CJK unified ideographs
-    (0xF900, 0xFAFF),    # CJK compatibility ideographs
-    (0xFF66, 0xFF9F),    # halfwidth Katakana (not U+FF65, a Morse dot in the wild)
-    (0x20000, 0x3FFFF),  # CJK extensions B and later
-)
-# Never start a line with these (a simple form of the Japanese kinsoku rule).
-_NO_LINE_START = set("ー々ゝゞヽヾ・、。，．！？：；）」』】〕〉》ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ")
-
-
-def _breaks_anywhere(ch: str) -> bool:
-    cp = ord(ch)
-    return any(lo <= cp <= hi for lo, hi in _BREAK_ANYWHERE)
-
-
-def _break_units(word: str) -> list[str]:
-    """Split one space-free word into the pieces a line may break between."""
-    units: list[str] = []
-    for ch in word:
-        if units and (ch in _NO_LINE_START or not (_breaks_anywhere(ch) or _breaks_anywhere(units[-1][-1]))):
-            units[-1] += ch
-        else:
-            units.append(ch)
-    return units
-
-
-def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int):
-    words = (text or "").split()
-    if not words:
-        return [""]
-
-    def width(s: str) -> int:
-        return text_width(draw, s, font)
-
-    # (separator, piece): pieces of one word join with "", words with " ".
-    tokens: list[tuple[str, str]] = []
-    for word in words:
-        sep = " "
-        for unit in _break_units(word):
-            # A piece wider than the box (a long unbroken title) is broken between
-            # characters; otherwise it was drawn as one over-wide line.
-            if width(unit) <= max_width:
-                tokens.append((sep, unit))
-                sep = ""
-                continue
-            piece = ""
-            for ch in unit:
-                if piece and width(piece + ch) > max_width:
-                    tokens.append((sep, piece))
-                    sep = ""
-                    piece = ch
-                else:
-                    piece += ch
-            tokens.append((sep, piece))
-            sep = ""
-
-    lines = []
-    current = ""
-    truncated = False
-
-    for sep, token in tokens:
-        test = token if not current else current + sep + token
-        if width(test) <= max_width:
-            current = test
-            continue
-        lines.append(current)
-        current = token
-        if len(lines) >= max_lines:
-            truncated = True
-            current = ""
-            break
-
-    if current:
-        if len(lines) < max_lines:
-            lines.append(current)
-        else:
-            truncated = True
-
-    if truncated:
-        last = lines[-1]
-        ell = "…"
-        while last and width(last + ell) > max_width:
-            last = last[:-1]
-        lines[-1] = last.rstrip() + ell
-
-    return lines
+# The lambdas look `log` and FALLBACK_FONT_FILES up when they are needed, not now.
+_fonts = FontLibrary(log=lambda message: log(message), fallback_files=lambda: FALLBACK_FONT_FILES)
+has_glyph = _fonts.has_glyph
+find_text_font = _fonts.find_text_font
 
 
 def format_duration_ms(duration_ms: int) -> str:
@@ -377,30 +158,6 @@ def load_thumbnail(has_thumbnail: bool) -> Image.Image:
     return img
 
 
-def rgb565_be_bytes(img: Image.Image) -> bytes:
-    img = img.convert("RGB")
-    out = bytearray(WIDTH * HEIGHT * 2)
-    p = 0
-
-    pixels = img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata()
-    for r, g, b in pixels:
-        value = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-        out[p] = (value >> 8) & 0xFF
-        out[p + 1] = value & 0xFF
-        p += 2
-
-    return bytes(out)
-
-
-def validate_stream(data: bytes):
-    if len(data) != EXPECTED_STREAM_LEN:
-        raise RuntimeError(f"Unexpected stream size {len(data)}; expected {EXPECTED_STREAM_LEN}")
-    if data[25:33] != bytes.fromhex("00 44 4c 58 fc ff 00 00"):
-        raise RuntimeError("DLX prefix mismatch")
-    if data[-4:] != bytes.fromhex("fc ff 00 00"):
-        raise RuntimeError("DLX trailer mismatch")
-
-
 def render_standby(reason: str = "Waiting for media") -> Image.Image:
     """Render a calm standby screen.
 
@@ -464,90 +221,18 @@ def render_black() -> Image.Image:
     return Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
 
 
-def media_fingerprint(media: dict) -> str:
-    fields = [
-        media.get("source", ""),
-        media.get("title", ""),
-        media.get("artist", ""),
-        media.get("album_artist", ""),
-        media.get("album", ""),
-        media.get("subtitle", ""),
-        str(media.get("track_number", 0)),
-    ]
-    return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
-
-
-class FreshnessGate:
-    """Holds standby until playback is proven fresh.
-
-    Windows keeps remembered media sessions around after playback stops or across a
-    reboot. The gate records what was there when standby was entered and releases
-    only on evidence of real playback:
-
-    - a different media item,
-    - a transition from a non-playing state to Playing,
-    - the timeline advancing by FRESH_POSITION_ADVANCE_MS, or
-    - the same valid media reporting Playing continuously for
-      STEADY_PLAYING_RELEASE_SECONDS (for providers whose position never moves).
-
-    A remembered session that reports Paused/Stopped, or Playing without a title,
-    stays on standby.
-    """
-
-    def __init__(self, media: dict | None = None):
-        self.arm(media)
-
-    def arm(self, media: dict | None):
-        if media and media.get("present"):
-            self.fp = media_fingerprint(media)
-            self.position = int(media.get("position_ms", 0) or 0)
-            self.state = str(media.get("state", ""))
-        else:
-            self.fp = None
-            self.position = None
-            self.state = None
-        self.interrupt()
-
-    def interrupt(self):
-        self.steady_fp = None
-        self.steady_since = None
-
-    def observe(self, media: dict, now: float) -> str | None:
-        """Feed one snapshot taken while on standby; returns a release reason or None."""
-        state = str(media.get("state", ""))
-        fp = media_fingerprint(media)
-        position = int(media.get("position_ms", 0) or 0)
-
-        if state != "Playing":
-            self.fp = fp
-            self.position = position
-            self.state = state
-            self.interrupt()
-            return None
-
-        if self.fp is None or fp != self.fp:
-            return "new media"
-
-        if self.state is not None and self.state != "Playing":
-            return "playback started"
-
-        if self.position is not None and position > 0:
-            if position - int(self.position or 0) >= FRESH_POSITION_ADVANCE_MS:
-                return "timeline advancing"
-
-        if (media.get("title") or "").strip():
-            if self.steady_fp != fp:
-                self.steady_fp = fp
-                self.steady_since = now
-            elif now - self.steady_since >= STEADY_PLAYING_RELEASE_SECONDS:
-                return "steady playback"
-        else:
-            self.interrupt()
-
-        if self.position is None:
-            self.position = position
-        self.state = state
-        return None
+def install_image(img: Image.Image, frame_id: str, reason: str) -> str:
+    return tiga_render_stream.install_image(
+        img,
+        frame_id,
+        reason,
+        backup_stream=BACKUP_STREAM,
+        output_stream=OUTPUT_STREAM,
+        active_stream=ACTIVE_STREAM,
+        frame_sidecar=FRAME_SIDECAR,
+        dlx_frames=DLX_FRAMES,
+        dlx_layout=DLX_LAYOUT,
+    )
 
 
 def write_display(img: Image.Image, reason: str, preview: bool = True) -> tuple[str, str]:
@@ -589,8 +274,6 @@ def read_control_command(last_text: str | None):
     """
     try:
         raw = COMMAND_FILE.read_text(encoding="utf-8").strip().lower()
-    except FileNotFoundError:
-        return None, last_text
     except Exception:
         return None, last_text
 
@@ -602,96 +285,6 @@ def read_control_command(last_text: str | None):
         return command, raw
 
     return None, raw
-
-
-DIVIDER_Y = 135
-TITLE_STEP, ARTIST_STEP, ALBUM_STEP = 20, 21, 17
-MORSE_STEP = 17
-MORSE_FILL = (120, 190, 255)
-
-# A field written entirely in Morse code also gets its decoded text as a smaller line
-# below it. A band writes its artist, album and track titles that way, with U+FF65 as
-# the dot and U+FF0D as the dash (renderer.log, 2026-10-15). Off: --no-morse-subtitle.
-MORSE_SUBTITLE = True
-MORSE_DOTS = set("\uff65.\u00b7\u2022\u2219")      # ･ . · • ∙
-MORSE_DASHES = set("\uff0d-_\u2212\u2013\u2014")  # － - _ − – —
-MORSE_CODE = {
-    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G",
-    "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N",
-    "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U",
-    "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z",
-    "-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
-    ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
-    ".-.-.-": ".", "--..--": ",", "..--..": "?", ".----.": "'", "-.-.--": "!",
-    "-..-.": "/", "-.--.": "(", "-.--.-": ")", ".-...": "&", "---...": ":",
-    "-.-.-.": ";", "-...-": "=", ".-.-.": "+", "-....-": "-", ".-..-.": '"', ".--.-.": "@",
-}
-
-
-def decode_morse(text: str) -> str | None:
-    """The text of a field written entirely in International Morse, else None.
-
-    Letters are separated by one space, words by "/" or a wider gap. Nothing is
-    returned unless every letter decodes and there are at least two of them, so
-    "..." or "-" alone, or a title that merely contains dashes, never counts.
-    """
-    text = (text or "").strip()
-    if not text or any(not (ch in MORSE_DOTS or ch in MORSE_DASHES or ch.isspace() or ch == "/") for ch in text):
-        return None
-    words = []
-    for word in re.split(r"\s*/\s*|\s{2,}", text):
-        letters = word.split()
-        if not letters:
-            return None
-        decoded = ""
-        for letter in letters:
-            key = "".join("." if ch in MORSE_DOTS else "-" for ch in letter)
-            if key not in MORSE_CODE:
-                return None
-            decoded += MORSE_CODE[key]
-        words.append((decoded, len(letters)))
-    if sum(n for _, n in words) < 2:
-        return None
-    return " ".join(w for w, _ in words)
-
-
-def layout_text_block(draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w,
-                      morse_font=None):
-    """Return (y, text, font, fill) for the title/artist/album lines.
-
-    The album starts below the last artist line and gets only the lines that fit
-    above the divider. It used to be clamped to y=110, which drew it over a
-    two-line artist (issue #10). A field in Morse code gives up one of its lines
-    to the decoded text, drawn in `morse_font` (None: no decoded lines). With room
-    for one line only (the album, under a long title and artist), the decoded text
-    replaces the Morse: a truncated Morse line says almost nothing.
-    """
-    items = []
-
-    def field(y, text, font, fill, step, max_lines):
-        decoded = decode_morse(text) if morse_font is not None else None
-        if not decoded or max_lines > 1:
-            for line in fit_text(draw, text, font, max_text_w, max_lines - 1 if decoded else max_lines):
-                items.append((y, line, font, fill))
-                y += step
-        if decoded:
-            for line in fit_text(draw, decoded, morse_font, max_text_w, 1):
-                items.append((y, line, morse_font, MORSE_FILL))
-            y += MORSE_STEP
-        return y
-
-    y = field(9, title, title_font, (242, 242, 245), TITLE_STEP, 3)
-
-    y = max(y + 4, 72)
-    y = field(y, secondary, artist_font, (224, 224, 230), ARTIST_STEP, 2)
-
-    if tertiary:
-        album_y = y + 1
-        room = min(2, (DIVIDER_Y - album_y) // ALBUM_STEP)
-        if room > 0:
-            field(album_y, tertiary, album_font, (180, 180, 188), ALBUM_STEP, room)
-
-    return items
 
 
 def render_media(media: dict) -> Image.Image:
@@ -726,7 +319,7 @@ def render_media(media: dict) -> Image.Image:
     tertiary = media.get("album") or source_name(media.get("source", ""))
 
     for y, line, font, fill in layout_text_block(
-        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w, morse_font
+        draw, title, secondary, tertiary, title_font, artist_font, album_font, max_text_w, morse_font, fit_text
     ):
         draw_text(draw, (text_x, y), line, font, fill)
 
@@ -758,46 +351,6 @@ def render_media(media: dict) -> Image.Image:
         )
 
     return canvas
-
-
-def write_frame_sidecar(frame_id: str, crc: str, reason: str):
-    text = (
-        f"frame_id={frame_id}\n"
-        f"crc32={crc}\n"
-        f"rendered_at={datetime.now().astimezone().isoformat(timespec='seconds')}\n"
-        f"reason={reason}\n"
-    )
-    tmp = FRAME_SIDECAR.with_suffix(".frame.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, FRAME_SIDECAR)
-
-
-def install_image(img: Image.Image, frame_id: str, reason: str) -> str:
-    if not BACKUP_STREAM.exists():
-        raise RuntimeError(f"Known-good stream backup missing: {BACKUP_STREAM}")
-
-    base = BACKUP_STREAM.read_bytes()
-    validate_stream(base)
-
-    frame = rgb565_be_bytes(img)
-    if DLX_FRAMES == 2:
-        modified = bytearray(base)
-        modified[FRAME1_START:FRAME1_START + FRAME_BYTES] = frame
-        modified[FRAME2_START:FRAME2_START + FRAME_BYTES] = frame
-        modified = bytes(modified)
-        validate_stream(modified)
-    else:
-        modified = tiga_dlx.build_stream(base, [frame], DLX_LAYOUT)
-
-    OUTPUT_STREAM.write_bytes(modified)
-
-    crc = stream_crc32(modified)
-    write_frame_sidecar(frame_id, crc, reason)
-
-    tmp = ACTIVE_STREAM.with_suffix(".bin.tmp")
-    tmp.write_bytes(modified)
-    os.replace(tmp, ACTIVE_STREAM)
-    return crc
 
 
 def snapshot() -> dict:
@@ -840,7 +393,7 @@ def thumbnail_digest(media: dict) -> str:
 
 
 def media_key(media: dict) -> str:
-    # Deliberately ignore play/pause state so pausing does not trigger a ~7.7 s image upload.
+    # Deliberately ignore play/pause state so pausing does not trigger a full image upload.
     fields = [
         media.get("source", ""),
         media.get("title", ""),
@@ -853,6 +406,15 @@ def media_key(media: dict) -> str:
         thumbnail_digest(media),
     ]
     return hashlib.sha256("\0".join(fields).encode("utf-8", "replace")).hexdigest()
+
+
+def print_media(media: dict):
+    print(f"Source   : {source_name(media.get('source', ''))}")
+    print(f"Title    : {media.get('title') or '(empty)'}")
+    print(f"Artist   : {media.get('artist') or '(empty)'}")
+    print(f"Album    : {media.get('album') or '(empty)'}")
+    print(f"Duration : {format_duration_ms(media.get('duration_ms', 0)) or '(unknown)'}")
+    print(f"Thumbnail: {'YES' if media.get('thumbnail') else 'NO'}")
 
 
 def configure_output():
@@ -884,161 +446,19 @@ def main():
     print("Ctrl+C to stop.")
     print()
 
-    write_display(render_standby("Waiting for fresh playback"), "startup standby")
-    log("STARTUP -> standby rendered + installed")
-
-    gate = FreshnessGate()
-
-    try:
-        gate.arm(snapshot())
-    except Exception as exc:
-        log(f"Initial media query warning: {exc}")
-
-    mode = "auto"
-
-    # Ignore a stale manual command left over from a previous Windows session.
-    # The renderer always boots into automatic mode; the control utility must
-    # write a new command after startup to override it.
-    try:
-        last_command_text = COMMAND_FILE.read_text(encoding="utf-8").strip().lower()
-    except Exception:
-        last_command_text = None
-
-    active_fp = None
-    active_render_key = None
-    nonplaying_since = None
-    query_error = None
-
-    try:
-        while True:
-            command, last_command_text = read_control_command(last_command_text)
-            if command is not None:
-                if command == "standby":
-                    mode = "standby"
-                    frame = write_display(render_standby("Manual standby"), "control: standby")
-                    active_fp = None
-                    active_render_key = None
-                    log("CONTROL -> manual standby")
-
-                elif command == "black":
-                    mode = "black"
-                    frame = write_display(render_black(), "control: black")
-                    active_fp = None
-                    active_render_key = None
-                    log("CONTROL -> black screen")
-
-                elif command == "auto":
-                    mode = "auto"
-                    frame = write_display(render_standby("Waiting for fresh playback"), "control: auto")
-                    active_fp = None
-                    active_render_key = None
-                    nonplaying_since = None
-
-                    try:
-                        gate.arm(snapshot())
-                    except Exception:
-                        gate.arm(None)
-
-                    log("CONTROL -> automatic mode re-armed")
-
-                write_command_ack(last_command_text, command, frame)
-
-            if mode != "auto":
-                time.sleep(POLL_INTERVAL)
-                continue
-
-            try:
-                media = snapshot()
-                if query_error is not None:
-                    log("Windows media query recovered")
-                    query_error = None
-            except Exception as exc:
-                # Treat a failed query like "no media" so idle handling still applies;
-                # it used to `continue` here and leave the last track up forever
-                # (issue #10). Log each distinct error once, not every second.
-                if str(exc) != query_error:
-                    log(f"Windows media query/render warning: {exc}")
-                    query_error = str(exc)
-                media = {"present": False}
-
-            now_mono = time.monotonic()
-
-            if not media.get("present"):
-                if active_fp is not None:
-                    if nonplaying_since is None:
-                        nonplaying_since = now_mono
-                    elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("No media playing"), "idle: no media")
-                        log("IDLE -> standby rendered + installed")
-                        active_fp = None
-                        active_render_key = None
-                        gate.arm(None)
-                else:
-                    gate.interrupt()
-                time.sleep(POLL_INTERVAL)
-                continue
-
-            state = str(media.get("state", ""))
-            fp = media_fingerprint(media)
-
-            if state != "Playing":
-                if active_fp is not None:
-                    if nonplaying_since is None:
-                        nonplaying_since = now_mono
-                    elif now_mono - nonplaying_since >= IDLE_TO_STANDBY_SECONDS:
-                        write_display(render_standby("Playback stopped"), "idle: playback stopped")
-                        log("IDLE -> standby rendered + installed")
-                        active_fp = None
-                        active_render_key = None
-                        gate.arm(media)
-                else:
-                    gate.observe(media, now_mono)
-
-                time.sleep(POLL_INTERVAL)
-                continue
-
-            nonplaying_since = None
-
-            if active_fp is not None:
-                key = media_key(media)
-                if key != active_render_key:
-                    img = render_media(media)
-                    write_display(img, "media changed")
-
-                    log("NEW WINDOWS MEDIA -> rendered + installed")
-                    print(f"Source   : {source_name(media.get('source', ''))}")
-                    print(f"Title    : {media.get('title') or '(empty)'}")
-                    print(f"Artist   : {media.get('artist') or '(empty)'}")
-                    print(f"Album    : {media.get('album') or '(empty)'}")
-                    print(f"Duration : {format_duration_ms(media.get('duration_ms', 0)) or '(unknown)'}")
-                    print(f"Thumbnail: {'YES' if media.get('thumbnail') else 'NO'}")
-
-                    active_fp = fp
-                    active_render_key = key
-
-                time.sleep(POLL_INTERVAL)
-                continue
-
-            fresh_reason = gate.observe(media, now_mono)
-
-            if fresh_reason:
-                img = render_media(media)
-                write_display(img, f"fresh playback: {fresh_reason}")
-                active_fp = fp
-                active_render_key = media_key(media)
-
-                log(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
-                print(f"Source   : {source_name(media.get('source', ''))}")
-                print(f"Title    : {media.get('title') or '(empty)'}")
-                print(f"Artist   : {media.get('artist') or '(empty)'}")
-                print(f"Album    : {media.get('album') or '(empty)'}")
-                print(f"Duration : {format_duration_ms(media.get('duration_ms', 0)) or '(unknown)'}")
-                print(f"Thumbnail: {'YES' if media.get('thumbnail') else 'NO'}")
-
-            time.sleep(POLL_INTERVAL)
-
-    except KeyboardInterrupt:
-        print("\nStopped Windows Now Playing renderer.")
+    tiga_render_loop.run(
+        log=log,
+        snapshot=snapshot,
+        write_display=write_display,
+        write_command_ack=write_command_ack,
+        read_control_command=read_control_command,
+        render_standby=render_standby,
+        render_black=render_black,
+        render_media=render_media,
+        media_key=media_key,
+        print_media=print_media,
+        command_file=COMMAND_FILE,
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
