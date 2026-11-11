@@ -103,7 +103,9 @@ function Stop-LoggedProcess {
 #   10 unreachable, 11 GATT          -> retry with backoff, then every 5 min, never halt
 #   20 with the "sudden" signature   -> automatic retry after 120 s
 #   20 with the "slowing" signature  -> automatic retry after 300 s
-#                                       (the two share 3 retries per incident, then halt as below)
+#   20 / 21 while Windows went to sleep or shut down ("host-suspend", found in the
+#      System event log, not by the uploader) -> automatic retry after 120 s
+#                                       (all three share 3 retries per incident, then halt as below)
 #   20 otherwise, 21 no completion   -> halt: the keyboard needs a power cycle
 #   30 bad arguments / stream        -> halt: configuration problem
 #   anything else, no marker         -> retry with backoff, then give up
@@ -126,6 +128,19 @@ function Stop-LoggedProcess {
 # shorten these waits: fast retries against a stuck keyboard were bug A. Unclassified failures,
 # 21, and a marker without this run's exit record still halt at once.
 #
+# The host-suspend retry (2026-11-11; NOTES_FOR_MICHI of that date): on 2026-11-03 Michi shut
+# the PC down at 19:59:57 during block 14 of 53. The uploader failed 2 s later with
+# HRESULT 0x8000000E ("A method was called at an unexpected time"): Windows was taking
+# Bluetooth down under it. Unclassified, so it halted, and the display stayed dark for
+# eight days of logins. The keyboard saw what it sees in a sudden failure: the link
+# stopped mid-upload. So it gets the sudden retry: 120 s, sharing the 3 retries. The
+# evidence is Windows' own log (Get-HostPowerTransition), never the error text. Two
+# cases where the supervisor itself is gone are handled at its next start: a retry
+# that was waiting when the PC went down is resumed, and a session marker last written
+# just before a logged sleep or shutdown is retried instead of halting. NOT verified on
+# hardware: whether an upload into a keyboard that was cut off that way, minutes or
+# days earlier, completes without a battery disconnect.
+#
 # A surviving session marker otherwise means "halt, power-cycle" whatever the exit
 # code: a killed or crashed uploader cannot report its own class.
 #
@@ -139,8 +154,40 @@ $BleSlowRetryDelay    = 300               # 10 and 11 after the backoff: every 5
 $BleSlowRetryCodes    = @(10, 11)
 $BleSuddenRetryDelay  = 120               # seconds before an automatic retry after a sudden code 20
 $BleSlowingRetryDelay = 300               # seconds before an automatic retry after a slowing code 20
-$BleAutoRetryMax      = 3                 # automatic retries per incident before halting, either kind
+$BleAutoRetryMax      = 3                 # automatic retries per incident before halting, any kind
 $RendererRestartDelay = 8
+# A sleep, resume or shutdown logged this close to a failure makes it host-suspend. On
+# 2026-11-03 the gap was 2 s; a resume can come long after the sleep, so both count.
+$HostPowerWindowBefore = 60
+$HostPowerWindowAfter  = 10
+
+function Get-HostPowerTransition {
+    # The earliest sleep, resume or shutdown Windows logged between $From and $To, as a
+    # sentence for the log; $null if none, or if the System log can't be read.
+    # Kernel-Power 42 is "entering sleep", which "Shut down" also logs when Fast Startup
+    # is on (it hibernates); 107 is "resumed"; User32 1074 is a shutdown or restart
+    # started by a program or the user. Reading the System log needs no admin rights.
+    param([datetime]$From, [datetime]$To)
+    try {
+        $events = @(Get-WinEvent -ErrorAction Stop -FilterHashtable @{
+            LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power', 'User32'
+            Id = 42, 107, 1074; StartTime = $From; EndTime = $To })
+    } catch { return $null }  # includes "no events found"
+    $e = $events | Where-Object {
+        ($_.Id -eq 1074 -and $_.ProviderName -eq 'User32') -or
+        ($_.Id -ne 1074 -and $_.ProviderName -eq 'Microsoft-Windows-Kernel-Power')
+    } | Sort-Object TimeCreated | Select-Object -First 1
+    if (-not $e) { return $null }
+    $what = switch ($e.Id) {
+        42   { "entering sleep (also logged by Shut down with Fast Startup)" }
+        107  { "resumed from sleep" }
+        1074 { "shutdown or restart started" }
+    }
+    return ("Windows logged at {0:yyyy-MM-dd HH:mm:ss}: {1} (event {2})" -f $e.TimeCreated, $what, $e.Id)
+}
+
+# Replaced by the tests; the supervisor always uses the event log.
+$HostPowerProbe = { param([datetime]$From, [datetime]$To) Get-HostPowerTransition $From $To }
 
 $UploaderExitMeanings = @{
     0  = "success"
@@ -187,13 +234,21 @@ function Get-AutoRetryDelay {
     param([string]$Signature)
     if ($Signature -eq "sudden") { return $BleSuddenRetryDelay }
     if ($Signature -eq "slowing") { return $BleSlowingRetryDelay }
+    if ($Signature -eq "host-suspend") { return $BleSuddenRetryDelay }
     return $null
+}
+
+function Get-AutoRetryKind {
+    # The word the log uses for this signature's failure.
+    param([string]$Signature)
+    switch ($Signature) { "slowing" { "Slowing" } "host-suspend" { "Host-suspend" } default { "Sudden" } }
 }
 
 function Get-UploaderDecision {
     # What to do after the uploader exited. No side effects.
     # $Attempt counts consecutive failed runs including this one; a successful upload resets it.
-    # $Signature is this run's exit record's signature (sudden, slowing, unclassified or "");
+    # $Signature is this run's exit record's signature (sudden, slowing, unclassified or ""), or host-suspend
+    # when Resolve-UploaderExit found a sleep or shutdown in the event log;
     # $AutoRetries is how many automatic retries this incident has already used, of either kind.
     # $StopRequested: STOP_STACK.ps1 asked it to stop (<stream>.stop). A failure still wins:
     # a sudden or slowing code 20 is still scheduled for its automatic retry (which then waits while
@@ -204,7 +259,9 @@ function Get-UploaderDecision {
     $meaning = Get-UploaderExitMeaning $ExitCode
 
     $retryDelay = Get-AutoRetryDelay $Signature
-    if ($ExitCode -eq 20 -and $null -ne $retryDelay) {
+    # 21 (no completion) qualifies only for host-suspend: a 21 on a running PC is a keyboard
+    # that took every block and still did not confirm, which nothing suggests a retry fixes.
+    if (($ExitCode -eq 20 -or ($ExitCode -eq 21 -and $Signature -eq "host-suspend")) -and $null -ne $retryDelay) {
         if ($AutoRetries -lt $BleAutoRetryMax) {
             $n = $AutoRetries + 1
             return New-UploaderDecision retry "$Signature-retry" $false $retryDelay `
@@ -354,6 +411,21 @@ function Resolve-UploaderExit {
     $sigText = if ($signature) { " Signature: $signature." } else { "" }
     Write-SupervisorLog "BLE uploader exited with code $code ($(Get-UploaderExitMeaning $code)).$detail$sigText"
 
+    # Did Windows go to sleep or shut down under the upload? Only for failures that would
+    # otherwise halt; sudden and slowing already retry. ExitTime, not now: after a sleep
+    # the supervisor may only get here once the PC has resumed.
+    if (($code -eq 20 -or $code -eq 21) -and $signature -ne "sudden" -and $signature -ne "slowing") {
+        $exitedAt = try { $proc.ExitTime } catch { $null }
+        if (-not $exitedAt) { $exitedAt = Get-Date }
+        $power = & $HostPowerProbe $exitedAt.AddSeconds(-$HostPowerWindowBefore) $exitedAt.AddSeconds($HostPowerWindowAfter)
+        if ($power) {
+            $was = if ($signature) { $signature } else { "none" }
+            Write-SupervisorLog "The upload failed while Windows went to sleep or shut down: $power. Signature $was -> host-suspend."
+            $signature = "host-suspend"
+            if ($exitRecord) { $exitRecord["signature"] = $signature }
+        }
+    }
+
     if ($State.RetryInFlight -gt 0) {
         $n = $State.RetryInFlight
         if ($stopRequested -and $code -eq 0) {
@@ -386,16 +458,16 @@ function Resolve-UploaderExit {
             Write-RetryState -HaltFile $HaltFile -Status "exhausted" -Retry $auto -Event "halted: $why"
         }
         Write-SupervisorLog "BLE uploader HALTED ($($d.Class)): $($d.Reason). $($d.Instruction) The renderer keeps running."
-    } elseif ($d.Class -eq "sudden-retry" -or $d.Class -eq "slowing-retry") {
+    } elseif ($d.Class -in "sudden-retry", "slowing-retry", "host-suspend-retry") {
         $State.AutoRetries++
         $State.RetryPending = $true
         $at = (Get-Date).AddSeconds($d.Delay)
         $State.NextUploaderStart = $at
         $n = $State.AutoRetries
         $block = if ($exitRecord -and $exitRecord["last_acked_block"]) { ", last ACKed block $($exitRecord["last_acked_block"])" } else { "" }
-        $failure = "code 20, signature $signature$block"
-        $kind = if ($signature -eq "slowing") { "Slowing" } else { "Sudden" }
-        $since = if ($signature -eq "slowing") { "2026-11-02" } else { "2026-10-18" }
+        $failure = "code $code, signature $signature$block"
+        $kind = Get-AutoRetryKind $signature
+        $since = switch ($signature) { "slowing" { "2026-11-02" } "host-suspend" { "2026-11-11" } default { "2026-10-18" } }
         Write-SupervisorLog (("$kind failure ($failure): automatic retry $n of $BleAutoRetryMax at {0:HH:mm:ss}, in $($d.Delay)s. " -f $at) +
             "No power-off for this retry (policy since $since); the uploader halts as before if all $BleAutoRetryMax retries fail.")
         Write-RetryState -HaltFile $HaltFile -Status "waiting" -Retry $n -NextAttemptAt $at -LastFailure $failure `
@@ -433,12 +505,42 @@ function Invoke-SupervisorLoop {
     # resumed: if its session marker is still there, the uploader refuses to start and
     # the supervisor halts, as before the retry existed.
     $retryPath = Get-RetryStatePath $HaltFile
+    $resumed = $false
     if (Test-Path -LiteralPath $retryPath) {
         try { $old = [System.IO.File]::ReadAllText($retryPath) | ConvertFrom-Json } catch { $old = $null }
-        if ($old -and ($old.status -eq "waiting" -or $old.status -eq "running")) {
+        if ($old -and -not $State.Halted -and $old.status -eq "waiting" -and [string]$old.last_failure -match "signature host-suspend") {
+            # The PC went down while this retry waited: that is the case it exists for.
+            $n = [int]$old.retry
+            $at = (Get-Date).AddSeconds($BleSuddenRetryDelay)
+            $State.AutoRetries = $n; $State.RetryPending = $true; $State.NextUploaderStart = $at
+            $resumed = $true
+            Write-RetryState -HaltFile $HaltFile -Status "waiting" -Retry $n -NextAttemptAt $at `
+                -Event ("retry $n of $BleAutoRetryMax resumed after the PC restarted; scheduled for {0:HH:mm:ss}" -f $at)
+            Write-SupervisorLog ("Automatic retry $n of $BleAutoRetryMax (host-suspend) was waiting when the PC went down; resumed, starting at {0:HH:mm:ss}, in $BleSuddenRetryDelay s." -f $at)
+        } elseif ($old -and ($old.status -eq "waiting" -or $old.status -eq "running")) {
             Write-RetryState -HaltFile $HaltFile -Status "abandoned" -Retry ([int]$old.retry) `
                 -Event "retry $($old.retry) of $BleAutoRetryMax abandoned: the supervisor restarted"
             Write-SupervisorLog "An automatic retry ($($old.retry) of $BleAutoRetryMax) was $($old.status) when the previous supervisor stopped; it is not resumed."
+        }
+    }
+    # A session marker with no halt: the supervisor went down with the uploader, mid-upload.
+    # The marker is rewritten at every ACKed block, so its time is the last ACK. A sleep or
+    # shutdown logged just after it means the PC went down under the upload: retry it
+    # (retry 1 of 3) instead of letting the uploader refuse the marker and halt.
+    $marker = Get-Item -LiteralPath "$StreamPath.session" -ErrorAction SilentlyContinue
+    if ($marker -and -not $State.Halted -and -not $resumed) {
+        $lastAck = $marker.LastWriteTime
+        $power = & $HostPowerProbe $lastAck.AddSeconds(-$HostPowerWindowAfter) $lastAck.AddSeconds($HostPowerWindowBefore)
+        if ($power) {
+            $at = (Get-Date).AddSeconds($BleSuddenRetryDelay)
+            $State.AutoRetries = 1; $State.RetryPending = $true; $State.NextUploaderStart = $at
+            $session = Read-KeyValueFile $marker.FullName
+            $block = if ($session -and $session["last_acked_block"]) { ", last ACKed block $($session["last_acked_block"])" } else { "" }
+            $failure = "upload cut off by the PC going down, signature host-suspend$block"
+            Write-RetryState -HaltFile $HaltFile -Status "waiting" -Retry 1 -NextAttemptAt $at -LastFailure $failure `
+                -Event ("host-suspend failure found at start ($failure); retry 1 of $BleAutoRetryMax scheduled for {0:HH:mm:ss}" -f $at)
+            Write-SupervisorLog (("A media session was left open at {0:yyyy-MM-dd HH:mm:ss} and $power. Host-suspend failure: " -f $lastAck) +
+                ("automatic retry 1 of $BleAutoRetryMax at {0:HH:mm:ss}, in $BleSuddenRetryDelay s (no power-off; policy since 2026-11-11)." -f $at))
         }
     }
 
@@ -745,7 +847,7 @@ function Show-StackStatus {
         $verdict = "HALTED - BLE uploader stopped and will NOT retry by itself: $($halt.reason)"
     }
 
-    # Automatic retry after a sudden or slowing failure (docs/design/RETRY_RECOVERY.md). The supervisor
+    # Automatic retry after a sudden, slowing or host-suspend failure (docs/design/RETRY_RECOVERY.md). The supervisor
     # keeps logs\uploader_retry.json up to date; a waiting or running retry outranks the
     # open session marker that goes with it.
     $retryFile = Join-Path $Logs "uploader_retry.json"
@@ -757,7 +859,7 @@ function Show-StackStatus {
     $retrying = (-not $halt) -and $retry -and ($retry.status -eq "waiting" -or $retry.status -eq "running") -and
         ((ConvertTo-LocalTime $retry.updated_at) -gt (Get-Date).AddMinutes(-10))
     if ($retrying) {
-        $failureKind = if ([string]$retry.last_failure -match "signature (\w+)") { $Matches[1] } else { "interrupted" }
+        $failureKind = if ([string]$retry.last_failure -match "signature ([\w-]+)") { $Matches[1] } else { "interrupted" }
         if ($retry.status -eq "waiting") {
             $at = ConvertTo-LocalTime $retry.next_attempt_at
             $verdict = "RETRYING - $failureKind upload failure; automatic retry $($retry.retry) of $($retry.max_retries) at {0:HH:mm:ss} (no power-off needed yet)" -f $at

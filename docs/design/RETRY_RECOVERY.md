@@ -59,8 +59,38 @@ If this goes wrong, the cost is up to 3 more slow uploads against a keyboard tha
 longest so far ran 77.83 s), then the same halt as before. The logs can't show the LCD, so watch it
 in the first days.
 
-The rule still holds for everything else. Failures the uploader can't classify, **21**, and a
-session marker without this run's exit record (a killed or crashed uploader) halt at once.
+**Exception since 2026-11-11: the PC went to sleep or shut down under the upload
+(`host-suspend`).** On 2026-11-03 Michi shut the PC down at 19:59:57 while block 14 of 53 was in
+flight. Two seconds later the uploader failed with `HRESULT 0x8000000E` ("A method was called at an
+unexpected time"), because Windows was taking Bluetooth down. The failure had no stall pattern, so it
+was unclassified and halted. The display then stayed dark through the logins of 11-08, 11-09 and
+11-11. (With Fast Startup on, "Shut down" hibernates the kernel, so Windows logs it as Kernel-Power
+42, "entering sleep".)
+
+From the keyboard's side this is the same as a sudden failure: the link stopped mid-upload. So a
+code 20 or 21 that would otherwise halt is reclassified as `host-suspend` when Windows' System log
+has a Kernel-Power 42 (sleep), 107 (resume) or User32 1074 (shutdown or restart) from 60 s before
+the uploader exited to 10 s after. It then gets the sudden retry: **120 s, sharing the 3 retries.**
+The supervisor decides this, not the uploader. The evidence is Windows' log, never the error text,
+which can mean other things. Two cases where the supervisor itself went down with the PC are handled
+when it next starts:
+
+- **A host-suspend retry was waiting** (`uploader_retry.json` status `waiting`, last failure
+  `signature host-suspend`): it is resumed with the same number, 120 s after the start. Any other
+  waiting or running retry is still abandoned, as before.
+- **A session marker with no halt file:** the marker is rewritten at every ACKed block, so its
+  time is the last ACK. If a sleep, resume or shutdown was logged from 10 s before it to 60 s
+  after it, that is retry 1 of 3. Otherwise the uploader refuses the marker and the supervisor
+  halts, as before. A halt file always wins.
+
+**Not verified on hardware:** whether an upload into a keyboard cut off this way, minutes or days
+earlier, completes without a battery disconnect. The first START_STACK after the 2026-11-03 halt,
+without a reset, is the first data point. If it goes wrong, the cost is up to 3 failed uploads,
+then the same halt as before.
+
+The rule still holds for everything else. Failures the uploader can't classify (with no sleep or
+shutdown logged around them), **21** on a running PC, and a session marker without this run's exit
+record (a killed or crashed uploader) halt at once.
 
 ## Uploader exit codes (`tiga_stream_watch_flow`)
 
@@ -69,8 +99,8 @@ session marker without this run's exit record (a killed or crashed uploader) hal
 | 0 | success (only with `--once`; watch mode normally never exits) | restart |
 | 10 | keyboard unreachable: no adapter, not found, connect failed, link lost before CONTROL2 | retry with backoff, then every 5 min; **never halts** |
 | 11 | connected, but the media service was missing or unusable: every candidate was reached and none qualified (issue #14), or subscribing to its notifications failed | retry with backoff, then every 5 min; **never halts** |
-| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | signature `sudden`: **automatic retry after 120 s**; signature `slowing`: **automatic retry after 300 s**; **3 per incident between them**, then halt. Otherwise **halt, power-cycle** |
-| 21 | every block ACKed, COMPLETE never arrived | **halt, power-cycle** |
+| 20 | transfer interrupted after CONTROL2 (also: refused to start because a session marker exists) | signature `sudden`: **automatic retry after 120 s**; signature `slowing`: **automatic retry after 300 s**; a sleep or shutdown logged around it (`host-suspend`): **automatic retry after 120 s**; **3 per incident between them**, then halt. Otherwise **halt, power-cycle** |
+| 21 | every block ACKed, COMPLETE never arrived | `host-suspend`: as for 20. Otherwise **halt, power-cycle** |
 | 30 | bad arguments, missing or invalid stream, internal error | halt, no power cycle |
 | other | crashed or killed | decided by the session marker (below) |
 
