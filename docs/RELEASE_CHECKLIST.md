@@ -50,7 +50,8 @@ supervisor and Start/Stop/Status scripts. Every step below must pass.
 - [ ] **Get a new setup file**, built from a commit that includes PR #41: the
       `TIGA-Windows-Media-Display-Setup-vpr-<N>` artifact of a PR opened after it merged. `main` gets
       no artifact of its own, because the workflow runs on PRs and tags. Don't use "Run
-      workflow" for this: it uploads to the release its tag names. The v0.3.0-beta.1 setup file
+      workflow" for this: it builds the tag you type, not the branch, and uploads to that
+      tag's release. A tag that isn't pushed yet fails at checkout. The v0.3.0-beta.1 setup file
       is older than these refactors and doesn't count.
 - [ ] Stop the development stack with its own `STOP_STACK.ps1` first (see Phase 8), then install
       v0.3.0-beta.1 from the release page and let it upload a frame, so a `.frame` is left behind.

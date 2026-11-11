@@ -21,6 +21,12 @@
   rested on a single block of about 990 ms. It waits 120 s, where a slowing failure waits 300 s
   (PR #41).
 
+### Release workflow
+
+- **A manual installer run builds the tag it names,** not the branch it was started from, and fails
+  at once on a tag that doesn't exist. It used to build the branch and let `gh release create` make
+  the missing tag on the default branch.
+
 ## v0.3.0-beta.1 (2026-11-02)
 
 ### License

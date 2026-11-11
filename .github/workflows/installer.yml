@@ -20,8 +20,14 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # A manual run builds the tag it names, not the branch it was started from, so the
+      # installer published under a tag is that tag's code. refs/tags/ means a mistyped or
+      # missing tag fails here, before anything is built. Tags from before PR #42 have no
+      # .github/actions/offline-tests, so rebuilding one stops at "Offline tests".
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || '' }}
 
       - name: Resolve version
         shell: pwsh
@@ -136,6 +142,7 @@ jobs:
         run: |
           # A new release takes its text from docs/RELEASE_TEXT_<tag>.md, if the checked-out commit
           # has one. An existing release keeps its text: only the installer below is replaced.
+          # --verify-tag: never create the tag here; it must already be pushed.
           gh release view "$env:TIGA_TAG" --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -ne 0) {
             $textFile = "docs/RELEASE_TEXT_$($env:TIGA_TAG).md"
@@ -146,7 +153,7 @@ jobs:
               Write-Host "New release: no $textFile, so generated notes"
               $notes = @("--generate-notes")
             }
-            gh release create "$env:TIGA_TAG" --repo "${{ github.repository }}" --title "TIGA Windows Media Display $env:TIGA_TAG" @notes
+            gh release create "$env:TIGA_TAG" --repo "${{ github.repository }}" --title "TIGA Windows Media Display $env:TIGA_TAG" --verify-tag @notes
             if ($LASTEXITCODE -ne 0) { throw "Could not create the release $env:TIGA_TAG." }
           } else {
             Write-Host "Release $env:TIGA_TAG exists: its text is left alone"
