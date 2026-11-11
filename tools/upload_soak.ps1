@@ -19,8 +19,8 @@ param(
     [ValidateRange(1, 1000)][int]$Count = 30,
     [int]$PauseSeconds = 3,
     [int]$AckTimeoutSeconds = 15,
-    # Long enough for all 3 automatic retries: each waits 120 s, then uploads.
-    [int]$DeliveryTimeoutSeconds = 480,
+    # Long enough for all 3 automatic retries: each waits up to 300 s, then scans and uploads.
+    [int]$DeliveryTimeoutSeconds = 1320,
     [int]$PollMilliseconds = 500,
     [switch]$ConfirmUploads
 )

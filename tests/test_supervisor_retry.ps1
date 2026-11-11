@@ -32,8 +32,8 @@ $haltFile = Join-Path $logs "uploader_halted.json"
 Write-Host "== decision table"
 
 function Decide {
-    param($Code, $Attempt, $Session = $null, $Signature = "", $SuddenRetries = 0)
-    Get-UploaderDecision -ExitCode $Code -Session $Session -Attempt $Attempt -Signature $Signature -SuddenRetries $SuddenRetries
+    param($Code, $Attempt, $Session = $null, $Signature = "", $AutoRetries = 0)
+    Get-UploaderDecision -ExitCode $Code -Session $Session -Attempt $Attempt -Signature $Signature -AutoRetries $AutoRetries
 }
 
 $delays = 1..4 | ForEach-Object { (Decide 10 $_).Delay }
@@ -67,11 +67,22 @@ Assert-True ($sudden[0].Reason -match "automatic retry 1 of 3" -and $sudden[2].R
 $d = Decide 20 4 $marker "sudden" 3
 Assert-True ($d.Action -eq "halt" -and $d.Class -eq "session-open" -and $d.NeedsPowerCycle -and $d.Instruction -eq $PowerCycleInstruction) "after 3 retries: halt exactly as before (same class and instruction)"
 Assert-True ($d.Reason -match "all 3 automatic retries have failed") "the halt reason says the retries failed"
-foreach ($sig in "slowing", "unclassified", "") {
+# Slowing-failure retry (asked for 2026-11-02): the same, after 300 s, sharing the count.
+$slowing = 0..2 | ForEach-Object { Decide 20 ($_ + 1) $marker "slowing" $_ }
+Assert-True (@($slowing | Where-Object { $_.Action -eq "retry" -and $_.Class -eq "slowing-retry" -and $_.Delay -eq 300 -and -not $_.NeedsPowerCycle }).Count -eq 3) "slowing code 20: retries 1-3 after 300 s, no power cycle"
+Assert-True ($slowing[1].Reason -match "signature slowing: automatic retry 2 of 3") "the reason names the signature and the retry number"
+$d = Decide 20 4 $marker "slowing" 3
+Assert-True ($d.Action -eq "halt" -and $d.Class -eq "session-open" -and $d.NeedsPowerCycle -and $d.Instruction -eq $PowerCycleInstruction -and $d.Reason -match "signature slowing, and all 3 automatic retries have failed") "after 3 retries a slowing failure halts as before"
+Assert-True ((Decide 20 2 $marker "sudden" 1).Delay -eq 120 -and (Decide 20 2 $marker "slowing" 1).Delay -eq 300) "the wait follows the failure just seen; the count is shared"
+Assert-True ((Decide 20 3 $marker "sudden" 3).Action -eq "halt" -and (Decide 20 3 $marker "slowing" 3).Action -eq "halt") "3 retries used by any mix: either kind halts"
+Assert-True ($BleSuddenRetryDelay -eq 120 -and $BleSlowingRetryDelay -eq 300 -and $BleAutoRetryMax -eq 3) "the waits and the limit"
+foreach ($sig in "unclassified", "") {
     $d = Decide 20 1 $marker $sig 0
     Assert-True ($d.Action -eq "halt" -and $d.NeedsPowerCycle) "code 20, signature '$sig': halts at once"
 }
-Assert-True ((Decide 20 1 $marker "slowing" 0).Reason -match "signature slowing, so no automatic retry") "a slowing halt says why there was no retry"
+Assert-True ((Decide 20 1 $marker "unclassified" 0).Reason -match "signature unclassified, so no automatic retry") "an unclassified halt says why there was no retry"
+Assert-True ((Decide 21 1 $marker "slowing" 0).Action -eq "halt") "code 21 halts at once, even with a slowing signature"
+Assert-True ((Decide 1 1 $marker "slowing" 0).Action -eq "halt") "a killed uploader with a marker halts, even with a stray slowing signature"
 Assert-True ((Decide 21 1 $marker "sudden" 0).Action -eq "halt") "code 21 halts at once, whatever the signature"
 Assert-True ((Decide 1 1 $marker "sudden" 0).Action -eq "halt") "a killed uploader (code 1) with a marker halts, even with a stray signature"
 Assert-True ((Decide 20 1 $null "sudden" 0).Action -eq "retry") "sudden code 20 retries even if the marker is already gone"
@@ -124,6 +135,7 @@ Set-Content -LiteralPath $sleeper -Encoding ASCII -Value 'import time; time.slee
 $BleRetryDelays = @(0.3, 0.6, 1.2, 2.4)
 $BleSlowRetryDelay = 3
 $BleSuddenRetryDelay = 0.4
+$BleSlowingRetryDelay = 0.8
 $RendererRestartDelay = 0.2
 
 function Invoke-Scenario {
@@ -211,15 +223,13 @@ $s = Invoke-Scenario "sudden code 20, then a retry that delivers" -Plan @(@(20, 
 $log = Get-Content -Raw $SupervisorLog
 $r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
 Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt)) "one retry, not halted"
-Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and $s.SuddenRetries -eq 0 -and $s.RetryInFlight -eq 0) "success logged while the uploader runs; count reset"
+Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and $s.AutoRetries -eq 0 -and $s.RetryInFlight -eq 0) "success logged while the uploader runs; count reset"
 Assert-True ($r.status -eq "succeeded" -and $r.retry -eq 1) "retry state: succeeded"
 
-# 2d. Slowing and unclassified failures still halt at once.
-foreach ($sig in "slowing", "unclassified") {
-    $s = Invoke-Scenario "code 20, signature $sig" -Plan @(, @(20, "marker", "record", $sig)) -Iterations 20
-    $h = Read-Halt
-    Assert-True ($s.UploaderStarts -eq 1 -and $h.class -eq "session-open" -and $h.auto_retries -eq 0 -and $h.reason -match "signature $sig, so no automatic retry") "signature ${sig}: halted at once, no retry"
-}
+# 2d. Unclassified failures still halt at once.
+$s = Invoke-Scenario "code 20, signature unclassified" -Plan @(, @(20, "marker", "record", "unclassified")) -Iterations 20
+$h = Read-Halt
+Assert-True ($s.UploaderStarts -eq 1 -and $h.class -eq "session-open" -and $h.auto_retries -eq 0 -and $h.reason -match "signature unclassified, so no automatic retry") "signature unclassified: halted at once, no retry"
 $s = Invoke-Scenario "code 21 with a sudden-looking record" -Plan @(, @(21, "marker", "record", "sudden")) -Iterations 20
 Assert-True ($s.UploaderStarts -eq 1 -and (Read-Halt).needs_power_cycle) "code 21 halts at once"
 
@@ -235,6 +245,49 @@ $s = Invoke-Scenario "sudden, then code 10, then deliver" -Plan @(@(20, "marker"
 $log = Get-Content -Raw $SupervisorLog
 Assert-True ($log -match "Automatic retry 1 of 3 has not reached the keyboard yet \(code 10\)" -and $log -match "Automatic retry 1 of 3 SUCCEEDED") "code 10 during a retry: backoff, then retry 1 succeeds"
 Assert-True ($s.UploaderStarts -eq 3 -and -not $s.Halted) "not halted (starts: $($s.UploaderStarts))"
+
+function Get-StartGaps {
+    param($State)
+    $gaps = @()
+    for ($i = 1; $i -lt $State.Starts.Count; $i++) { $gaps += ($State.Starts[$i] - $State.Starts[$i - 1]).TotalSeconds }
+    return $gaps
+}
+
+# 2g. Slowing failures: three automatic retries with the longer wait, then halt.
+$s = Invoke-Scenario "slowing code 20 every time" -Plan @(, @(20, "check", "marker", "record", "slowing")) -Iterations 110
+$h = Read-Halt
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+$gaps = Get-StartGaps $s
+Assert-True ($s.UploaderStarts -eq 4) "1 run + 3 automatic retries (starts: $($s.UploaderStarts))"
+Assert-True ($log -notmatch "code 77") "the marker was removed before every retry"
+Assert-True (@($gaps | Where-Object { $_ -lt $BleSlowingRetryDelay }).Count -eq 0) "never sooner than the slowing wait: $(($gaps | ForEach-Object { '{0:n2}' -f $_ }) -join ', ') s"
+foreach ($n in 1..3) {
+    Assert-True ($log -match "Slowing failure \(code 20, signature slowing, last ACKed block 17\): automatic retry $n of 3 at \d\d:\d\d:\d\d, in 0\.8s\. No power-off for this retry \(policy since 2026-11-02\)" -and $log -match "Automatic retry $n of 3: session marker removed; starting" -and $log -match "Automatic retry $n of 3 FAILED \(code 20, signature slowing\)") "retry ${n}: scheduled, started and its failure logged"
+}
+Assert-True ($s.Halted -and $h.class -eq "session-open" -and $h.needs_power_cycle -and $h.instruction -eq $PowerCycleInstruction -and $h.auto_retries -eq 3 -and $h.signature -eq "slowing" -and $h.reason -match "all 3 automatic retries have failed") "then halted as before, with the signature and the retries"
+Assert-True ($r.status -eq "exhausted" -and @($r.events)[-1] -match "all 3 automatic retries failed" -and (@($r.events) -match "slowing failure \(code 20").Count -ge 1) "retry state: exhausted, with the events"
+Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "renderer untouched"
+
+# 2h. One count for both kinds; each wait follows the failure just seen.
+$s = Invoke-Scenario "sudden, slowing, sudden, slowing" `
+    -Plan @(@(20, "check", "marker", "record", "sudden"), @(20, "check", "marker", "record", "slowing"), @(20, "check", "marker", "record", "sudden"), @(20, "check", "marker", "record", "slowing")) -Iterations 110
+$h = Read-Halt
+$gaps = Get-StartGaps $s
+Assert-True ($s.UploaderStarts -eq 4 -and $s.Halted -and $h.auto_retries -eq 3 -and $h.signature -eq "slowing") "the kinds share 3 retries, then halt (starts: $($s.UploaderStarts))"
+Assert-True ($gaps[0] -ge $BleSuddenRetryDelay -and $gaps[1] -ge $BleSlowingRetryDelay -and $gaps[2] -ge $BleSuddenRetryDelay) "each wait follows the failure before it: $(($gaps | ForEach-Object { '{0:n2}' -f $_ }) -join ', ') s"
+
+# 2i. A retry that delivers ends a slowing incident too.
+$s = Invoke-Scenario "slowing code 20, then a retry that delivers" -Plan @(@(20, "marker", "record", "slowing"), @(0, "check", "deliver", "stay")) -Iterations 45
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt)) "one retry, not halted"
+Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and $s.AutoRetries -eq 0 -and $s.RetryInFlight -eq 0 -and $r.status -eq "succeeded") "success logged; count reset"
+
+# 2j. A delivered frame resets the count after a slowing failure as well.
+$s = Invoke-Scenario "slowing, then deliver-and-fail, then slowing x4" `
+    -Plan @(@(20, "marker", "record", "slowing"), @(20, "deliver", "marker", "record", "slowing"), @(20, "marker", "record", "slowing")) -Iterations 150
+Assert-True ($s.UploaderStarts -eq 5 -and (Read-Halt).auto_retries -eq 3) "1 + 1 retry (delivered, then failed) + 3 fresh retries (starts: $($s.UploaderStarts))"
 
 # 3. Uploader killed mid-transfer: the exit code is meaningless (1) but the marker survives.
 $s = Invoke-Scenario "killed (code 1) with marker" -Plan @(, @(1, "marker", "stale")) -Iterations 20
@@ -370,7 +423,7 @@ $log = Get-Content -Raw $SupervisorLog
 $r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
 Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt)) "retry 1 started, then stopped on request; no halt (starts: $($s.UploaderStarts))"
 Assert-True ($log -match "Automatic retry 1 of 3 ended by a stop request before it delivered a frame; not counted as a failure" -and $log -notmatch "Automatic retry 1 of 3 FAILED") "the exit on request is not a failed retry"
-Assert-True ($s.SuddenRetries -eq 1 -and $s.RetryInFlight -eq 0 -and -not $s.RetryPending -and $r.status -eq "cancelled") "count unchanged, nothing pending, retry state cancelled"
+Assert-True ($s.AutoRetries -eq 1 -and $s.RetryInFlight -eq 0 -and -not $s.RetryPending -and $r.status -eq "cancelled") "count unchanged, nothing pending, retry state cancelled"
 Assert-True ($log -notmatch "Restarting BLE uploader" -and $s.Attempts -eq 1) "no restart, and the stop added no failed attempt"
 
 $BleSuddenRetryDelay = 3
@@ -379,16 +432,25 @@ $s = Invoke-StopScenario "stop during the wait for an automatic retry" -Plan @(,
 $log = Get-Content -Raw $SupervisorLog
 Assert-True ($s.UploaderStarts -eq 1 -and $s.RetryPending) "the waiting retry did not start while the request stood (starts: $($s.UploaderStarts))"
 Assert-True ($log -match "Stop requested while automatic retry 1 of 3 is waiting; it will not start while the request stands") "the hold is logged"
-$msg = Stop-PendingSuddenRetry -HaltFile $haltFile
+$msg = Stop-PendingAutoRetry -HaltFile $haltFile
 $r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
 Assert-True ($msg -match "automatic retry 1 of 3 was waiting; cancelled" -and $r.status -eq "cancelled" -and @($r.events)[-1] -match "cancelled by STOP_STACK") "STOP_STACK's cleanup records the cancelled wait"
-Assert-True ($null -eq (Stop-PendingSuddenRetry -HaltFile $haltFile)) "cancelling twice does nothing"
+Assert-True ($null -eq (Stop-PendingAutoRetry -HaltFile $haltFile)) "cancelling twice does nothing"
 $BleSuddenRetryDelay = 0.4
+
+$BleSlowingRetryDelay = 3
+$s = Invoke-StopScenario "stop during the wait after a slowing failure" -Plan @(, @(20, "marker", "record", "slowing")) -Iterations 50 -Job $stopSoon
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($s.UploaderStarts -eq 1 -and $s.RetryPending -and -not $s.Halted) "the waiting retry did not start while the request stood (starts: $($s.UploaderStarts))"
+Assert-True ($log -match "Stop requested while automatic retry 1 of 3 is waiting") "the hold is logged"
+$msg = Stop-PendingAutoRetry -HaltFile $haltFile
+Assert-True ($msg -match "automatic retry 1 of 3 was waiting; cancelled") "STOP_STACK's cleanup cancels it"
+$BleSlowingRetryDelay = 0.8
 
 $s = Invoke-StopScenario "stop requested; the upload in progress fails suddenly on its way out" `
     -Plan @(, @(20, "wait-stop", "marker", "record", "sudden")) -Iterations 40 -Job $requestStop
 $log = Get-Content -Raw $SupervisorLog
-Assert-True ($s.UploaderStarts -eq 1 -and -not $s.Halted -and $s.RetryPending -and $s.SuddenRetries -eq 1) "a real sudden failure is still scheduled for its retry, held by the request"
+Assert-True ($s.UploaderStarts -eq 1 -and -not $s.Halted -and $s.RetryPending -and $s.AutoRetries -eq 1) "a real sudden failure is still scheduled for its retry, held by the request"
 Assert-True ($log -match "automatic retry 1 of 3 at" -and $log -notmatch "stopped on request") "logged as the sudden failure it is"
 
 # Invoke-StackStop is STOP_STACK.ps1's logic. The task and the force-kill are stand-ins:
@@ -481,7 +543,7 @@ Assert-True ($out -match "exit code 20") "status shows the exit code"
 Assert-True ($out -match "r-f0042; last ACKed block 17/53") "status shows frame and block"
 Assert-True ($out -match "Action\s+: Disconnect the keyboard's battery.*START_STACK\.ps1") "status gives the power-cycle instruction"
 # Halt after automatic retries: STATUS says so.
-$decision = Get-UploaderDecision -ExitCode 20 -Session @{ frame_id = "r-f0042" } -Attempt 4 -Signature "sudden" -SuddenRetries 3
+$decision = Get-UploaderDecision -ExitCode 20 -Session @{ frame_id = "r-f0042" } -Attempt 4 -Signature "sudden" -AutoRetries 3
 Write-UploaderHaltState -Path (Join-Path $root "logs\uploader_halted.json") -Decision $decision -ExitCode 20 `
     -Session @{ frame_id = "r-f0042"; last_acked_block = "51"; total_blocks = "53" } `
     -ExitRecord @{ detail = "timed out waiting for PROGRESS after 4K block 52/53"; signature = "sudden" } -Attempts 4 -AutoRetries 3
@@ -497,6 +559,16 @@ Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status
 $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
 Assert-True ($out -match "Status\s+: RETRYING - sudden upload failure; automatic retry 1 of 3 at \d\d:\d\d:\d\d" -and $out -notmatch "HALTED") "a waiting retry is shown as RETRYING, with its time"
 Assert-True ($out -match "Auto-retry\s+: waiting, retry 1 of 3; last failure: code 20, signature sudden, last ACKed block 26" -and $out -match "retry 1 of 3 scheduled") "the retry line and its events are shown"
+Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "running" -Retry 1 -Event "retry 1 of 3 started"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: RETRYING - automatic retry 1 of 3 after a sudden upload failure is in progress") "a running retry after a sudden failure says so"
+Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "waiting" -Retry 2 -LastFailure "code 20, signature slowing, last ACKed block 37" `
+    -NextAttemptAt ((Get-Date).AddSeconds(300)) -Event "slowing failure; retry 2 of 3 scheduled"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: RETRYING - slowing upload failure; automatic retry 2 of 3 at \d\d:\d\d:\d\d \(no power-off needed yet\)" -and $out -notmatch "HALTED") "a waiting retry after a slowing failure says so"
+Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "running" -Retry 2 -Event "retry 2 of 3 started"
+$out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
+Assert-True ($out -match "Status\s+: RETRYING - automatic retry 2 of 3 after a slowing upload failure is in progress") "and so does a running one"
 Write-RetryState -HaltFile (Join-Path $root "logs\uploader_halted.json") -Status "succeeded" -Retry 1 -Event "retry 1 of 3 succeeded (frame delivered)"
 Remove-Item -LiteralPath "$fakeStream.session"
 $out = (& (Join-Path $root "STATUS_STACK.ps1") 6>&1 | Out-String -Width 400)
