@@ -1181,3 +1181,24 @@ async fn no_answer_to_control1_is_unreachable_and_never_sends_control2() {
     assert!(read_session_marker(&stream_path).is_none(), "no session before CONTROL2");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn a_2ms_pause_lasts_about_2ms_after_the_timer_request() {
+    // Without the request, tokio's 2 ms sleep lasted a 15.6 ms tick: the single-frame trial,
+    // run with the default 2 ms pace, had 420 ms blocks (2026-11-11, timing.rs).
+    assert!(request_fine_timer(), "timeBeginPeriod(1) refused");
+    let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    let mut pauses: Vec<Duration> = rt.block_on(async {
+        let mut v = Vec::new();
+        for _ in 0..40 {
+            let t = Instant::now();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            v.push(t.elapsed());
+        }
+        v
+    });
+    pauses.sort();
+    let median = pauses[pauses.len() / 2];
+    assert!(median < Duration::from_millis(9), "a 2 ms pause took {median:?} (median of 40); a 15.6 ms tick means the request had no effect");
+}

@@ -1,6 +1,40 @@
-//! Per-block timing of an upload.
+//! Per-block timing of an upload, and the timer resolution the write pacing depends on.
 
 use std::time::Duration;
+
+// ---- Timer resolution (2026-11-11) -------------------------------------------------
+//
+// With a non-zero --intra-block-ms (default 2), the bulk loop sleeps that long after each of
+// the ~23 writes per 4K block, with tokio::time::sleep. On Windows that sleep only lasts
+// about 2-3 ms if this process has asked for a fine timer. Since Windows 10 2004 another
+// program raising the system resolution no longer counts. Without it the sleep lasts a
+// whole 15.6 ms tick. Measured on Michi's PC, 2026-11-11, same binary, same afternoon:
+//
+//   --intra-block-ms 0 (both supervisors; no sleep)  median block 157 ms, upload  8.89 s
+//   default 2 ms, no request (single-frame trial)    median block 420 ms, upload 23.27 s
+//   a 2 ms sleep, no request / requested             median 15.5 ms / 3.15 ms
+//
+// Production passes 0, so it never sleeps here and this changes nothing for it. It
+// matters for runs that use the default, such as manual tests: with the request a 2 ms
+// pace costs about 3 ms per write instead of 15.6. The request lasts until the process
+// exits, which releases it.
+
+/// Asks Windows for 1 ms timer resolution for this process. True if it was granted.
+pub(crate) fn request_fine_timer() -> bool {
+    #[cfg(windows)]
+    {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeBeginPeriod(u_period: u32) -> u32;
+        }
+        // TIMERR_NOERROR is 0.
+        unsafe { timeBeginPeriod(1) == 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
 
 // ---- Per-block timing (PROJECT_HISTORY §7.1) --------------------------------------
 //

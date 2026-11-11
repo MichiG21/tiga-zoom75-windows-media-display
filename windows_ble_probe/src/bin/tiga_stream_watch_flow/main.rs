@@ -32,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 use stream::{build_chunks, crc32, validate_stream};
-use timing::UploadTimings;
+use timing::{request_fine_timer, UploadTimings};
 use upload::upload_stream;
 
 // The tests see everything through `use super::*`.
@@ -127,8 +127,13 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let (intra_block_ms, block_timeout_ms) = (opts.intra_block_ms, opts.block_timeout_ms);
     let (once, allow_single_frame) = (opts.once, opts.allow_single_frame);
 
+    let fine_timer = request_fine_timer();
     println!("Stream          : {}", stream_path.display());
     println!("Intra-block pace: {} ms/write", intra_block_ms);
+    println!(
+        "Timer resolution: {}",
+        if fine_timer { "1 ms requested" } else { "1 ms request REFUSED: each pause may last 15.6 ms" }
+    );
     println!("Flow control    : WAIT for one PROGRESS after every 4096-byte DLX block");
     println!("Block timeout   : {} ms", block_timeout_ms);
     println!("Mode            : {}", if once { "one upload" } else { "watch + coalesce" });
