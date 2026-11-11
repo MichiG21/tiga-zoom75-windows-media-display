@@ -2806,3 +2806,68 @@ clear, 2 uploads completed, then 2 sudden failures, then retry 2 of 3 worked at 
   PR #41.
 - **Retry 3 of 3 and halts:** a slowing failure that uses all 3 retries still ends in a halt, and
   that one needs you.
+
+# Unattended run while Michi is at school, 2026-11-11
+
+Three PRs, none merged, no tag: **#44** (host-suspend retry), **#45** (installer builds the tag) and
+**#46** (single-frame trial, plus these notes). Claude sent nothing to the keyboard, ran no stack
+script, and only read `tiga-fresh-test` (logs and the current stream).
+
+## The display has been dark since 2026-11-03
+
+`logs\uploader_halted.json`: halted at 19:59:59, code 20, block 13 of 53, `HRESULT 0x8000000E` ("A
+method was called at an unexpected time"), signature unclassified. **Windows logged Kernel-Power 42
+at 19:59:57.** That is your shutdown: with Fast Startup, "Shut down" hibernates the kernel and logs
+"entering sleep". The logins on 11-08, 11-09 and 11-11 all respected the halt. The live install is
+also still on `0bc4d4c`, so PR #43 isn't running there either.
+
+## #44: retry an upload cut off by the PC going to sleep or shutting down
+
+A code 20 or 21 that would otherwise halt becomes `host-suspend` when the System log has Kernel-Power
+42 or 107, or User32 1074, from 60 s before the exit to 10 s after. It gets the sudden retry: 120 s,
+sharing the 3. At the next start, a waiting host-suspend retry is resumed, and a session marker last
+written just before a logged sleep or shutdown becomes retry 1 of 3. A halt file always wins.
+Supervisor only, no rebuild. Retry checks 203 → 224. The real probe finds 19:59:57 for the 11-03
+failure and nothing around the healthy 19:32:05 delivery.
+
+**This is a bet in the same way as the slowing retry:** whether an upload completes into a keyboard
+that was cut off like this, without a battery disconnect, is unknown.
+
+## #45: a manual installer run builds the tag it names
+
+The checkout uses `refs/tags/<tag>` on `workflow_dispatch`, and `gh release create` gets `--verify-tag`.
+Both items from the 11-02 "Open for Michi" are fixed. Limit: tags from before #42 stop at "Offline
+tests", safely. Only checked by the PR's own CI run.
+
+## #46: the single-frame trial is ready to run
+
+It turned out to be mostly done already (task 8 of an earlier run): `DLX_FORMAT.md`, `tiga_dlx.py`,
+and the two flags. PROJECT_HISTORY §3.4 and §10 didn't say so; now they do. New:
+`tools/single_frame_trial.py` writes three labelled streams. **All three were dry-run** with the
+uploader built from `e20f589`: 1,239 writes and 53 blocks for two frames, 621 and 26 for one, and
+code 30 for a one-frame stream without the flag. That's the dry run the earlier session couldn't
+do. `DLX_FORMAT.md` now has the hardware trial as exact commands.
+
+**Header (task 3):** a header integrity field is ruled out as the cause of the fragmentation glitch.
+The live stream's 485-byte header and its trailer are byte-identical to the capture while its pixels
+differ, and those uploads display. Recorded in §10.
+
+## Not done
+
+- **APK / JADX (§10):** there's no PocketWuque APK or JADX on this PC. The APK would have to come from
+  your phone (`adb`) or a mirror. That's your choice; I didn't download anything.
+- Preamble `02 02` → `01 01`: needs an uploader change, because the preamble is checked byte for byte.
+  It's only worth doing if both one-frame layouts fail.
+
+## Open for Michi
+
+- **Running START_STACK remotely without a battery disconnect** is the first real data point for #44.
+  The worst case is that the uploader fails and halts again (the same state as now), or the LCD
+  shows something broken until the next battery disconnect. I can read the logs afterwards and say
+  whether the keyboard confirmed COMPLETE, but not what the LCD shows.
+- **Pull `main` in `tiga-fresh-test`** to get #43 (and #44 if you merge it). The checklist count
+  restarts with script changes; your call, as before.
+- **The single-frame trial** (`DLX_FORMAT.md`) needs you at the keyboard: it uses `--confirm-flow-watch`
+  and battery disconnects.
+- **To think about:** turning off Fast Startup would make "Shut down" a real shutdown. #44 doesn't
+  need that, though, because it reads both events.
