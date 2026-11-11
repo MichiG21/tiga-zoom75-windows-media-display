@@ -2892,3 +2892,34 @@ at least for long gaps. Options before merging #44, Michi's call:
 - wait for a cut-off of minutes, not days, to compare.
 
 The next step on the hardware is the battery disconnect (at least 30 s), then START_STACK.
+
+# Clean stop, then a stuck first upload, 2026-11-11 15:49
+
+Michi ran STOP_STACK and START_STACK on the live install at `e3ffdf6`, to start #44 and #48. The
+keyboard had had a battery disconnect before the 15:46 start, and two uploads had completed since
+(8.47 s and 8.65 s). Claude only read the logs.
+
+| Time | Event |
+|---|---|
+| 15:47:51 | Last upload before the stop completed (8.65 s); uploader idle |
+| 15:49:00 | `STOP_STACK: BLE uploader exited on request after 0,3 s.` `ble.log`: `STOP requested; no upload in progress, disconnecting.`, `Disconnected cleanly.`, code 0 |
+| 15:49:13 | Stack started. Keyboard seen at once (-50 dBm), **no invisible period**, no code 10 |
+| 15:49:16 | First upload: block 6 `SLOW` 1972 ms, no PROGRESS for block 7. **Sudden failure** after about 6 s. The LCD stayed on the upload animation |
+| 15:51:24 | Automatic retry 1 of 3 (#28), no power-off: **completed in 8.85 s**, median 151 ms |
+
+**What it says about the clean-stop hypothesis** (`docs/design/CLEAN_STOP.md`): the disconnect was
+clean, and the first upload still failed. Clean idle stops followed by a plain restart, with nothing
+else in between: B and E (2026-10-22, `tiga-dev`), 17:27 on 2026-11-02, and today. **1 failure in
+4**, against the force-kill baseline of **3 in 9**. Not counted: C (a stop during an upload, failed)
+and the two live failures on 2026-10-22, which followed RAM-read sessions from the runtime lab (§7.1,
+seventh part). Four restarts can't separate 1 in 4 from 1 in 3. **No invisible period has been seen
+after any clean stop** (baseline 4 of 9), which is the part of the hypothesis that still looks right.
+
+Also at 15:47:29: an upload started and failed after 0.15 s with `HRESULT 0x80000013 "The object has
+been closed."`, code 10. That's Windows closing the link before CONTROL1, so no session was opened.
+The 8 s backoff restart completed (8.65 s). First time this error has been logged.
+
+## Open for Michi
+
+- **Keep counting:** note every STOP_STACK/START_STACK without a battery disconnect. The plan asks
+  for 10.
