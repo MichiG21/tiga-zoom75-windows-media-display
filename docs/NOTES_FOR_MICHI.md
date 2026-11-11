@@ -2871,3 +2871,24 @@ differ, and those uploads display. Recorded in §10.
   and battery disconnects.
 - **To think about:** turning off Fast Startup would make "Shut down" a real shutdown. #44 doesn't
   need that, though, because it reads both events.
+
+## Later the same day: START_STACK without a battery disconnect (the first data point for #44)
+
+Michi ran START_STACK remotely at 13:36, on `0bc4d4c` (without #43), with no battery disconnect since
+the 2026-11-03 cut-off. Signal -49 dBm.
+
+- 13:36:16: failed at block 7 of 53 (block 6 took 2362 ms; median 135 ms), signature **sudden**, so
+  retry 1 of 3 at 13:38:28.
+- 13:38:29: retry 1 slowed from block 5 (median 1072 ms, max 2475 ms) and stalled at block 22 after
+  28.13 s, signature **slowing**. Without #43 that **halted** at 13:39:01.
+
+**0 of 2 uploads completed after a host-suspend cut-off 8 days earlier, without a reset.** That's
+one incident, and the keyboard sat for 8 days, not minutes. Still, it's evidence against #44's bet,
+at least for long gaps. Options before merging #44, Michi's call:
+
+- merge it as it is: the cost per incident is up to 3 failed uploads, then the same halt;
+- resume only a retry that was waiting, and halt for a marker found at start (which is what this
+  case was), or
+- wait for a cut-off of minutes, not days, to compare.
+
+The next step on the hardware is the battery disconnect (at least 30 s), then START_STACK.
