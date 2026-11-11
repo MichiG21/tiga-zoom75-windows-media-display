@@ -192,7 +192,12 @@ foreach ($c in 10, 11) {
     $gaps = @(); for ($i = 1; $i -lt $s.Starts.Count; $i++) { $gaps += ($s.Starts[$i] - $s.Starts[$i - 1]).TotalSeconds }
     $shown = ($gaps | ForEach-Object { '{0:n2}' -f $_ }) -join ', '
     Assert-True ($s.UploaderStarts -ge 6) "code ${c}: uploader still restarted after the backoff (starts: $($s.UploaderStarts))"
-    Assert-True ($gaps[1] -gt $gaps[0] -and $gaps[2] -gt $gaps[1] -and $gaps[3] -gt $gaps[2] -and $gaps[4] -gt $gaps[3]) "code ${c}: gaps grow, then the slow interval: ${shown}s"
+    # Start-to-start gaps include the dummy's own run time (a Python start, over 1 s on a cold
+    # CI runner), so they can't be compared with each other: 1.52, 0.95, ... failed on PR #46.
+    # Each must be at least its own delay: the backoff in order, then the slow interval.
+    $expected = @($BleRetryDelays) + @($BleSlowRetryDelay, $BleSlowRetryDelay)
+    $short = @(0..5 | Where-Object { $gaps[$_] -lt $expected[$_] - 0.05 })
+    Assert-True ($gaps.Count -ge 6 -and $short.Count -eq 0) "code ${c}: each gap at least its delay ($($expected -join ', ')), then the slow interval: ${shown}s"
     Assert-True (-not $s.Halted -and $null -eq (Read-Halt)) "code ${c}: never halted, no halt file"
     Assert-True ((Get-Content -Raw $SupervisorLog) -match "retrying every") "code ${c}: slow retry is logged"
     Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "code ${c}: renderer untouched"
