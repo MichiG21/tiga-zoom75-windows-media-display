@@ -394,16 +394,36 @@ $cleared = Clear-UploaderHalt -HaltFile $haltFile -StreamPath $stream
 Assert-True (-not (Test-Path $haltFile) -and -not (Test-Path "$stream.session") -and $cleared.Count -eq 2) "Clear-UploaderHalt removes halt file and session marker"
 Assert-True ((Clear-UploaderHalt -HaltFile $haltFile -StreamPath $stream).Count -eq 0) "clearing twice is harmless"
 
+function Start-ReadyJob {
+    # Start-Job, returning only once the job is actually running. Start-Job starts a new
+    # PowerShell process, which took seconds on a cold CI runner, so a job's own short
+    # delay ("in 0.8 s, remove the halt file") could land after a fixed-length supervisor
+    # loop had already finished (PR #48, run 43029352809). With this, only that delay is
+    # left to time. $Body takes one argument.
+    param([scriptblock]$Body, $Argument)
+    $ready = Join-Path $work ("job-" + [guid]::NewGuid().ToString("N") + ".ready")
+    $job = Start-Job -ScriptBlock {
+        param([string]$BodyText, $Arg, [string]$ReadyPath)
+        [System.IO.File]::WriteAllText($ReadyPath, "")
+        & ([scriptblock]::Create($BodyText)) $Arg
+    } -ArgumentList $Body.ToString(), $Argument, $ready
+    $until = (Get-Date).AddSeconds(60)
+    while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 50 }
+    Assert-True (Test-Path -LiteralPath $ready) "background job started"
+    Remove-Item -LiteralPath $ready -ErrorAction SilentlyContinue
+    return $job
+}
+
 # Live un-halt: a running supervisor notices the halt file disappearing.
 Write-Host "== live un-halt"
 $state = New-SupervisorState
 [System.IO.File]::WriteAllText($haltFile, '{}')
-$clearer = Start-Job -ScriptBlock { param($f) Start-Sleep -Milliseconds 800; Remove-Item -LiteralPath $f } -ArgumentList $haltFile
+$clearer = Start-ReadyJob { param($f) Start-Sleep -Milliseconds 800; Remove-Item -LiteralPath $f } $haltFile
 try {
     Invoke-SupervisorLoop -State $state `
         -StartRenderer { Start-LoggedProcess -Name "renderer" -FilePath $python -Arguments @($sleeper) -WorkingDirectory $work -StdOut (Join-Path $logs "r.log") -StdErr (Join-Path $logs "re.log") } `
         -StartUploader { Start-LoggedProcess -Name "ble" -FilePath $python -Arguments @($sleeper) -WorkingDirectory $work -StdOut (Join-Path $logs "b.log") -StdErr (Join-Path $logs "be.log") } `
-        -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations 25
+        -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations 40
     Assert-True ($state.UploaderStarts -eq 1 -and -not $state.Halted) "uploader started once the halt file was removed"
 } finally {
     foreach ($p in @($state.Renderer, $state.Uploader)) { try { Stop-LoggedProcess $p } catch {} }
@@ -451,7 +471,7 @@ function Invoke-StopScenario {
         Start-LoggedProcess -Name "renderer" -FilePath $python -Arguments @($sleeper) `
             -WorkingDirectory $work -StdOut (Join-Path $logs "renderer.log") -StdErr (Join-Path $logs "renderer_error.log")
     }
-    $bg = if ($Job) { Start-Job -ScriptBlock $Job -ArgumentList "$stream.stop" }
+    $bg = if ($Job) { Start-ReadyJob $Job "$stream.stop" }
     try {
         Invoke-SupervisorLoop -State $state -StartRenderer $startRenderer -StartUploader $startUploader `
             -HaltFile $haltFile -StreamPath $stream -PollSeconds 0.1 -MaxIterations $Iterations
