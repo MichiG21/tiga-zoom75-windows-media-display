@@ -31,6 +31,16 @@ $delivered = Join-Path $Root "extracted\session_01_bulk_stream.bin.delivered"
 $ble = Join-Path $Root "logs\ble.log"
 $last = ""
 $screens = 0
+# Replacing a file fails while the soak has it open for reading (a sharing violation). The
+# default error mode would carry on with the answer lost, and the soak would wait out its
+# timeout (exit 3; seen in CI on PR #46). Retry until it lands, as the soak does for its own
+# command file.
+function Move-Replace([string]$From, [string]$To) {
+    for ($try = 1; ; $try++) {
+        try { Move-Item -LiteralPath $From -Destination $To -Force -ErrorAction Stop; return }
+        catch { if ($try -ge 100) { throw }; Start-Sleep -Milliseconds 20 }
+    }
+}
 while ($true) {
     $text = ""
     try { if (Test-Path -LiteralPath $command) { $text = [IO.File]::ReadAllText($command).Trim() } } catch {}
@@ -39,7 +49,7 @@ while ($true) {
         $crc = [Guid]::NewGuid().ToString("N").Substring(0, 8)
         $name = $text.Split(" ")[0]
         Set-Content -LiteralPath "$ack.tmp" -Value "command_text=$text`ncommand=$name`nframe_id=f$screens`ncrc32=$crc" -NoNewline
-        Move-Item -LiteralPath "$ack.tmp" -Destination $ack -Force
+        Move-Replace "$ack.tmp" $ack
         if ($name -ne "auto") {
             $screens++
             $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -51,7 +61,7 @@ while ($true) {
                 Add-Content -LiteralPath $ble -Value "$now CANDIDATE name=`"Zoom75 Tiga`" address=07:01:88:B3:66:1B rssi=-56 (test)"
                 Add-Content -LiteralPath $ble -Value "$now UPLOAD COMPLETE frame=f$screens crc32=$crc in 9.50s"
                 Set-Content -LiteralPath "$delivered.tmp" -Value "delivered_at=$now-$screens`nframe_id=f$screens`ncrc32=$crc" -NoNewline
-                Move-Item -LiteralPath "$delivered.tmp" -Destination $delivered -Force
+                Move-Replace "$delivered.tmp" $delivered
             }
         }
     }
