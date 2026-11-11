@@ -97,18 +97,45 @@ capture:
 Left unchanged (unknown, so not touched): the preamble's `02 02`, record 2's
 `0x0a`, the `00 01` at file offset 14.
 
-## Suggested hardware sequence (with Michi present)
+## Hardware trial, step by step (with Michi present)
 
-Each step changes one variable. Power-cycle after any failure before the next step
-(PROJECT_HISTORY §9.2, §2.4).
+Prepared on 2026-11-11: `tools/single_frame_trial.py` writes the three streams below, and each one
+shows its own name on the LCD, with yellow corner marks, so a photo shows which container arrived.
+Each was **dry-run** with the uploader built from `main` at `e20f589` (no Bluetooth opened):
 
-1. Baseline: current 2-frame stream; confirm a normal upload and note the time.
-2. `--dlx-frames 1 --dlx-layout index` + `--allow-single-frame`. Watch for PROGRESS
-   count (expect 26), COMPLETE, and whether the image shows.
-3. If 2 fails cleanly, `--dlx-layout fixed`.
-4. If both fail, keep `index` and change the preamble `02 02` → `01 01` (not
-   implemented as a flag yet: a one-line change in `tiga_dlx.build_stream`).
+| File | Bytes | Dry run (with `--allow-single-frame` where needed) | Without the flag |
+|---|---:|---|---|
+| `1_baseline_2frame.bin` (grey) | 220,649 | 1,239 writes, 53 blocks | accepted |
+| `2_single_index.bin` (blue) | 110,565 | 621 writes, 26 blocks | refused, code 30 |
+| `3_single_fixed.bin` (purple) | 110,569 | 621 writes, 26 blocks | refused, code 30 |
 
-The uploader's dry-run mode (no `--confirm-flow-watch`) prints the write and block
-counts for a stream without opening Bluetooth. Use it to check a generated stream
-first.
+Each step changes one variable. **Disconnect the battery for at least 30 s after any failure**
+before the next step (PROJECT_HISTORY §9.2, §2.4). The trial uses its own folder, so its session
+markers never touch the live stream.
+
+1. **Start clean.** Disconnect the keyboard's battery for at least 30 s. In `tiga-fresh-test`, run
+   `STOP_STACK.ps1`: the trial must not share the keyboard with the live uploader.
+2. **Build and generate** (in `tiga-dev`):
+   ```powershell
+   cd windows_ble_probe; cargo build --release --locked --bin tiga_stream_watch_flow; cd ..
+   py tools\single_frame_trial.py --out C:\tiga-trial
+   $up = ".\windows_ble_probe\target\release\tiga_stream_watch_flow.exe"
+   ```
+3. **Baseline:** `& $up --once --allow-no-sidecar --confirm-flow-watch --stream C:\tiga-trial\1_baseline_2frame.bin`.
+   Expect `UPLOAD COMPLETE … in ~8 s` and the grey BASELINE screen. Note the time.
+4. **One frame, `index`:** the same with `--allow-single-frame` and `2_single_index.bin`. Write down:
+   the number of PROGRESS lines (26 expected), whether `UPLOAD COMPLETE` arrives and its time,
+   and what the LCD shows (blue, garbled, half drawn: the bottom corner marks go first, or unchanged).
+5. **Only if 4 failed:** disconnect the battery, then try `3_single_fixed.bin` the same way.
+6. **Back to the baseline:** run step 3 again, so you know the keyboard still takes the production
+   2-frame layout after a one-frame upload. Then run `START_STACK.ps1` in `tiga-fresh-test`.
+
+If a step leaves a `C:\tiga-trial\<file>.session` after a failure, the uploader refuses that file
+until it is deleted. Delete it only after the battery disconnect.
+
+If both one-frame layouts fail cleanly, the next variable is the preamble's `02 02` → `01 01`.
+That needs an uploader change too, because `validate_stream` checks the preamble byte for byte.
+
+**If step 4 works:** production would need the renderer's `--dlx-frames 1` and the uploader's
+`--allow-single-frame` together, in both the dev and the packaged supervisor. That is a separate
+change, best made after several trial uploads rather than one.
