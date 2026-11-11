@@ -1185,8 +1185,8 @@ async fn no_answer_to_control1_is_unreachable_and_never_sends_control2() {
 #[cfg(windows)]
 #[test]
 fn a_2ms_pause_lasts_about_2ms_after_the_timer_request() {
-    // Without the request, tokio's 2 ms sleep lasted a 15.6 ms tick when the uploader was
-    // started from a shell: 420 ms blocks instead of 157 ms (2026-11-11, timing.rs).
+    // Without the request, tokio's 2 ms sleep lasted a 15.6 ms tick: the single-frame trial,
+    // run with the default 2 ms pace, had 420 ms blocks (2026-11-11, timing.rs).
     assert!(request_fine_timer(), "timeBeginPeriod(1) refused");
     let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
     let mut pauses: Vec<Duration> = rt.block_on(async {
