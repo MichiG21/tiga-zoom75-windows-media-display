@@ -4,6 +4,12 @@
 
 ### Uploads and recovery
 
+- **An upload cut off by the PC going to sleep or shutting down is now retried,** like a sudden
+  failure: 120 s, sharing the 3 retries. It used to halt and wait for a battery disconnect, so one
+  shutdown during an upload left the display dark for days. The supervisor finds the sleep or
+  shutdown in Windows' System log. If it went down with the PC, it picks the retry up at the next
+  login. Whether such a retry completes without a reset isn't proven yet
+  (`docs/design/RETRY_RECOVERY.md`).
 - **A slowing failure now gets automatic retries too,** with no power-off: 300 s apart, sharing the 3
   retries per incident with sudden failures, which still wait 120 s. It used to halt at once and wait
   for a person. Running out of retries, code 21 and unclassified failures still halt, and a delivered

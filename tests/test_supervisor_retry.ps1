@@ -27,6 +27,8 @@ $SupervisorLog = Join-Path $logs "startup_supervisor.log"
 $python = (Get-Command py.exe -ErrorAction Stop).Source
 $stream = Join-Path $work "session_01_bulk_stream.bin"
 $haltFile = Join-Path $logs "uploader_halted.json"
+# Never this machine's real event log: a sleep during a test run must not change results.
+$HostPowerProbe = { param([datetime]$From, [datetime]$To) $null }
 
 # ---- Pure decision table -----------------------------------------------------------
 Write-Host "== decision table"
@@ -76,6 +78,14 @@ Assert-True ($d.Action -eq "halt" -and $d.Class -eq "session-open" -and $d.Needs
 Assert-True ((Decide 20 2 $marker "sudden" 1).Delay -eq 120 -and (Decide 20 2 $marker "slowing" 1).Delay -eq 300) "the wait follows the failure just seen; the count is shared"
 Assert-True ((Decide 20 3 $marker "sudden" 3).Action -eq "halt" -and (Decide 20 3 $marker "slowing" 3).Action -eq "halt") "3 retries used by any mix: either kind halts"
 Assert-True ($BleSuddenRetryDelay -eq 120 -and $BleSlowingRetryDelay -eq 300 -and $BleAutoRetryMax -eq 3) "the waits and the limit"
+# Host-suspend retry (2026-11-11): the sudden wait, the shared count, and code 21 too.
+foreach ($c in 20, 21) {
+    $d = Decide $c 1 $marker "host-suspend" 0
+    Assert-True ($d.Action -eq "retry" -and $d.Class -eq "host-suspend-retry" -and $d.Delay -eq 120 -and -not $d.NeedsPowerCycle) "host-suspend code ${c}: retry after 120 s, no power cycle"
+    Assert-True ((Decide $c 4 $marker "host-suspend" 3).Instruction -eq $PowerCycleInstruction) "host-suspend code ${c}: after 3 retries, the usual halt"
+}
+Assert-True ((Decide 21 1 $marker "sudden" 0).Action -eq "halt" -and (Decide 21 1 $marker "slowing" 0).Action -eq "halt") "code 21 is still not retried for sudden or slowing"
+Assert-True ((Decide 20 2 $marker "host-suspend" 2).Reason -match "automatic retry 3 of 3") "host-suspend shares the count"
 foreach ($sig in "unclassified", "") {
     $d = Decide 20 1 $marker $sig 0
     Assert-True ($d.Action -eq "halt" -and $d.NeedsPowerCycle) "code 20, signature '$sig': halts at once"
@@ -140,12 +150,14 @@ $RendererRestartDelay = 0.2
 
 function Invoke-Scenario {
     # $Plan: one entry per uploader start: @(<exit code>, <actions...>); the last repeats.
-    param([string]$Name, [object[]]$Plan, [int]$Iterations, [switch]$Halted)
+    # $Prepare runs after the clean-up, before the loop: files a previous supervisor left.
+    param([string]$Name, [object[]]$Plan, [int]$Iterations, [switch]$Halted, [scriptblock]$Prepare)
     Write-Host "== $Name"
     foreach ($ext in ".session", ".exit", ".delivered", ".stop") { Remove-Item -LiteralPath "$stream$ext" -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Get-RetryStatePath $haltFile) -ErrorAction SilentlyContinue
     if (-not $Halted) { Remove-Item -LiteralPath $haltFile -ErrorAction SilentlyContinue }
     Set-Content -LiteralPath $SupervisorLog -Value "" -Encoding ASCII
+    if ($Prepare) { & $Prepare }
 
     $starts = New-Object System.Collections.ArrayList
     $state = New-SupervisorState
@@ -245,6 +257,60 @@ $s = Invoke-Scenario "sudden, then code 10, then deliver" -Plan @(@(20, "marker"
 $log = Get-Content -Raw $SupervisorLog
 Assert-True ($log -match "Automatic retry 1 of 3 has not reached the keyboard yet \(code 10\)" -and $log -match "Automatic retry 1 of 3 SUCCEEDED") "code 10 during a retry: backoff, then retry 1 succeeds"
 Assert-True ($s.UploaderStarts -eq 3 -and -not $s.Halted) "not halted (starts: $($s.UploaderStarts))"
+
+# 2g. Host suspend (2026-11-11): the PC slept or shut down under the upload.
+$probeCalls = New-Object System.Collections.ArrayList
+$powerHit = { param([datetime]$From, [datetime]$To) [void]$probeCalls.Add(@($From, $To)); "Windows logged at 2026-11-03 19:59:57: entering sleep (test) (event 42)" }
+$HostPowerProbe = $powerHit
+$s = Invoke-Scenario "code 20 unclassified while Windows went to sleep, then a retry that delivers" `
+    -Plan @(@(20, "marker", "record", "unclassified"), @(0, "check", "deliver", "stay")) -Iterations 40
+$log = Get-Content -Raw $SupervisorLog
+$r = Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json
+Assert-True ($log -match "while Windows went to sleep or shut down: Windows logged at 2026-11-03 19:59:57.*Signature unclassified -> host-suspend") "the event is logged and the signature becomes host-suspend"
+Assert-True ($log -match "Host-suspend failure \(code 20, signature host-suspend, last ACKed block 17\): automatic retry 1 of 3" -and $log -match "policy since 2026-11-11") "scheduled as retry 1 of 3, no power-off"
+Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and $null -eq (Read-Halt) -and $log -notmatch "code 77") "the marker was removed and the retry ran; not halted"
+Assert-True ($log -match "Automatic retry 1 of 3 SUCCEEDED" -and $r.status -eq "succeeded") "the retry delivered and ended the incident"
+$w = @($probeCalls)[0]
+Assert-True (@($probeCalls).Count -eq 1 -and [int](($w[1] - $w[0]).TotalSeconds) -eq ($HostPowerWindowBefore + $HostPowerWindowAfter)) "the event log is read once, over a $($HostPowerWindowBefore + $HostPowerWindowAfter) s window"
+
+$s = Invoke-Scenario "code 21 while Windows went to sleep" -Plan @(@(21, "marker", "record", "unclassified"), @(0, "check", "deliver", "stay")) -Iterations 40
+Assert-True ($s.UploaderStarts -eq 2 -and -not $s.Halted -and (Get-Content -Raw $SupervisorLog) -match "Host-suspend failure \(code 21") "code 21 with a sleep is retried too"
+
+$probeCalls.Clear()
+$s = Invoke-Scenario "sudden code 20 with a sleep in the log" -Plan @(@(20, "marker", "record", "sudden"), @(0, "deliver", "stay")) -Iterations 40
+Assert-True (@($probeCalls).Count -eq 0 -and (Get-Content -Raw $SupervisorLog) -match "Sudden failure") "a sudden failure stays sudden; the event log isn't read"
+$s = Invoke-Scenario "host-suspend every time" -Plan @(, @(20, "check", "marker", "record", "unclassified")) -Iterations 60
+$h = Read-Halt
+Assert-True ($s.UploaderStarts -eq 4 -and $s.Halted -and $h.signature -eq "host-suspend" -and $h.auto_retries -eq 3 -and $h.instruction -eq $PowerCycleInstruction) "3 host-suspend retries, then the same halt as ever"
+
+# At supervisor start: a retry that was waiting when the PC went down is resumed.
+$waitingRetry = {
+    Set-Content -LiteralPath "$stream.session" -Encoding ASCII -Value "frame_id=r-f0042`nlast_acked_block=13`ntotal_blocks=53"
+    Write-RetryState -HaltFile $haltFile -Status "waiting" -Retry 2 -LastFailure "code 20, signature host-suspend, last ACKed block 13" -Event "test" -NextAttemptAt (Get-Date)
+}
+$s = Invoke-Scenario "start: a host-suspend retry was waiting" -Plan @(, @(0, "check", "deliver", "stay")) -Iterations 40 -Prepare $waitingRetry
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($log -match "Automatic retry 2 of 3 \(host-suspend\) was waiting when the PC went down; resumed" -and $log -match "Automatic retry 2 of 3: session marker removed" -and $log -match "Automatic retry 2 of 3 SUCCEEDED") "resumed as retry 2 of 3, marker removed, delivered"
+$s = Invoke-Scenario "start: a sudden retry was waiting" -Plan @(, @(0, "check")) -Iterations 20 -Prepare {
+    Write-RetryState -HaltFile $haltFile -Status "waiting" -Retry 1 -LastFailure "code 20, signature sudden, last ACKed block 5" -Event "test" }
+Assert-True ((Get-Content -Raw $SupervisorLog) -match "it is not resumed" -and (Get-Content -Raw (Get-RetryStatePath $haltFile) | ConvertFrom-Json).status -eq "abandoned") "a waiting sudden retry is still abandoned, as before"
+
+# At supervisor start: a marker the dead supervisor left, just before a logged sleep.
+$leftMarker = { Set-Content -LiteralPath "$stream.session" -Encoding ASCII -Value "frame_id=r-f0164`nlast_acked_block=13`ntotal_blocks=53" }
+$probeCalls.Clear()
+$s = Invoke-Scenario "start: marker left, sleep logged after it" -Plan @(, @(0, "check", "deliver", "stay")) -Iterations 40 -Prepare $leftMarker
+$log = Get-Content -Raw $SupervisorLog
+Assert-True ($log -match "A media session was left open at .* and Windows logged at .*Host-suspend failure: automatic retry 1 of 3" -and $log -notmatch "code 77") "found at start, retried with the marker removed"
+Assert-True ($s.UploaderStarts -eq 1 -and -not $s.Halted -and $log -match "Automatic retry 1 of 3 SUCCEEDED") "the retry delivered"
+$w = @($probeCalls)[0]
+Assert-True ($w[0] -lt $w[1] -and ($w[1] - $w[0]).TotalSeconds -eq ($HostPowerWindowBefore + $HostPowerWindowAfter)) "window: just before the last ACK to $HostPowerWindowBefore s after it"
+$s = Invoke-Scenario "start: marker left, halt file present" -Halted -Plan @(, @(0, "check")) -Iterations 20 -Prepare {
+    & $leftMarker; Set-Content -LiteralPath $haltFile -Value '{"class":"session-open"}' -Encoding ASCII }
+Assert-True ($s.Halted -and $s.UploaderStarts -eq 0 -and (Test-Path "$stream.session")) "a halt still wins: nothing started, marker kept"
+
+$HostPowerProbe = { param([datetime]$From, [datetime]$To) $null }
+$s = Invoke-Scenario "start: marker left, no sleep logged" -Plan @(, @(0, "check")) -Iterations 20 -Prepare $leftMarker
+Assert-True ($s.Halted -and (Read-Halt).class -eq "session-open" -and (Get-Content -Raw $SupervisorLog) -notmatch "Host-suspend") "without a logged sleep, a left marker halts as before"
 
 function Get-StartGaps {
     param($State)
