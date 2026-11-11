@@ -1,9 +1,8 @@
 # Clean stop: STOP_STACK asks the uploader instead of killing it
 
-Status: implemented on `feature/clean-stop`, **not verified on hardware**. Not for merge
-before the hardware test below. Rebased on 2026-10-18 onto `main` with the notification
-log (#25, #30), the scan stop (#26) and the automatic retry after a sudden failure (#28);
-see "With the automatic retry" below.
+Status: merged in PR #20 (2026-10-22) and running on the live install. The stop path
+works on hardware. The first-upload comparison below is still open: see "Results so far".
+The original status was "implemented on `feature/clean-stop`, not verified on hardware".
 
 ## Why
 
@@ -179,3 +178,21 @@ restarts with the clean stop. If there are no first-upload failures and no invis
 periods, that supports the hypothesis (10 of 10 against 3-of-9 is suggestive, not proof);
 if both still occur at about the old rate, the kill was not the cause, and the change is
 still worth keeping for never cutting an upload in half.
+
+## Results so far (updated 2026-11-11)
+
+Clean **idle** stops followed by a plain START_STACK, nothing in between:
+
+| Restart | First upload | Invisible period |
+|---|---|---|
+| B, 2026-10-22, `tiga-dev` | completed 8.55 s | none (2 s) |
+| E, 2026-10-22, `main` stack | completed 8.55 s | none (2 s) |
+| 2026-11-02 17:27 | completed 8.79 s | none |
+| 2026-11-11 15:49 | **sudden failure**, block 7; retry 1 completed 8.85 s | none (0 s) |
+
+**1 failed in 4**, against the baseline of 3 in 9. That's too few to tell apart, and today's failure
+followed a clean disconnect. So the forced kill isn't the whole story behind a failed first upload, if
+it's part of it at all. **No invisible period after any clean stop** (baseline: 4 of 9, 19–67 s); that
+part still supports the hypothesis. Not counted: C (a stop during an upload, failed) and the two
+live failures on 2026-10-22, which followed RAM-read sessions (PROJECT_HISTORY §7.1, seventh part).
+Details for 2026-11-11 are in `docs/NOTES_FOR_MICHI.md`.
