@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Speed
+
+- **One frame per upload instead of two identical ones: about 4.4 s instead of about 8.5 s**
+  (projected from the 2026-11-11 hardware trial, which halved the time at the same pacing). The
+  keyboard shows the image fully and still accepts the two-frame layout. `$DlxFrames` in
+  `tiga_supervisor_common.ps1` switches back to two frames. Not yet measured over many uploads.
+
 ### Renderer
 
 - **A command is no longer lost when its acknowledgement is being read.** Windows won't replace a

@@ -103,6 +103,29 @@ Assert-True ((Get-UploaderDecision -ExitCode 10 -Session $null -Attempt 1 -StopR
 Assert-True ((Get-UploaderDecision -ExitCode 20 -Session $null -Attempt 1 -StopRequested).Action -eq "halt") "an upload that failed on its way out still halts"
 Assert-True ((Get-UploaderDecision -ExitCode 1 -Session @{ frame_id = "r-f0001" } -Attempt 1 -StopRequested).Class -eq "session-open") "a session marker still halts when a stop was requested"
 
+# ---- Frames per upload (docs/DLX_FORMAT.md) -----------------------------------------
+Write-Host "== frames per upload"
+Assert-True ($DlxFrames -eq 1) "the setting is one frame per upload"
+# Built exactly as tiga_startup_supervisor.ps1 builds them.
+$rendererArgs = @("-u", "renderer.py") + @(Get-RendererFrameArgs)
+$uploaderArgs = @('--stream', 's.bin', '--intra-block-ms', '0', '--confirm-flow-watch') + @(Get-UploaderFrameArgs)
+Assert-True (($rendererArgs -join ' ') -eq '-u renderer.py --dlx-frames 1') "renderer gets --dlx-frames 1 ($($rendererArgs -join ' '))"
+Assert-True (($uploaderArgs -join ' ') -eq '--stream s.bin --intra-block-ms 0 --confirm-flow-watch --allow-single-frame') "uploader gets --allow-single-frame ($($uploaderArgs -join ' '))"
+$savedFrames = $DlxFrames
+$DlxFrames = 2
+$rendererArgs = @("-u", "renderer.py") + @(Get-RendererFrameArgs)
+$uploaderArgs = @('--stream', 's.bin', '--confirm-flow-watch') + @(Get-UploaderFrameArgs)
+$packagedRenderer = @(Get-RendererFrameArgs)
+# Guard: with setting 2 the lists must be exactly the old ones, with no extra or empty argument.
+Assert-True ($rendererArgs.Count -eq 2 -and $uploaderArgs.Count -eq 3 -and $packagedRenderer.Count -eq 0 -and -not ($rendererArgs + $uploaderArgs -contains $null)) "setting 2: no frame arguments, and no empty one"
+$DlxFrames = $savedFrames
+foreach ($script in @("tiga_startup_supervisor.ps1", "installer\runtime\tiga_startup_supervisor.ps1")) {
+    $tokens = $null; $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $RepoRoot $script), [ref]$tokens, [ref]$parseErrors)
+    $uses = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'Get-RendererFrameArgs', 'Get-UploaderFrameArgs' }, $true)).Count
+    Assert-True ($parseErrors.Count -eq 0 -and $uses -eq 2) "$script parses and asks for both frame settings (errors $($parseErrors.Count), uses $uses)"
+}
+
 # ---- Loop with dummy children --------------------------------------------------------
 
 $dummy = Join-Path $work "dummy uploader.py"
@@ -195,9 +218,12 @@ foreach ($c in 10, 11) {
     # Start-to-start gaps include the dummy's own run time (a Python start, over 1 s on a cold
     # CI runner), so they can't be compared with each other: 1.52, 0.95, ... failed on PR #46.
     # Each must be at least its own delay: the backoff in order, then the slow interval.
-    $expected = @($BleRetryDelays) + @($BleSlowRetryDelay, $BleSlowRetryDelay)
-    $short = @(0..5 | Where-Object { $gaps[$_] -lt $expected[$_] - 0.05 })
-    Assert-True ($gaps.Count -ge 6 -and $short.Count -eq 0) "code ${c}: each gap at least its delay ($($expected -join ', ')), then the slow interval: ${shown}s"
+    # The loop's fixed window guarantees 6 starts (checked above), so 5 gaps; a busy PC fits no
+    # more (seen 2026-11-11). Check every gap there is, and at least the 4 backoffs + 1 slow.
+    $expected = @($BleRetryDelays) + @($BleSlowRetryDelay, $BleSlowRetryDelay, $BleSlowRetryDelay)
+    $n = [Math]::Min($gaps.Count, $expected.Count)
+    $short = @(0..($n - 1) | Where-Object { $gaps[$_] -lt $expected[$_] - 0.05 })
+    Assert-True ($gaps.Count -ge 5 -and $short.Count -eq 0) "code ${c}: each gap at least its delay ($(($expected[0..($n - 1)]) -join ', ')), then the slow interval: ${shown}s"
     Assert-True (-not $s.Halted -and $null -eq (Read-Halt)) "code ${c}: never halted, no halt file"
     Assert-True ((Get-Content -Raw $SupervisorLog) -match "retrying every") "code ${c}: slow retry is logged"
     Assert-True ($s.RendererAlive -and $s.RendererStarts -eq 1) "code ${c}: renderer untouched"
