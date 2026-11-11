@@ -220,6 +220,13 @@ duplicate frame is a local change to code already in this repo. The static-image
 never shared, but it is independently recoverable: decompile the PocketWuque APK with JADX and
 look for the static-image command and its GATT sequence.
 
+**Status (2026-11-11):** the one-frame container is built and gated, but **never sent**. The header
+model, the two candidate layouts (`index`, `fixed`) and their sizes are in `docs/DLX_FORMAT.md`.
+`tiga_dlx.py` rebuilds the captured stream byte for byte. The renderer needs `--dlx-frames 1` and the
+uploader `--allow-single-frame`. All three trial streams from `tools/single_frame_trial.py` were
+dry-run on 2026-11-11 (621 writes and 26 blocks for one frame, against 1,239 and 53). The hardware
+trial, step by step, is in `docs/DLX_FORMAT.md`. Don't rebuild any of this: run the trial.
+
 ---
 
 ## 4. The progress bar — the central unsolved problem
@@ -1818,7 +1825,8 @@ strict discipline:
 
 ## 10. Open questions
 
-- Does removing the duplicate second frame cut upload time to ~4 s? (Most likely quick win.)
+- Does removing the duplicate second frame cut upload time to ~4 s? (Most likely quick win.) Built,
+  gated and dry-run; only the hardware trial in `docs/DLX_FORMAT.md` is left (§3.4).
 - What is the proper static-image GATT command inside the PocketWuque APK, and how does it
   differ from the GIF-derived path in use now? (Recoverable solo with JADX.)
 - What do `0x110014F2` and `0x110014F4` actually land on in this unit's firmware?
@@ -1827,7 +1835,12 @@ strict discipline:
   restoring?
 - Can the memory service be opened **without** stopping the production uploader, or must the
   stack always be stopped first? (Stopping it works; sharing it is unresolved.)
-- What is in the 452-byte DLX media header? Pixels are replaced in a captured header that is
-  otherwise not understood — a frame integrity field or metadata in there is a candidate cause
-  of the occasional fragmentation glitch.
+- What is in the 452-byte DLX media header? Mostly answered in `docs/DLX_FORMAT.md`: a section
+  table of file offsets, three 28-byte records, a frame count and a frame index. Still unknown:
+  record 2's `0x0a`, the `00 01` at file offset 14, and the preamble's `02 02`.
+  **A header integrity field is ruled out as the cause of the occasional fragmentation glitch**
+  (2026-11-11). Production rewrites the pixels on every upload and leaves the header byte for
+  byte as captured, and those uploads display. A checksum over the pixels that the keyboard
+  checked would fail every upload, and one it ignored can't cause a glitch. The cause must be in
+  the transfer or the display, not the header.
 - What is the unknown 5th field (bytes 5–6) in the `0xFF` telemetry payload?
