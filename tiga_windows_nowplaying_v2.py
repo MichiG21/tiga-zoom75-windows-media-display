@@ -246,11 +246,15 @@ def write_display(img: Image.Image, reason: str, preview: bool = True) -> tuple[
     return frame_id, crc
 
 
-def write_command_ack(command_text: str, command: str, frame: tuple[str, str]):
+def write_command_ack(command_text: str, command: str, frame: tuple[str, str]) -> bool:
     """Tell the control utility which frame (by CRC) answers its command.
 
     It then waits for <stream>.delivered to show the same CRC, which the uploader
     writes only after the keyboard's completion notification.
+
+    Returns False if a reader kept the ack open through every retry; the main loop
+    then tries again on its next poll. Raising here used to crash the renderer, and
+    at restart it treats the command file as stale, so the command was lost.
     """
     frame_id, crc = frame
     text = (
@@ -262,7 +266,7 @@ def write_command_ack(command_text: str, command: str, frame: tuple[str, str]):
     )
     tmp = COMMAND_ACK_FILE.with_suffix(".ack.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, COMMAND_ACK_FILE)
+    return tiga_render_stream.replace_with_retry(tmp, COMMAND_ACK_FILE)
 
 
 def read_control_command(last_text: str | None):

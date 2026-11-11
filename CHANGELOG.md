@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Renderer
+
+- **A command is no longer lost when its acknowledgement is being read.** Windows won't replace a
+  file another program has open, so if Display Control or the soak tool was reading the ack at that
+  moment, the renderer crashed. At restart it treats the command file as stale, so the command (for
+  example Standby) was dropped and never acknowledged, and Display Control waited out its timeout.
+  The renderer now retries for about a second, then again on every poll until the ack lands. The
+  frame record and the stream get the same retry.
+
 ### Uploads and recovery
 
 - **A slowing failure now gets automatic retries too,** with no power-off: 300 s apart, sharing the 3

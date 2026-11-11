@@ -48,6 +48,11 @@ def run(
     active_render_key = None
     nonplaying_since = None
     query_error = None
+    # An ack that a reader blocked: (command text, command, frame) and the tries so far.
+    # Retried on every poll until it lands; a newer command's ack replaces it, because
+    # the control utility only waits for the ack naming its own command text.
+    pending_ack = None
+    ack_tries = 0
 
     try:
         while True:
@@ -81,7 +86,18 @@ def run(
 
                     log("CONTROL -> automatic mode re-armed")
 
-                write_command_ack(last_command_text, command, frame)
+                pending_ack = (last_command_text, command, frame)
+                ack_tries = 0
+
+            if pending_ack is not None:
+                ack_tries += 1
+                if write_command_ack(*pending_ack):
+                    if ack_tries > 1:
+                        log(f"CONTROL ack for '{pending_ack[0]}' written after {ack_tries} tries")
+                    pending_ack = None
+                elif ack_tries == 1:
+                    log(f"CONTROL ack for '{pending_ack[0]}' could not be written (another program "
+                        "kept it open); retrying every poll")
 
             if mode != "auto":
                 time.sleep(POLL_INTERVAL)

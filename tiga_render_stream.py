@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,37 @@ def validate_stream(data: bytes):
         raise RuntimeError("DLX trailer mismatch")
 
 
+def replace_with_retry(src: Path, dst: Path, *, attempts: int = 40, delay: float = 0.025,
+                       sleep=time.sleep) -> bool:
+    """os.replace(src, dst), retried while a reader holds dst open; False if it never lands.
+
+    On Windows a file can't be replaced while another handle has it open without
+    delete sharing, and Python's open(), .NET's ReadAllLines (the supervisor, the soak,
+    STATUS_STACK) and C++'s ifstream (Display Control) all open it that way. Readers
+    hold these files for milliseconds, so about 1 s of retries is plenty. Only that
+    error (PermissionError) is retried; anything else still raises. On False, src is
+    left in place and dst is unchanged.
+
+    `sleep` is bound when this is defined, so tests that patch time.sleep to drive the
+    main loop's clock don't count these waits as polls.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(src, dst)
+            return True
+        except PermissionError:
+            if attempt == attempts:
+                return False
+            sleep(delay)
+    return False
+
+
+def replace_or_raise(src: Path, dst: Path):
+    """For files that must not silently go stale: the frame record and the stream."""
+    if not replace_with_retry(src, dst):
+        raise RuntimeError(f"could not replace {dst}: another program kept it open")
+
+
 def write_frame_sidecar(frame_id: str, crc: str, reason: str, frame_sidecar: Path):
     text = (
         f"frame_id={frame_id}\n"
@@ -60,7 +92,7 @@ def write_frame_sidecar(frame_id: str, crc: str, reason: str, frame_sidecar: Pat
     )
     tmp = frame_sidecar.with_suffix(".frame.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, frame_sidecar)
+    replace_or_raise(tmp, frame_sidecar)
 
 
 def install_image(
@@ -98,5 +130,5 @@ def install_image(
 
     tmp = active_stream.with_suffix(".bin.tmp")
     tmp.write_bytes(modified)
-    os.replace(tmp, active_stream)
+    replace_or_raise(tmp, active_stream)
     return crc

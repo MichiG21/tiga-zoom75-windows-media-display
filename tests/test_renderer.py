@@ -10,13 +10,20 @@ redirected into a temporary directory.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
+import sys
 import tempfile
+import threading
 import unittest
 import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+import tiga_render_stream  # noqa: E402
 
 
 def load_renderer():
@@ -293,6 +300,91 @@ class FreshnessGateTests(unittest.TestCase):
         self.assertEqual(gate.observe(media(), 0.0), "new media")
 
 
+def hold_open_until(path: Path, release: threading.Event):
+    """Hold path open for reading until release is set, as a reader of the ack does.
+
+    On Windows, Python's open() (like .NET's ReadAllLines and C++'s ifstream) does not
+    share delete access, so os.replace onto the path fails while it is held.
+    """
+    opened = threading.Event()
+
+    def holder():
+        with open(path, encoding="utf-8"):
+            opened.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder, daemon=True)
+    thread.start()
+    opened.wait(5)
+    return thread
+
+
+@unittest.skipUnless(sys.platform == "win32", "the sharing violation is Windows behaviour")
+class ReplaceWithRetryTests(unittest.TestCase):
+    """A reader holding the target open made os.replace raise and crash the renderer."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tiga_replace_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.dst = self.tmp / "target"
+        self.src = self.tmp / "target.tmp"
+        self.dst.write_text("old", encoding="utf-8")
+        self.src.write_text("new", encoding="utf-8")
+
+    def test_plain_replace_fails_while_a_reader_holds_the_target(self):
+        # The bug itself, so this test notices if Windows or Python ever change.
+        release = threading.Event()
+        thread = hold_open_until(self.dst, release)
+        try:
+            with self.assertRaises(PermissionError):
+                os.replace(self.src, self.dst)
+        finally:
+            release.set()
+            thread.join()
+
+    def test_lands_once_the_reader_lets_go(self):
+        release = threading.Event()
+        thread = hold_open_until(self.dst, release)
+        threading.Timer(0.15, release.set).start()
+        try:
+            self.assertTrue(tiga_render_stream.replace_with_retry(self.src, self.dst))
+        finally:
+            release.set()
+            thread.join()
+        self.assertEqual(self.dst.read_text(encoding="utf-8"), "new")
+        self.assertFalse(self.src.exists())
+
+    def test_gives_up_without_raising_and_keeps_both_files(self):
+        release = threading.Event()
+        thread = hold_open_until(self.dst, release)
+        try:
+            self.assertFalse(tiga_render_stream.replace_with_retry(self.src, self.dst, attempts=3, delay=0.01))
+        finally:
+            release.set()
+            thread.join()
+        self.assertEqual(self.dst.read_text(encoding="utf-8"), "old")
+        self.assertEqual(self.src.read_text(encoding="utf-8"), "new")
+
+    def test_other_errors_still_raise(self):
+        with self.assertRaises(FileNotFoundError):
+            tiga_render_stream.replace_with_retry(self.tmp / "missing", self.dst, attempts=2, delay=0)
+
+
+@unittest.skipUnless(sys.platform == "win32", "the sharing violation is Windows behaviour")
+class AckWhileReadTests(SandboxedRenderer):
+    def test_ack_lands_while_a_reader_briefly_holds_it(self):
+        self.r.COMMAND_ACK_FILE.write_text("command_text=old\n", encoding="utf-8")
+        release = threading.Event()
+        thread = hold_open_until(self.r.COMMAND_ACK_FILE, release)
+        threading.Timer(0.15, release.set).start()
+        try:
+            self.assertTrue(self.r.write_command_ack("standby 5-5-5", "standby", ("f9", "00000009")))
+        finally:
+            release.set()
+            thread.join()
+        self.assertIn("command_text=standby 5-5-5", self.r.COMMAND_ACK_FILE.read_text(encoding="utf-8"))
+
+
 class _StopLoop(Exception):
     pass
 
@@ -360,6 +452,56 @@ class MainLoopGateTests(SandboxedRenderer):
         self.assertEqual(ack["command_text"], "standby 99-1-1")
         self.assertEqual(ack["command"], "standby")
         self.assertEqual((ack["frame_id"], ack["crc32"]), ("f2", "00000002"))
+
+    def test_an_ack_that_cannot_be_written_is_retried_every_poll(self):
+        # It used to raise out of the loop: the renderer crashed, and at restart it treats
+        # the command file as stale, so the command was dropped and never acknowledged.
+        attempts = []
+
+        def flaky_ack(command_text, command, frame):
+            attempts.append(command_text)
+            if len(attempts) < 3:
+                return False  # a reader held the ack for all of replace_with_retry's tries
+            return real_ack(command_text, command, frame)
+
+        real_ack = self.r.write_command_ack
+        self.r.write_command_ack = flaky_ack
+        logged = []
+        self.r.log = logged.append
+
+        def send(poll):
+            if poll == 3:
+                self.r.COMMAND_FILE.write_text("black 77-1-1\n", encoding="utf-8")
+
+        rendered = self.run_main([media(state="Paused")] * 12, max_polls=8, on_poll=send)
+        self.assertEqual(rendered, ["startup standby", "control: black"], "the command is handled once")
+        self.assertEqual(attempts, ["black 77-1-1"] * 3, "retried on each poll until it lands, then not again")
+        ack = self.r.COMMAND_ACK_FILE.read_text(encoding="utf-8")
+        self.assertIn("command_text=black 77-1-1", ack)
+        self.assertTrue(any("could not be written" in line for line in logged))
+        self.assertTrue(any("written after 3 tries" in line for line in logged))
+
+    def test_a_newer_command_replaces_a_pending_ack(self):
+        attempts = []
+
+        def flaky_ack(command_text, command, frame):
+            attempts.append(command_text)
+            return command_text != "black 1-2-1" and real_ack(command_text, command, frame)
+
+        real_ack = self.r.write_command_ack
+        self.r.write_command_ack = flaky_ack
+        self.r.log = lambda line: None
+
+        def send(poll):
+            if poll == 2:
+                self.r.COMMAND_FILE.write_text("black 1-2-1\n", encoding="utf-8")
+            if poll == 4:
+                self.r.COMMAND_FILE.write_text("auto 1-2-2\n", encoding="utf-8")
+
+        self.run_main([media(state="Paused")] * 12, max_polls=7, on_poll=send)
+        self.assertEqual(attempts[-1], "auto 1-2-2")
+        self.assertEqual(attempts.count("auto 1-2-2"), 1)
+        self.assertIn("command_text=auto 1-2-2", self.r.COMMAND_ACK_FILE.read_text(encoding="utf-8"))
 
     def test_persistent_query_failure_falls_back_to_standby(self):
         # Issue #10: playing, then the media query starts failing for good.
