@@ -220,6 +220,12 @@ duplicate frame is a local change to code already in this repo. The static-image
 never shared, but it is independently recoverable: decompile the PocketWuque APK with JADX and
 look for the static-image command and its GATT sequence.
 
+**Update, 2026-11-11 (later): the hardware trial passed.** The one-frame `index` container
+completed in 11.93 s against 23.27 s for two frames at the same pacing, displayed fully, and the
+keyboard took two frames again afterwards (`docs/DLX_FORMAT.md`, "Trial result"). Production
+switched to one frame with `$DlxFrames = 1`: about 4.4 s per upload projected. The text below is
+kept as written before the trial.
+
 **Status (2026-11-11):** the one-frame container is built and gated, but **never sent**. The header
 model, the two candidate layouts (`index`, `fixed`) and their sizes are in `docs/DLX_FORMAT.md`.
 `tiga_dlx.py` rebuilds the captured stream byte for byte. The renderer needs `--dlx-frames 1` and the
@@ -1798,7 +1804,8 @@ Do not "fix" these without reading §4 first:
 
 - Static total duration rather than a live progress bar.
 - Standby clock captured on entry rather than refreshed every minute.
-- Two identical frames used to display a static image.
+- ~~Two identical frames used to display a static image.~~ Changed 2026-11-11 after a hardware
+  trial (§3.4): one frame per upload. Two frames remain available (`$DlxFrames = 2`).
 - Full-frame uploads and continuous watch mode.
 - A separate scan-only BLE probe.
 - Historical filenames and retained reference experiments.
@@ -1825,8 +1832,9 @@ strict discipline:
 
 ## 10. Open questions
 
-- Does removing the duplicate second frame cut upload time to ~4 s? (Most likely quick win.) Built,
-  gated and dry-run; only the hardware trial in `docs/DLX_FORMAT.md` is left (§3.4).
+- Does removing the duplicate second frame cut upload time to ~4 s? **Answered 2026-11-11: yes,
+  it halves it** (11.93 vs 23.27 s at the trial's pacing; about 4.4 s projected for production).
+  Production time and failure rate with one frame are still to be measured (§3.4).
 - What is the proper static-image GATT command inside the PocketWuque APK, and how does it
   differ from the GIF-derived path in use now? (Recoverable solo with JADX.)
 - What do `0x110014F2` and `0x110014F4` actually land on in this unit's firmware?

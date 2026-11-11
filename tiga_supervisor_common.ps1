@@ -156,6 +156,27 @@ $BleSuddenRetryDelay  = 120               # seconds before an automatic retry af
 $BleSlowingRetryDelay = 300               # seconds before an automatic retry after a slowing code 20
 $BleAutoRetryMax      = 3                 # automatic retries per incident before halting, any kind
 $RendererRestartDelay = 8
+
+# ---- Frames per upload (docs/DLX_FORMAT.md) ---------------------------------------
+#
+# 1: one frame per DLX container, 26 blocks instead of 53: about 4.4 s per upload instead
+# of 8.5 s. Trial of 2026-11-11: the one-frame 'index' layout completed and showed fully,
+# and the keyboard took the two-frame layout again afterwards. 2: the captured two-frame
+# container, as used until then. Both children must agree: the renderer builds the
+# container, and the uploader refuses a one-frame stream without --allow-single-frame.
+# Set it here, in one place, for the dev and the packaged supervisor alike.
+$DlxFrames = 1
+
+function Get-RendererFrameArgs {
+    if ($DlxFrames -eq 1) { return @('--dlx-frames', '1') }
+    return @()
+}
+
+function Get-UploaderFrameArgs {
+    if ($DlxFrames -eq 1) { return @('--allow-single-frame') }
+    return @()
+}
+
 # A sleep, resume or shutdown logged this close to a failure makes it host-suspend. On
 # 2026-11-03 the gap was 2 s; a resume can come long after the sleep, so both count.
 $HostPowerWindowBefore = 60

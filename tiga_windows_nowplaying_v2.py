@@ -446,7 +446,7 @@ def main():
     print(f"Stream      : {ACTIVE_STREAM}")
     print(f"Run ID      : {RUN_ID}")
     if DLX_FRAMES != 2:
-        print(f"DLX         : EXPERIMENTAL {DLX_FRAMES}-frame container, layout={DLX_LAYOUT}")
+        print(f"DLX         : {DLX_FRAMES}-frame container, layout={DLX_LAYOUT} (trial 2026-11-11, docs/DLX_FORMAT.md)")
     print("Ctrl+C to stop.")
     print()
 
@@ -469,8 +469,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TIGA Windows Now Playing renderer")
     parser.add_argument(
         "--dlx-frames", type=int, choices=(1, 2), default=2,
-        help="frames per DLX container (default 2, the captured layout; 1 is experimental "
-             "and needs the uploader's --allow-single-frame)",
+        help="frames per DLX container (default 2, the captured layout; 1 halves the upload, "
+             "passed its hardware trial on 2026-11-11, and needs the uploader's --allow-single-frame; "
+             "the supervisors set it from $DlxFrames)",
     )
     parser.add_argument(
         "--dlx-layout", choices=tiga_dlx.LAYOUTS, default="index",
