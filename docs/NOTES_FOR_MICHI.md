@@ -2960,3 +2960,44 @@ block is link and keyboard time only.
 - **Merge this PR, pull, restart, and watch for a few days:** upload times (expect about 4–5 s) and
   failures. If anything looks worse, set `$DlxFrames = 2` and restart.
 - The speed analysis is still running, with these results fed in. Its plan comes next.
+
+# Upload-speed plan, and a knowledge graph of the code, 2026-11-14
+
+Offline only: no Bluetooth, no stack scripts, nothing sent to the keyboard. Nothing committed.
+
+- **Knowledge graph (graphify):** `graphify-out/` in tiga-dev (1,994 nodes) and in
+  tiga-runtime-lab (994 nodes), merged into `source\graphify-out\`. Code and the docs are
+  extracted; images and the video are not. Use `graphify query "..."` to find things, then cite
+  the file itself.
+- **Speed plan:** the continuation workflow ran (33 agents: triage, 2 skeptics per idea, roadmap,
+  critic). The script is `.claude\workflows\tiga-upload-speed-plan-continue.js`, a slimmed copy
+  of the one in `source\.claude\workflows\` (left untouched). Inputs and outputs are in
+  `docs\speed-investigation\`: `ROADMAP_2026-11-14.md`, `CRITIQUE_2026-11-14.md`,
+  `verdicts_2026-11-14.json`.
+- **Result:** triage dropped idea 16 (the RAM path: a recorded hold, not testable now). Of the
+  other 15, none survived unchanged: 14 are contested (corrected numbers in the roadmap) and
+  idea 8 (two writes in flight) is rejected.
+- **Production today** (live log, 584 uploads): first upload on a connection 8.79 s, later ones
+  9.86 s. The ~1.07 s "later-upload penalty" sits in the two control replies and blocks 1–5.
+- **Realistic target:** one frame (PR #52) gives about 5.7 s for later uploads and 4.5 s for first
+  ones, not 4.4 s, because the penalty stays. Steps 5–8 add at most about 0.5 s.
+- **The critic's main points, not yet folded into the roadmap:**
+  - Failures dominate the wait, not milliseconds: median 10 s from frame to COMPLETE, but mean
+    34 s. 43 of 61 failures stop at block ≤7. Finding their cause should come right after the
+    logging build.
+  - The penalty is left behind by a completed upload on the connection, not by idle time.
+  - Forcing ThroughputOptimized (step 9) may bring the 1-in-3 first-upload failure rate to every
+    upload: medium–high risk, not low.
+  - The drain removal (step 5) can't be shown safe until PROGRESS/COMPLETE are logged outside a
+    wait (`notifications.rs:34-36` filters them out).
+  - Merge PR #51 only after the one-frame baseline, so the step-2 comparison changes one thing.
+- **Correction to the evening section above:** "set `$DlxFrames = 2` and restart" would mean
+  editing tiga-fresh-test, which stays unmodified. Roll back by reverting PR #52 on GitHub, then
+  `git pull`.
+
+## Open for Michi
+
+- Merge PR #52, pull and restart; after 30+ uploads Claude reads the logs (roadmap step 2).
+- Decide whether failure hunting (critic point 1) goes before the millisecond steps 5–8.
+- Untracked in tiga-dev and not in `.gitignore`: `.claude/`, `.scratch/`, `graphify-out/`,
+  `docs/speed-investigation/`. Decide what to commit or ignore.
