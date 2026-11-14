@@ -39,7 +39,7 @@ function Start-Renderer {
     return Start-LoggedProcess `
         -Name "renderer" `
         -FilePath $Python `
-        -Arguments @("-u", $Renderer) `
+        -Arguments (@("-u", $Renderer) + @(Get-RendererFrameArgs)) `
         -WorkingDirectory $Root `
         -StdOut $RendererOut `
         -StdErr $RendererErr
@@ -54,7 +54,7 @@ function Start-BleUploader {
         '--intra-block-ms',
         '0',
         '--confirm-flow-watch'
-    )
+    ) + @(Get-UploaderFrameArgs)
 
     return Start-LoggedProcess `
         -Name "ble" `

@@ -32,12 +32,12 @@ Initialize-StackStream -Stream $Stream `
 
 function Start-Renderer {
     Write-SupervisorLog "Starting packaged renderer."
-    Start-LoggedProcess -Name "renderer" -FilePath $Renderer -Arguments @() -WorkingDirectory $RuntimeRoot -StdOut $RendererOut -StdErr $RendererErr
+    Start-LoggedProcess -Name "renderer" -FilePath $Renderer -Arguments @(Get-RendererFrameArgs) -WorkingDirectory $RuntimeRoot -StdOut $RendererOut -StdErr $RendererErr
 }
 
 function Start-BleUploader {
     Write-SupervisorLog "Starting packaged BLE uploader."
-    Start-LoggedProcess -Name "ble" -FilePath $BleExe -Arguments @('--stream','extracted\session_01_bulk_stream.bin','--intra-block-ms','0','--confirm-flow-watch') -WorkingDirectory $RuntimeRoot -StdOut $BleOut -StdErr $BleErr
+    Start-LoggedProcess -Name "ble" -FilePath $BleExe -Arguments (@('--stream','extracted\session_01_bulk_stream.bin','--intra-block-ms','0','--confirm-flow-watch') + @(Get-UploaderFrameArgs)) -WorkingDirectory $RuntimeRoot -StdOut $BleOut -StdErr $BleErr
 }
 
 Invoke-StackSupervisor -LaunchMessage "TIGA packaged startup supervisor launched (pid $PID)." `

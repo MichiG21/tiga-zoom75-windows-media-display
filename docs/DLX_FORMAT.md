@@ -76,9 +76,11 @@ Two readings fit the capture equally well:
 - **fixed**: one `[offset, frame size]` descriptor: `[0, 110080]`, the same for any
   frame count.
 
-The first hardware test should tell them apart (see below).
+The first hardware test should tell them apart (see below). **Settled 2026-11-11: `index`.** The
+one-frame `index` container (frame index `[0]`) was accepted and displayed fully, so the block
+holds one offset per frame.
 
-## A one-frame container (behind flags, never sent)
+## A one-frame container (production since 2026-11-11, `$DlxFrames = 1`)
 
 `py tiga_windows_nowplaying_v2.py --dlx-frames 1 [--dlx-layout index|fixed]` builds
 one, and the uploader accepts it only with `--allow-single-frame`. Changes from the
@@ -121,8 +123,10 @@ markers never touch the live stream.
    py tools\single_frame_trial.py --out C:\tiga-trial
    $up = ".\windows_ble_probe\target\release\tiga_stream_watch_flow.exe"
    ```
-3. **Baseline:** `& $up --once --allow-no-sidecar --confirm-flow-watch --stream C:\tiga-trial\1_baseline_2frame.bin`.
-   Expect `UPLOAD COMPLETE … in ~8 s` and the grey BASELINE screen. Note the time.
+3. **Baseline:** `& $up --once --allow-no-sidecar --intra-block-ms 0 --confirm-flow-watch --stream C:\tiga-trial\1_baseline_2frame.bin`.
+   Expect `UPLOAD COMPLETE … in ~8 s` and the grey BASELINE screen. Note the time. Pass
+   `--intra-block-ms 0` as the supervisors do: the uploader's default is 2 ms, and without a fine
+   timer each of those pauses lasts 15.6 ms (all blocks about 420 ms, uploads about 23 s).
 4. **One frame, `index`:** the same with `--allow-single-frame` and `2_single_index.bin`. Write down:
    the number of PROGRESS lines (26 expected), whether `UPLOAD COMPLETE` arrives and its time,
    and what the LCD shows (blue, garbled, half drawn: the bottom corner marks go first, or unchanged).
@@ -139,3 +143,35 @@ That needs an uploader change too, because `validate_stream` checks the preamble
 **If step 4 works:** production would need the renderer's `--dlx-frames 1` and the uploader's
 `--allow-single-frame` together, in both the dev and the packaged supervisor. That is a separate
 change, best made after several trial uploads rather than one.
+
+## Trial result, 2026-11-11: one frame works
+
+Run by Claude with Michi at the keyboard, the stack stopped (STOP_STACK at 16:16, a clean idle
+stop), uploader built from `main` at `64b2a75`, streams from `tools/single_frame_trial.py`. The
+keyboard had completed uploads normally just before.
+
+| Step | Stream | Result | Blocks | Median block | Time | LCD (Michi) |
+|---|---|---|---:|---:|---:|---|
+| 1 | 2 frames, baseline | `UPLOAD COMPLETE`, clean disconnect | 53 | 420 ms | 23.27 s | grey BASELINE, "trial step 1" |
+| 2 | **1 frame, `index`** | **`UPLOAD COMPLETE`**, clean disconnect | 26 | 427 ms | **11.93 s** | **blue "1 FRAME / INDEX", "trial step 2", all four corner marks** |
+| 3 | 1 frame, `fixed` | not run (only needed if 2 failed) | | | | |
+| 6 | 2 frames, baseline again | `UPLOAD COMPLETE`, clean disconnect | 53 | 420 ms | 23.27 s | grey BASELINE |
+
+- **The keyboard accepts and fully displays a one-frame container**, and takes the two-frame
+  layout again afterwards. The `index` reading of file offset 452 is right.
+- **Half the blocks, half the time:** 11.93 / 23.27 = 0.51, at the same per-block cost.
+- **Why 420 ms blocks:** the trial commands omitted `--intra-block-ms 0`, so the uploader paused
+  for its default 2 ms after each write. Without a fine timer each pause lasted a 15.6 ms tick
+  (measured: median 15.5 ms; 3.15 ms with `timeBeginPeriod(1)`, PR #51). Production passes 0
+  and has ~150 ms blocks: the production upload right after the trial took 8.89 s, median
+  157 ms. The ratio was measured at identical pacing, so for production: **about 26 × 150 ms
+  plus overhead, about 4.4 s instead of about 8.5 s** (projected, not yet measured).
+- The `02` in the 28-byte `0xFC` status notification (`… 00 11 02 64 00 00`) is **not** the
+  frame count: it read `02` before, during and after the one-frame image.
+- Logs: Claude's scratchpad, `trial_hw\step1_baseline.log`, `step2_single_index.log`,
+  `step6_baseline_again.log` (not kept in the repository).
+
+**Production:** `$DlxFrames = 1` in `tiga_supervisor_common.ps1` passes `--dlx-frames 1` to the
+renderer and `--allow-single-frame` to the uploader, in both supervisors. `$DlxFrames = 2` goes back
+to the captured layout. Still to measure: the real production time, and the failure rate over
+many uploads compared with two frames.

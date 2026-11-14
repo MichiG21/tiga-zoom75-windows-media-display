@@ -2923,3 +2923,40 @@ The 8 s backoff restart completed (8.65 s). First time this error has been logge
 
 - **Keep counting:** note every STOP_STACK/START_STACK without a battery disconnect. The plan asks
   for 10.
+
+# Single-frame trial on the keyboard, and one frame in production, 2026-11-11 (evening)
+
+Michi was at the keyboard and stopped the stack himself. Claude sent three uploads, each one only
+after Michi approved it. Full table in `docs/DLX_FORMAT.md`, "Trial result".
+
+- **Step 1, two frames:** completed, 23.27 s. **Step 2, one frame (`index`):** completed, 11.93 s,
+  displayed fully with all four corner marks. **Step 6, two frames again:** completed, 23.27 s.
+- **Half the blocks, half the time** (0.51), at identical pacing. For production that projects to
+  **about 4.4 s instead of about 8.5 s**. Not yet measured in production.
+- The `02` in the 28-byte status notification is not the frame count.
+
+## Why the trial uploads took 23 s, and a correction
+
+The trial commands (from `DLX_FORMAT.md`) didn't pass `--intra-block-ms 0`, so the uploader paused
+for its default 2 ms after every write. Without a fine timer, that pause lasts a full 15.6 ms
+Windows tick: a probe measured a median of 15.5 ms, and 3.15 ms with `timeBeginPeriod(1)`.
+
+**Correction:** Claude first said the scheduled task must be getting a fine timer. It doesn't need
+one: both supervisors pass `--intra-block-ms 0`, so production never pauses there. All 91 uploader
+headers in the live log say `0 ms/write`. PR #51 was corrected to say so. Production's ~150 ms per
+block is link and keyboard time only.
+
+## PRs from this evening (none merged)
+
+- **#51:** the uploader requests 1 ms timer resolution. It only matters for a non-zero pace (manual
+  runs); production is unchanged. Alternative: make the default pace 0. Your call.
+- **This PR:** one frame in production. `$DlxFrames = 1` in `tiga_supervisor_common.ps1` passes
+  `--dlx-frames 1` to the renderer and `--allow-single-frame` to the uploader, in both supervisors.
+  No rebuild is needed for the live install (the flags exist already): pull, then restart the
+  stack. The README still says 8–10 s, until one frame has run for a while.
+
+## Open for Michi
+
+- **Merge this PR, pull, restart, and watch for a few days:** upload times (expect about 4–5 s) and
+  failures. If anything looks worse, set `$DlxFrames = 2` and restart.
+- The speed analysis is still running, with these results fed in. Its plan comes next.
