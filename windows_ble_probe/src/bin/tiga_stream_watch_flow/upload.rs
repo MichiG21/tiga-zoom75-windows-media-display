@@ -136,6 +136,7 @@ where
     for (idx, chunk) in chunks.iter().enumerate() {
         peripheral.write(bulk, &chunk.value, WriteType::WithoutResponse).await
             .map_err(|e| p.fail(e))?;
+        let written = Instant::now();
 
         if intra_block_ms > 0 {
             sleep(Duration::from_millis(intra_block_ms)).await;
@@ -144,7 +145,7 @@ where
         if chunk.ends_4k_block {
             let block_no = p.last_acked_block + 1;
 
-            let phase = format!("waiting for PROGRESS of block {block_no}/{total_blocks}");
+            let phase = format!("{PROGRESS_WAIT} of block {block_no}/{total_blocks}");
             let ok = wait_for_progress(notifications, block_timeout_ms, &phase).await
                 .map_err(|e| p.fail(e))?;
             if !ok {
@@ -156,6 +157,9 @@ where
             }
             let acked = Instant::now();
             let latency_ms = ms(acked - previous_ack);
+            // Split of the block: its writes, then the keyboard's PROGRESS (critique point 4).
+            timings.block_write_ms.push(ms(written - previous_ack));
+            timings.block_wait_ms.push(ms(acked - written));
             previous_ack = acked;
             timings.block_ms.push(latency_ms);
             p.last_acked_block = block_no;

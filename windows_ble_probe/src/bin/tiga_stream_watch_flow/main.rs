@@ -32,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 use stream::{build_chunks, crc32, validate_stream};
-use timing::UploadTimings;
+use timing::{link_line, UploadTimings};
 use upload::upload_stream;
 
 // The tests see everything through `use super::*`.
@@ -264,6 +264,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         flush_notification_repeats();
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
+        log_link(&peripheral, &frame_id, "before").await;
         let started = Instant::now();
         let mut timings = UploadTimings::default();
         let result = upload_stream(
@@ -281,6 +282,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         )
         .await;
         let elapsed = started.elapsed().as_secs_f64();
+        log_link(&peripheral, &frame_id, "after").await;
         first_on_connection = false;
         let summary = timings.summary();
         if let Err(mut f) = result {
@@ -318,4 +320,15 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     peripheral.disconnect().await.class(Failure::Unreachable)?;
     log!("Disconnected cleanly.");
     Ok(())
+}
+
+/// Logs the `LINK` line. Logging only: a slow or failed read is logged, never returned, and
+/// is capped so it cannot hold up an upload.
+async fn log_link(peripheral: &btleplug::platform::Peripheral, frame_id: &str, when: &str) {
+    let t = Instant::now();
+    let params = match tokio::time::timeout(Duration::from_millis(500), peripheral.connection_parameters()).await {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) => Err("timed out after 500ms".into()),
+    };
+    log!("{}", link_line(frame_id, when, peripheral.mtu(), params, t.elapsed()));
 }

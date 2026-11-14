@@ -14,7 +14,7 @@ use uuid::Uuid;
 // ---- Notification log (docs/investigations/UPLOAD_FAILURES_2026-10-18.md, proposal A) --
 //
 // Logging only: nothing here changes what is written or when. Every notification other
-// than PROGRESS and COMPLETE is logged with its characteristic, its value in hex, what
+// than PROGRESS and COMPLETE inside their own waits is logged with its characteristic, its value in hex, what
 // the uploader was waiting for when it arrived, and how long that wait had lasted.
 // Before this, anything else the keyboard sent (an error, a different status) was
 // discarded unseen, including at the moment of a stall. Between uploads the stream is
@@ -31,8 +31,16 @@ pub(crate) fn known_notification(value: &[u8]) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn should_log_notification(value: &[u8]) -> bool {
-    value != PROGRESS && value != COMPLETE
+/// Phase names of the two waits whose answer is PROGRESS or COMPLETE.
+pub(crate) const PROGRESS_WAIT: &str = "waiting for PROGRESS";
+pub(crate) const COMPLETE_WAIT: &str = "waiting for COMPLETE";
+
+/// PROGRESS and COMPLETE are skipped only inside their own wait, where they are the
+/// expected answer and already timed. Anywhere else (the drain, a control wait, between
+/// uploads) they are logged: a stale one swallowed by the drain was invisible before
+/// (speed roadmap step 5, critique point 7).
+pub(crate) fn should_log_notification(value: &[u8], phase: &str) -> bool {
+    !((value == PROGRESS && phase.starts_with(PROGRESS_WAIT)) || (value == COMPLETE && phase == COMPLETE_WAIT))
 }
 
 pub(crate) fn notification_line(uuid: &Uuid, value: &[u8], phase: &str, waited: Duration) -> String {
@@ -115,10 +123,10 @@ impl RepeatFilter {
 
 pub(crate) static NOTIFY_REPEATS: std::sync::Mutex<RepeatFilter> = std::sync::Mutex::new(RepeatFilter::new());
 
-/// Logs `n` unless it is PROGRESS or COMPLETE, or a repeat of the previous logged one.
+/// Logs `n` unless it is the answer this wait expects (see `should_log_notification`), or a repeat of the previous logged one.
 /// `since` is when the current wait began.
 pub(crate) fn log_notification(n: &btleplug::api::ValueNotification, phase: &str, since: Instant) {
-    if should_log_notification(&n.value) {
+    if should_log_notification(&n.value, phase) {
         let line = notification_line(&n.uuid, &n.value, phase, since.elapsed());
         let lines = match NOTIFY_REPEATS.lock() {
             Ok(mut f) => f.note(&n.uuid, &n.value, line, &utc_now()),
@@ -138,8 +146,7 @@ pub(crate) fn flush_notification_repeats() {
 }
 
 /// Waits `d` between uploads while logging whatever arrives. Returns how many
-/// notifications it handled (logged, or counted as repeats); PROGRESS and COMPLETE are
-/// not included. A stream that has ended is reported once (`ended`) and then left alone;
+/// notifications it handled (logged, or counted as repeats). A stream that has ended is reported once (`ended`) and then left alone;
 /// noticing it is still the next upload's job, as before.
 pub(crate) async fn listen_between_uploads<S>(notifications: &mut S, d: Duration, ended: &mut bool) -> usize
 where
@@ -154,7 +161,7 @@ where
             _ = &mut deadline => return logged,
             n = notifications.next() => match n {
                 Some(n) => {
-                    if should_log_notification(&n.value) {
+                    if should_log_notification(&n.value, "between uploads") {
                         logged += 1;
                     }
                     log_notification(&n, "between uploads", since);
@@ -248,7 +255,7 @@ where
             _ = &mut timeout => return Ok(false),
             n = notifications.next() => {
                 let Some(n) = n else { return Err("notification stream ended".into()); };
-                log_notification(&n, "waiting for COMPLETE", since);
+                log_notification(&n, COMPLETE_WAIT, since);
                 if n.value.as_slice() == COMPLETE {
                     return Ok(true);
                 }
