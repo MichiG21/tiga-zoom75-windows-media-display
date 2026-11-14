@@ -23,6 +23,10 @@ pub(crate) struct UploadTimings {
     pub(crate) control2_ack_ms: Option<f64>,
     /// Latency of each ACKed block, in block order (index 0 = block 1).
     pub(crate) block_ms: Vec<f64>,
+    /// Each ACKed block split in two: from the previous PROGRESS to its last write
+    /// returning, and from there to its own PROGRESS. A pace sleep counts as waiting.
+    pub(crate) block_write_ms: Vec<f64>,
+    pub(crate) block_wait_ms: Vec<f64>,
 }
 
 pub(crate) struct TimingSummary {
@@ -33,6 +37,8 @@ pub(crate) struct TimingSummary {
     pub(crate) slowest_block: usize,
     pub(crate) control1_ack_ms: Option<f64>,
     pub(crate) control2_ack_ms: Option<f64>,
+    pub(crate) write_median_ms: Option<f64>,
+    pub(crate) wait_median_ms: Option<f64>,
 }
 
 pub(crate) fn ms(d: Duration) -> f64 {
@@ -73,6 +79,8 @@ impl UploadTimings {
             slowest_block,
             control1_ack_ms: self.control1_ack_ms,
             control2_ack_ms: self.control2_ack_ms,
+            write_median_ms: median_p90(&self.block_write_ms).map(|m| m.0),
+            wait_median_ms: median_p90(&self.block_wait_ms).map(|m| m.0),
         }
     }
 }
@@ -81,14 +89,16 @@ impl TimingSummary {
     pub(crate) fn log_line(&self, frame_id: &str) -> String {
         format!(
             "TIMING frame={frame_id} blocks_acked={} median={:.0}ms p90={:.0}ms max={:.0}ms slowest=block {} \
-             control1_ack={}ms control2_ack={}ms",
+             control1_ack={}ms control2_ack={}ms write_median={}ms wait_median={}ms",
             self.blocks,
             self.median_ms,
             self.p90_ms,
             self.max_ms,
             self.slowest_block,
             fmt_ms(self.control1_ack_ms),
-            fmt_ms(self.control2_ack_ms)
+            fmt_ms(self.control2_ack_ms),
+            fmt_ms(self.write_median_ms),
+            fmt_ms(self.wait_median_ms)
         )
     }
 
@@ -118,4 +128,25 @@ pub(crate) fn first_upload_warning(first_on_connection: bool, block_no: usize, e
     (first_on_connection && block_no == EARLY_WARNING_BLOCK && elapsed_s > FIRST_UPLOAD_BLOCK5_WARN_S).then(|| {
         format!("WARNING first upload is slow (block 5 at {elapsed_s:.2} s; healthy 0.7–0.85 s)")
     })
+}
+
+/// The `LINK` line read just before and after each upload (speed roadmap step 3): the
+/// negotiated MTU and the connection parameters Windows reports, and how long reading
+/// them took. Never read between blocks: it takes btleplug's device lock (critique point 6).
+pub(crate) fn link_line(
+    frame_id: &str,
+    when: &str,
+    mtu: u16,
+    params: Result<Option<btleplug::api::ConnectionParameters>, String>,
+    read: Duration,
+) -> String {
+    let params = match params {
+        Ok(Some(c)) => format!(
+            "interval_us={} latency={} timeout_us={}",
+            c.interval_us, c.latency, c.supervision_timeout_us
+        ),
+        Ok(None) => "params=unsupported".into(),
+        Err(e) => format!("params_error={e}"),
+    };
+    format!("LINK frame={frame_id} when={when} mtu={mtu} {params} read={:.0}ms", ms(read))
 }

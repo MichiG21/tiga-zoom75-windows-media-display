@@ -37,13 +37,15 @@ fn summary_finds_the_slowest_block() {
         control1_ack_ms: Some(42.4),
         control2_ack_ms: None,
         block_ms: vec![150.0, 1800.0, 900.0, 1800.0],
+        block_write_ms: vec![90.0, 100.0, 95.0],
+        block_wait_ms: vec![],
     };
     let s = t.summary();
     assert_eq!((s.blocks, s.slowest_block), (4, 2));
     assert_eq!((s.median_ms, s.max_ms), (1350.0, 1800.0));
     let line = s.log_line("r-f0001");
     assert!(line.starts_with("TIMING frame=r-f0001 blocks_acked=4 median=1350ms p90=1800ms max=1800ms slowest=block 2"), "{line}");
-    assert!(line.ends_with("control1_ack=42ms control2_ack=-ms"), "{line}");
+    assert!(line.ends_with("control1_ack=42ms control2_ack=-ms write_median=95ms wait_median=-ms"), "{line}");
     let side = s.sidecar_lines();
     assert_eq!(sidecar_value(&side, "slowest_block"), Some("2"));
     assert_eq!(sidecar_value(&side, "control2_ack_ms"), Some("-"));
@@ -87,7 +89,7 @@ fn delivery_record_carries_the_summary() {
     let dir = std::env::temp_dir().join(format!("tiga_timing_test_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let stream = dir.join("s.bin");
-    let t = UploadTimings { control1_ack_ms: Some(40.0), control2_ack_ms: Some(55.0), block_ms: vec![150.0, 160.0] };
+    let t = UploadTimings { control1_ack_ms: Some(40.0), control2_ack_ms: Some(55.0), block_ms: vec![150.0, 160.0], ..Default::default() };
     record_delivery(&stream, "r-f0002", "0badf00d", 8.7, Some(&t.summary()));
     let d = fs::read_to_string(sidecar_path(&stream, ".delivered")).unwrap();
     assert_eq!(sidecar_value(&d, "frame_id"), Some("r-f0002"));
@@ -104,12 +106,36 @@ fn notification(value: &[u8]) -> btleplug::api::ValueNotification {
 }
 
 #[test]
-fn notification_log_skips_only_progress_and_complete() {
-    assert!(!should_log_notification(PROGRESS));
-    assert!(!should_log_notification(COMPLETE));
-    for v in [C1_ACK_A, C1_ACK_B, C2_ACK_A, C2_ACK_B, &[0x88, 0, 0, 0, 0, 0, 0x03, 0x0b, 0x08, 0x06, 0x07][..], &[][..]] {
-        assert!(should_log_notification(v), "{v:02x?}");
+fn notification_log_skips_progress_and_complete_only_in_their_own_wait() {
+    assert!(!should_log_notification(PROGRESS, "waiting for PROGRESS of block 3/26"));
+    assert!(!should_log_notification(COMPLETE, COMPLETE_WAIT));
+    // Outside their own wait they are logged: the drain could swallow a stale one.
+    for phase in ["draining before CONTROL1", "waiting for CONTROL1 ACK", "between uploads"] {
+        assert!(should_log_notification(PROGRESS, phase), "{phase}");
+        assert!(should_log_notification(COMPLETE, phase), "{phase}");
     }
+    assert!(should_log_notification(COMPLETE, "waiting for PROGRESS of block 3/26"));
+    assert!(should_log_notification(PROGRESS, COMPLETE_WAIT));
+    for v in [C1_ACK_A, C1_ACK_B, C2_ACK_A, C2_ACK_B, &[0x88, 0, 0, 0, 0, 0, 0x03, 0x0b, 0x08, 0x06, 0x07][..], &[][..]] {
+        assert!(should_log_notification(v, "waiting for PROGRESS of block 3/26"), "{v:02x?}");
+    }
+}
+
+#[test]
+fn link_line_reports_params_unsupported_and_errors() {
+    let c = btleplug::api::ConnectionParameters { interval_us: 30_000, latency: 0, supervision_timeout_us: 4_000_000 };
+    assert_eq!(
+        link_line("r-f0001", "before", 247, Ok(Some(c)), Duration::from_micros(1400)),
+        "LINK frame=r-f0001 when=before mtu=247 interval_us=30000 latency=0 timeout_us=4000000 read=1ms"
+    );
+    assert_eq!(
+        link_line("r-f0001", "after", 23, Ok(None), Duration::ZERO),
+        "LINK frame=r-f0001 when=after mtu=23 params=unsupported read=0ms"
+    );
+    assert_eq!(
+        link_line("r-f0001", "after", 23, Err("timed out after 500ms".into()), Duration::from_millis(500)),
+        "LINK frame=r-f0001 when=after mtu=23 params_error=timed out after 500ms read=500ms"
+    );
 }
 
 const STATUS28: &[u8] = &[
@@ -189,7 +215,7 @@ async fn listening_between_uploads_logs_and_survives_a_closed_stream() {
     let mut ended = false;
     let started = Instant::now();
     let logged = listen_between_uploads(&mut stream, Duration::from_millis(60), &mut ended).await;
-    assert_eq!(logged, 2, "PROGRESS and COMPLETE are not logged");
+    assert_eq!(logged, 4, "between uploads PROGRESS and COMPLETE are logged too");
     assert!(ended, "the end of the stream is noticed");
     assert!(started.elapsed() >= Duration::from_millis(60), "still waits the full time");
     // Once ended, later calls just wait.
@@ -1123,6 +1149,11 @@ async fn template_upload_write_sequence_is_pinned() {
     assert_eq!(crc32(&all), PINNED_SEQUENCE_CRC32);
 
     assert_eq!(timings.block_ms.len(), 53);
+    assert_eq!((timings.block_write_ms.len(), timings.block_wait_ms.len()), (53, 53));
+    for i in 0..53 {
+        let split = timings.block_write_ms[i] + timings.block_wait_ms[i];
+        assert!((split - timings.block_ms[i]).abs() < 0.01, "block {}: the split adds up", i + 1);
+    }
     assert!(timings.control1_ack_ms.is_some() && timings.control2_ack_ms.is_some());
     assert!(read_session_marker(&stream_path).is_none(), "COMPLETE closes the session");
     fs::remove_dir_all(&dir).unwrap();
