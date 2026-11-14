@@ -95,7 +95,8 @@ function Write-SoakSummary {
     $failed = 0; $sudden = 0; $slowing = 0
     $rssi = New-Object System.Collections.ArrayList
     if (Test-Path -LiteralPath $BleLog) {
-        foreach ($line in [System.IO.File]::ReadAllLines($BleLog)) {
+        # Get-Content shares the file with the uploader, which keeps ble.log open for writing.
+        foreach ($line in (Get-Content -LiteralPath $BleLog -Encoding UTF8)) {
             if ($line -notmatch '^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) ') { continue }
             if ([string]::CompareOrdinal($Matches[1], $StartStamp) -lt 0) { continue }
             if ($line -match ' UPLOAD COMPLETE .* in ([\d.]+)s') {
