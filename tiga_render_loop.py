@@ -7,6 +7,22 @@ from tiga_render_freshness import FreshnessGate, media_fingerprint
 
 POLL_INTERVAL = 1.0
 IDLE_TO_STANDBY_SECONDS = 60.0
+# On a track change Spotify reports the new length about a poll before the new title
+# (105 of 1,026 changes in renderer.log, 2026-10-15..11-15; the title followed 1-2 s
+# later every time). Holding a length-only change this long skips that frame.
+DURATION_HOLD_SECONDS = 2.5
+
+
+def duration_change_action(same_otherwise: bool, old_ms: int, new_ms: int, held_for: float) -> str:
+    """'render', 'hold' or 'ignore' for a media change. `same_otherwise`: only the
+    length differs from the frame on screen; `held_for`: seconds this change has waited."""
+    if not same_otherwise:
+        return "render"
+    if not new_ms:
+        return "ignore"  # known -> unknown: browser videos flicker between the two
+    if not old_ms:
+        return "render"  # unknown -> known is shown at once (PROJECT_HISTORY.md:1805)
+    return "hold" if held_for < DURATION_HOLD_SECONDS else "render"
 
 
 def run(
@@ -46,6 +62,11 @@ def run(
 
     active_fp = None
     active_render_key = None
+    # The frame on screen: its key with the length blanked, its length, and since when a
+    # length-only change has been held back (None: nothing held).
+    active_base_key = None
+    active_duration = 0
+    held_since = None
     nonplaying_since = None
     query_error = None
     # An ack that a reader blocked: (command text, command, frame) and the tries so far.
@@ -157,15 +178,30 @@ def run(
 
             if active_fp is not None:
                 key = media_key(media)
-                if key != active_render_key:
-                    img = render_media(media)
-                    write_display(img, "media changed")
+                if key == active_render_key:
+                    held_since = None
+                else:
+                    base_key = media_key({**media, "duration_ms": 0})
+                    new_duration = int(media.get("duration_ms") or 0)
+                    action = duration_change_action(
+                        base_key == active_base_key, active_duration, new_duration,
+                        0.0 if held_since is None else now_mono - held_since,
+                    )
+                    if action == "hold" and held_since is None:
+                        held_since = now_mono
+                        log("Length-only change held (Spotify sends the new length before the new title)")
+                    elif action == "render":
+                        img = render_media(media)
+                        write_display(img, "media changed")
 
-                    log("NEW WINDOWS MEDIA -> rendered + installed")
-                    print_media(media)
+                        log("NEW WINDOWS MEDIA -> rendered + installed")
+                        print_media(media)
 
-                    active_fp = fp
-                    active_render_key = key
+                        active_fp = fp
+                        active_render_key = key
+                        active_base_key = base_key
+                        active_duration = new_duration
+                        held_since = None
 
                 time.sleep(POLL_INTERVAL)
                 continue
@@ -177,6 +213,9 @@ def run(
                 write_display(img, f"fresh playback: {fresh_reason}")
                 active_fp = fp
                 active_render_key = media_key(media)
+                active_base_key = media_key({**media, "duration_ms": 0})
+                active_duration = int(media.get("duration_ms") or 0)
+                held_since = None
 
                 log(f"FRESH PLAYBACK ({fresh_reason}) -> rendered + installed")
                 print_media(media)
