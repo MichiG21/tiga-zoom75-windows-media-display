@@ -815,5 +815,66 @@ class MorseSubtitleTests(unittest.TestCase):
         self.assertFalse(self.r.parse_args(["--no-morse-subtitle"]).morse_subtitle)
 
 
+class LengthOnlyChangeTests(unittest.TestCase):
+    """Roadmap step 4: Spotify's new length arrives a poll before the new title."""
+
+    def test_actions(self):
+        import tiga_render_loop as loop
+        act = loop.duration_change_action
+        self.assertEqual(act(False, 185_000, 240_000, 0.0), "render", "anything else changed")
+        self.assertEqual(act(True, 185_000, 240_000, 0.0), "hold")
+        self.assertEqual(act(True, 185_000, 240_000, 2.4), "hold")
+        self.assertEqual(act(True, 185_000, 240_000, 2.5), "render", "a real correction shows after the hold")
+        self.assertEqual(act(True, 185_000, 0, 0.0), "ignore", "known -> unknown flicker")
+        self.assertEqual(act(True, 0, 240_000, 0.0), "render", "unknown -> known at once")
+
+    def run_loop(self, snapshots):
+        """Runs the real loop over `snapshots` (one per 1 s poll); returns what it drew."""
+        import tiga_render_loop as loop
+        from unittest import mock
+        feed = iter([{"present": False}] + snapshots)  # first one arms the gate empty
+        drawn, clock = [], [0.0]
+
+        def snapshot():
+            try:
+                return next(feed)
+            except StopIteration:
+                raise KeyboardInterrupt
+
+        def sleep(_s):
+            clock[0] += 1.0
+
+        def key(m):
+            return f"{m.get('title')}|{m.get('duration_ms')}"
+
+        with mock.patch.object(loop.time, "sleep", sleep), mock.patch.object(loop.time, "monotonic", lambda: clock[0]):
+            loop.run(
+                log=lambda _l: None, snapshot=snapshot,
+                write_display=lambda img, why: drawn.append((img, why)),
+                write_command_ack=lambda *a: True, read_control_command=lambda last: (None, last),
+                render_standby=lambda msg: "standby", render_black=lambda: "black",
+                render_media=lambda m: f"{m['title']} {m.get('duration_ms')}",
+                media_key=key, print_media=lambda m: None, command_file=Path(os.devnull),
+            )
+        return [img for img, why in drawn if why != "startup standby"]
+
+    def test_spotify_precursor_is_never_drawn(self):
+        # renderer.log 2026-10-15 21:08:38/39: old title with the new length, then the new title.
+        self.assertEqual(
+            self.run_loop([media(title="Maria Hagen", duration_ms=149_000),
+                           media(title="Maria Hagen", duration_ms=240_000),
+                           media(title="Alte Suender", duration_ms=240_000)]),
+            ["Maria Hagen 149000", "Alte Suender 240000"],
+        )
+
+    def test_flicker_to_unknown_is_not_drawn_and_a_real_correction_is(self):
+        song = lambda ms: media(title="Episode 1", duration_ms=ms)
+        self.assertEqual(
+            self.run_loop([song(11_014_000), song(0), song(11_014_000), song(0),
+                           song(11_020_000), song(11_020_000), song(11_020_000), song(11_020_000)]),
+            ["Episode 1 11014000", "Episode 1 11020000"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
