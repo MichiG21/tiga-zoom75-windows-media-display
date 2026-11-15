@@ -3001,3 +3001,66 @@ Offline only: no Bluetooth, no stack scripts, nothing sent to the keyboard. Noth
 - Decide whether failure hunting (critic point 1) goes before the millisecond steps 5–8.
 - Untracked in tiga-dev and not in `.gitignore`: `.claude/`, `.scratch/`, `graphify-out/`,
   `docs/speed-investigation/`. Decide what to commit or ignore.
+
+# One frame live, link logging, and the fast link, 2026-11-14 evening to 2026-11-15
+
+Michi chose the critic's order: 1 → 2 → 3 → failure hunt + step 7 → 4 → 5–8. Step 9 jumped
+the queue once step 3 measured its cause. PR #51 (1 ms timer) stays on hold until the
+baselines below have settled, so its effect can be seen on its own.
+
+## Roadmap steps 1 and 2: one frame (PR #52), live from 2026-11-14 22:13
+
+- 30-upload soak (`tools\upload_soak.ps1`) right after the restart: 32 complete, median
+  **5.80 s** (4.71–6.12), against 9.86 s with two frames. One sudden failure at block 14/26,
+  delivered by automatic retry 1 after 120 s (that frame took 136.8 s to show).
+- Step 2's question is answered: the later-upload penalty survived one frame (control1/2
+  median 209/285 ms). Not the payload.
+- The soak's end summary crashed: `ReadAllLines` cannot open ble.log while the uploader
+  writes it. Fixed in PR #54 (`Get-Content`, shared read).
+
+## Roadmap step 3: link logging (PR #54), live from 2026-11-14 22:37
+
+New lines: `LINK … when=before|after` (MTU, interval, latency, supervision timeout) around
+each upload; `write_median` / `wait_median` on TIMING; PROGRESS/COMPLETE logged outside their
+own wait. Soak, 30/30 delivered, 0 failed, median 5.74 s:
+
+- **Cause of the later-upload penalty: Bluetooth power saving.** Every later upload (31/31)
+  started on a 60 ms interval with latency 4, so the keyboard may answer up to 5 × 60 ms late
+  (control replies spread 62–357 ms). First uploads start at 15 ms / latency 0. During an
+  upload the link runs at 7.5 ms. MTU is 247.
+- **A block is almost all keyboard time:** ~13 ms of writes, then ~145 ms until PROGRESS
+  (probably flash programming). Critique point 4 is settled. Larger writes (step 11) and the
+  lookahead (step 13) can save at most ~0.3 s together at high risk: **dropped**. Stock floor
+  ≈ 26 × 145 ms ≈ 3.8 s plus the control replies.
+- The drain only saw the keyboard's subscribe greeting (`char2_ntf_data` in ASCII), no stray
+  PROGRESS/COMPLETE. One soak only; step 5 still waits for a day of normal use.
+
+## Roadmap step 9: fast link (PR #55 A/B → PR #56), live from 2026-11-15 20:55
+
+- A/B soak (#55, every other later upload asks for ThroughputOptimized): 30/30, 0 failed,
+  median **5.10 s**. Request `ok` 16/16. Control replies 30/71 ms, like a first upload.
+- One request holds **15 ms / latency 0 for the rest of the connection** (the B half got it
+  too), and it lands a few hundred ms after it is sent, so it never helps its own upload.
+  While held, Windows keeps 15 ms instead of the keyboard's 7.5 ms, so blocks run ~10 ms
+  slower (median 165 ms). Net ≈ −0.6 s per later upload.
+- Michi: the keyboard is **always on USB power**, so the always-fast link costs no battery.
+- **PR #56:** one request per connection, right after the first upload completes (the
+  first upload keeps 7.5 ms blocks). Verified 2026-11-15 20:57: `request=throughput ok`
+  logged right after the first COMPLETE.
+
+## First-upload failures (input for the failure hunt)
+
+All on the first upload of a connection, all "sudden", all early, all on a 15 ms / latency 0
+link, all delivered by an automatic retry without a battery pull:
+
+- 2026-11-15 19:10 and 19:12 (boot): block 6/26 twice; retry 2 delivered at 19:14 (4.55 s).
+- 2026-11-15 20:55 (restart for #56): block 7/26; retry 1 delivered at 20:57 (4.86 s).
+- The link state alone does not explain them: the successful retries started on the same
+  15 ms / latency 0 link.
+
+## Open for Michi
+
+- Next in the critic's order: the failure hunt plus step 7 (a settle wait after connecting).
+- PR #51: rebase and merge as its own rollout once the #56 baseline has a few days of data.
+- Untracked in tiga-dev and not in `.gitignore`: `.claude/`, `.scratch/`, `graphify-out/`,
+  `docs/speed-investigation/`. Still undecided.
