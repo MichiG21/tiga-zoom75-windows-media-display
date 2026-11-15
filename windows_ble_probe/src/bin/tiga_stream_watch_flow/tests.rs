@@ -1212,3 +1212,11 @@ async fn no_answer_to_control1_is_unreachable_and_never_sends_control2() {
     assert!(read_session_marker(&stream_path).is_none(), "no session before CONTROL2");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn fast_link_goes_to_every_other_later_upload_only() {
+    assert!(!fast_link_this_upload(true, 0), "first upload on a connection: never");
+    assert!(!fast_link_this_upload(true, 3), "first upload on a reconnect: never");
+    let later: Vec<bool> = (1..=6).map(|n| fast_link_this_upload(false, n)).collect();
+    assert_eq!(later, [true, false, true, false, true, false]);
+}

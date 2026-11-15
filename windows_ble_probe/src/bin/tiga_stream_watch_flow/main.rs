@@ -227,6 +227,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut last_frame_id = String::new();
     let mut device_recorded = false;
     let mut first_on_connection = true;
+    let mut later_uploads: u64 = 0;
     let mut stream_ended = false;
     let mut gate = RendererGate::new(opts.allow_no_sidecar);
 
@@ -264,6 +265,12 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         flush_notification_repeats();
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
+        if !first_on_connection {
+            later_uploads += 1;
+        }
+        if fast_link_this_upload(first_on_connection, later_uploads) {
+            request_fast_link(&peripheral, &frame_id).await;
+        }
         log_link(&peripheral, &frame_id, "before").await;
         let started = Instant::now();
         let mut timings = UploadTimings::default();
@@ -331,4 +338,25 @@ async fn log_link(peripheral: &btleplug::platform::Peripheral, frame_id: &str, w
         Err(_) => Err("timed out after 500ms".into()),
     };
     log!("{}", link_line(frame_id, when, peripheral.mtu(), params, t.elapsed()));
+}
+
+/// Speed roadmap step 9, as an A/B test: every other later upload (1st, 3rd, ...) asks for
+/// the fast link before CONTROL1. Later uploads start on a 60 ms / latency 4 power-saving
+/// link (soak 2026-11-14: 31 of 31), which matches their slow control replies. First
+/// uploads already start fast and are left alone. The LINK request line marks the A half.
+pub(crate) fn fast_link_this_upload(first_on_connection: bool, later_uploads: u64) -> bool {
+    !first_on_connection && later_uploads % 2 == 1
+}
+
+/// Asks Windows for ThroughputOptimized connection parameters. Logging only in effect on
+/// failure: an error or a slow call is logged, never returned, and capped at 500 ms.
+async fn request_fast_link(peripheral: &btleplug::platform::Peripheral, frame_id: &str) {
+    let t = Instant::now();
+    let preset = btleplug::api::ConnectionParameterPreset::ThroughputOptimized;
+    let outcome = match tokio::time::timeout(Duration::from_millis(500), peripheral.request_connection_parameters(preset)).await {
+        Ok(Ok(())) => "ok".to_string(),
+        Ok(Err(e)) => format!("error={e}"),
+        Err(_) => "error=timed out after 500ms".into(),
+    };
+    log!("LINK frame={frame_id} request=throughput {outcome} took={:.0}ms", t.elapsed().as_secs_f64() * 1000.0);
 }
