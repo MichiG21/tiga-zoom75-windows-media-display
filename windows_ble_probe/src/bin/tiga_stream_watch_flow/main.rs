@@ -231,18 +231,20 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut stream_ended = false;
     let mut gate = RendererGate::new(opts.allow_no_sidecar);
 
-    // Roadmap step 7, A/B by connection: half the connections wait 5 s before their first
-    // upload. First uploads fail ~1 in 3 (35/109), suddenly around blocks 5-8, and every
-    // one sees the keyboard move the link from 15 ms to 7.5 ms mid-upload; the wait lets
-    // that happen first. Notifications are still read and logged while waiting.
+    // Failure hunt A/B by connection (replaces the 5 s settle of #58). First uploads fail
+    // ~1 in 3 (35/109), suddenly around blocks 5-8, and each one sees the keyboard move the
+    // link from 15 ms to 7.5 ms mid-transfer. A settle does not prevent that (the link
+    // relaxed to 60 ms while idle, 2026-11-15 21:12). A held fast-link request does:
+    // Windows then keeps 15 ms through uploads. Half the connections request it here,
+    // the rest after their first upload as before (#56).
     log_link(&peripheral, "-", "connect").await;
     let unix_s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     // shortcut: the clock's second as a coin flip; fine for an A/B, not for anything secret.
-    let settle = unix_s.is_multiple_of(2);
-    log!("SETTLE {} before the first upload", if settle { "5s" } else { "none" });
-    if settle {
-        listen_between_uploads(&mut notifications, Duration::from_secs(5), &mut stream_ended).await;
-        log_link(&peripheral, "-", "settled").await;
+    let fast_link_at_connect = unix_s.is_multiple_of(2);
+    log!("FASTLINK {}", if fast_link_at_connect { "at connect" } else { "after the first upload" });
+    if fast_link_at_connect {
+        request_fast_link(&peripheral, "-").await;
+        fast_link_requested = true;
     }
 
     loop {
