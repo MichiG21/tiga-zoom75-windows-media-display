@@ -29,7 +29,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::ExitCode,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use stream::{build_chunks, crc32, validate_stream};
 use timing::{link_line, UploadTimings};
@@ -230,6 +230,20 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut fast_link_requested = false;
     let mut stream_ended = false;
     let mut gate = RendererGate::new(opts.allow_no_sidecar);
+
+    // Roadmap step 7, A/B by connection: half the connections wait 5 s before their first
+    // upload. First uploads fail ~1 in 3 (35/109), suddenly around blocks 5-8, and every
+    // one sees the keyboard move the link from 15 ms to 7.5 ms mid-upload; the wait lets
+    // that happen first. Notifications are still read and logged while waiting.
+    log_link(&peripheral, "-", "connect").await;
+    let unix_s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // shortcut: the clock's second as a coin flip; fine for an A/B, not for anything secret.
+    let settle = unix_s.is_multiple_of(2);
+    log!("SETTLE {} before the first upload", if settle { "5s" } else { "none" });
+    if settle {
+        listen_between_uploads(&mut notifications, Duration::from_secs(5), &mut stream_ended).await;
+        log_link(&peripheral, "-", "settled").await;
+    }
 
     loop {
         // Only here, between uploads: never in the middle of one.
