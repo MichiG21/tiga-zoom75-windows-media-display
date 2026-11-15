@@ -227,7 +227,7 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
     let mut last_frame_id = String::new();
     let mut device_recorded = false;
     let mut first_on_connection = true;
-    let mut later_uploads: u64 = 0;
+    let mut fast_link_requested = false;
     let mut stream_ended = false;
     let mut gate = RendererGate::new(opts.allow_no_sidecar);
 
@@ -265,12 +265,6 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
         flush_notification_repeats();
         log!("UPLOAD START frame={frame_id} crc32={crc}");
 
-        if !first_on_connection {
-            later_uploads += 1;
-        }
-        if fast_link_this_upload(first_on_connection, later_uploads) {
-            request_fast_link(&peripheral, &frame_id).await;
-        }
         log_link(&peripheral, &frame_id, "before").await;
         let started = Instant::now();
         let mut timings = UploadTimings::default();
@@ -312,6 +306,15 @@ async fn run(opts: &Opts) -> Result<(), Failed> {
             write_cached_device(stream_path, &address, &name);
             device_recorded = true;
         }
+        // Once per connection, after the first upload so it keeps the keyboard's 7.5 ms
+        // blocks. Windows then holds 15 ms / latency 0 for the connection, so later
+        // uploads skip the 60 ms / latency 4 power-saving start (step 9 A/B, 2026-11-15:
+        // control replies 221/233 -> 30/71 ms, upload 5.74 -> 5.10 s). The keyboard is on
+        // USB power; on battery this would cost battery.
+        if !fast_link_requested {
+            request_fast_link(&peripheral, &frame_id).await;
+            fast_link_requested = true;
+        }
 
         last_uploaded = Some(stream);
         last_crc = crc;
@@ -338,14 +341,6 @@ async fn log_link(peripheral: &btleplug::platform::Peripheral, frame_id: &str, w
         Err(_) => Err("timed out after 500ms".into()),
     };
     log!("{}", link_line(frame_id, when, peripheral.mtu(), params, t.elapsed()));
-}
-
-/// Speed roadmap step 9, as an A/B test: every other later upload (1st, 3rd, ...) asks for
-/// the fast link before CONTROL1. Later uploads start on a 60 ms / latency 4 power-saving
-/// link (soak 2026-11-14: 31 of 31), which matches their slow control replies. First
-/// uploads already start fast and are left alone. The LINK request line marks the A half.
-pub(crate) fn fast_link_this_upload(first_on_connection: bool, later_uploads: u64) -> bool {
-    !first_on_connection && later_uploads % 2 == 1
 }
 
 /// Asks Windows for ThroughputOptimized connection parameters. Logging only in effect on
